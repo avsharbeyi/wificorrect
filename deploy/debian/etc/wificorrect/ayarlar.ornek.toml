@@ -1,0 +1,31 @@
+# WifiCorrect ayarları — örnek. Cihazdaki asıl dosya: /etc/wificorrect/ayarlar.toml (izin 600).
+# Kafeye özel değerler (kafe adı, SMS bilgileri) kalıba girmez; sahiplendirme ekranı / panel yazar.
+# Eksik anahtar varsayılanı alır (src/ayar.rs).
+
+[main]
+site_name = "Kafe"
+router_ip = "10.50.0.1"
+subnet = "10.50.0.0/24"
+portal_port = 8080
+session_minutes = 43200        # 30 gün; müşteriye gösterilmez
+max_devices_per_phone = 3
+log_root = "/srv/5651"
+state_root = "/srv/hotspot/state"
+leases_file = "/var/lib/misc/dnsmasq.leases"
+
+[netgsm]
+mock = true                    # true: SMS gönderilmez, kod sistem günlüğüne yazılır. Yalnızca hizmet sağlayıcı değiştirir.
+usercode = ""
+password = ""                  # yalnızca cihazda; repoya asla girmez
+msgheader = ""
+message = "WiFi dogrulama kodunuz: {kod}. Kod 3 dakika gecerlidir."
+
+[limits]
+otp_ttl_sec = 180
+otp_max_attempts = 5
+resend_cooldown_sec = 60
+sms_per_phone_15min = 3
+sms_per_phone_day = 10
+sms_per_mac_hour = 5
+sms_global_day = 300
+verify_fail_lock_min = 15

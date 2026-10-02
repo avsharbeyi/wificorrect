@@ -38,3 +38,12 @@ Son ürün, aynı donanımlı boş bir cihaza yüklenen bir ISO olacak; ilk aç�
 - WSL kullanılamadı (varsayılan dağıtımın diski yok; diğerleri başka projelerin). Geliştirme döneminde **cihazın kendisinde** derleniyor: `cargo`, `rustc` 1.85.1, `gcc`, `libc6-dev`, `pkg-config` (~1,7 GB kök alanı). Ürün aşamasında kaldırılacak.
 - `scripts/gelistir.sh`: kaynağı `tar | ssh` ile `/root/rza`'ya gönderir, `cargo build --release`, `/usr/local/bin/wificorrect`'e kurar (~30 sn). `Cargo.lock` geri alınıp repoda tutulur.
 - İskelet: tek program, alt komutlar `portal`, `kaydedici`, `panel`, `ctl`, `surum`.
+
+## Adım 5 — Giriş portalı (Rust) (2026-10-02)
+- `src/portal.rs` (eski portal.py), `src/ortak.rs` (common.py'nin portal kısmı), `src/sms.rs` (NetGSM + deneme modu), `src/ayar.rs` (`/etc/wificorrect/ayarlar.toml`, eski UCI'nin karşılığı; örnek: `deploy/debian/etc/wificorrect/ayarlar.ornek.toml`). Şablonlar eski sistemden aynen (`src/sablon/`, programın içine gömülü).
+- Kütüphaneler: tiny_http, ureq (rustls), serde/serde_json/toml, libc (flock), getrandom. Debian Rust 1.85 için `.cargo/config.toml` → MSRV'ye uygun sürüm seçimi.
+- `wificorrect-portal.service`: Restart=always, `/srv` bağlı değilse açılmaz, yalnızca /srv'ye yazabilir (ProtectSystem=full).
+- 21 birim testi geçti (eski test_portal / test_common / test_netgsm karşılıkları).
+- Cihazda uçtan uca (sanal müşteri): girişsiz HTTPS anında red ✔, telefon bağlantı kontrolü → 302 portal ✔, form hataları ✔, kod gönderme (deneme modu, kod günlükte) ✔, yanlış kod sayacı ✔, doğru kod → "Bağlandınız" + 1 sn sonra istenen sayfa ✔, nft yetkisi 30 gün ✔, HTTPS çıkış ✔, KAYIT/OTURUM_BASLA/denetim/index kayıtları ✔.
+- Ölçüm: program 2,4 MB, portal bellekte 3,8 MB (Python portalı ~20 MB). İlk derleme 4 dk 40 sn.
+- Not: test sırasında `/srv/5651/gunluk/2026-10-02/` altına uydurma numarayla (5550000000, "Deneme Musteri") test kayıtları yazıldı; kayıtlar yalnızca eklenerek tutulduğu için silinmedi.

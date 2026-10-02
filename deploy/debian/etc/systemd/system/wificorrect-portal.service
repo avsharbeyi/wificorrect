@@ -1,0 +1,19 @@
+[Unit]
+Description=WifiCorrect musteri giris portali (SMS dogrulama)
+After=wificorrect-guvenlik.service network-online.target
+Wants=network-online.target
+# Kayıt diski bağlı değilse portal açılmaz: yetkisiz kimse internete çıkamaz (kapalıyken güvenli)
+RequiresMountsFor=/srv
+
+[Service]
+ExecStart=/usr/local/bin/wificorrect portal
+Restart=always
+RestartSec=5
+# root gerekir (nft, conntrack); yine de dosya sistemi yalnızca /srv'ye yazılabilir
+NoNewPrivileges=yes
+ProtectSystem=full
+ProtectHome=yes
+PrivateTmp=yes
+
+[Install]
+WantedBy=multi-user.target

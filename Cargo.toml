@@ -7,10 +7,17 @@ description = "Kafeler için 5651 uyumlu, SMS doğrulamalı misafir internet sis
 publish = false
 
 [dependencies]
+tiny_http = "0.12"
+ureq = { version = "2", default-features = false, features = ["tls"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+toml = "0.8"
+libc = "0.2"
+getrandom = "0.2"
 
 [profile.release]
 opt-level = "z"
 lto = true
 codegen-units = 1
-panic = "abort"
 strip = true
+# panic = "unwind" (varsayılan): tek bir istekteki hata yakalanır, portal düşmez

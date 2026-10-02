@@ -1,0 +1,18 @@
+<h1>$site'ye hoş geldiniz</h1>
+<p>İnternete bağlanmak için bilgilerinizi girin ve telefonunuza gelen kodu onaylayın.</p>
+<p class="hata genel">$hata_genel</p>
+<form method="post" action="$portal/kod-gonder">
+<input type="hidden" name="dst" value="$dst">
+<label for="ad">Ad</label>
+<input type="text" id="ad" name="ad" value="$ad" autocomplete="given-name" maxlength="40" required>
+<p class="hata">$hata_ad</p>
+<label for="soyad">Soyad</label>
+<input type="text" id="soyad" name="soyad" value="$soyad" autocomplete="family-name" maxlength="40" required>
+<p class="hata">$hata_soyad</p>
+<label for="telefon">Cep telefonu</label>
+<input type="tel" id="telefon" name="telefon" value="$telefon" inputmode="numeric" autocomplete="tel" placeholder="5XX XXX XX XX" maxlength="20" required>
+<p class="hata">$hata_telefon</p>
+<label class="onay"><input type="checkbox" name="kvkk" value="1" $kvkk_checked required><span><a href="$portal/kvkk">KVKK Aydınlatma Metni</a>'ni okudum.</span></label>
+<p class="hata">$hata_kvkk</p>
+<button type="submit">Kod Gönder</button>
+</form>

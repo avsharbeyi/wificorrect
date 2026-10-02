@@ -5,7 +5,7 @@
 set -euo pipefail
 host=${1:-wificorrect}
 cd "$(dirname "$0")/.."
-files=(Cargo.toml src)
+files=(Cargo.toml .cargo src)
 [ -f Cargo.lock ] && files+=(Cargo.lock)
 tar -cf - "${files[@]}" | ssh "$host" 'set -e; mkdir -p /root/rza; rm -rf /root/rza/src; tar -xf - -C /root/rza
 cd /root/rza; cargo build --release -q 2>&1 | grep -v "^$" || true
