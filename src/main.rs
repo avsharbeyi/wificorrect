@@ -3,6 +3,7 @@
 mod ayar;
 mod ctl;
 mod kaydedici;
+mod muhur;
 mod ortak;
 mod portal;
 mod sms;

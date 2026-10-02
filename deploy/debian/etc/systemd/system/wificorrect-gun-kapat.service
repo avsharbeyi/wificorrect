@@ -1,0 +1,7 @@
+[Unit]
+Description=WifiCorrect gun kapatma (5651 muhurleme: gzip + MANIFEST + hash zinciri)
+RequiresMountsFor=/srv
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/wificorrect ctl gun-kapat

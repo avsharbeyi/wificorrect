@@ -62,3 +62,11 @@ Son ürün, aynı donanımlı boş bir cihaza yüklenen bir ISO olacak; ilk aç�
 - Yönetim erişimi (SSH 22, panel 8443) artık `192.168.1.0/24`'e değil, internet alan portun arkasındaki **bütün özel ağlara** açık (10/8, 172.16/12, 192.168/16). Cihaz doğrudan genel IP alırsa internetten yönetim kapalı kalır.
 - Cihaz ekranındaki giriş istemi yönetim adresini gösterir (`/etc/issue.d/wificorrect.issue`, `\4{enp3s0}`).
 - Bilinen sınır: modem ağı 10.50.0.0/24 ise müşteri ağıyla çakışır (çok nadir); müşteri ağı sahiplendirme ekranında seçilebilir yapılacak.
+
+## Adım 7 — Mühürleme, doğrulama, saklama, yedek (2026-10-02)
+- `src/muhur.rs` (eski ctl.py §15): `ctl gun-kapat [GÜN] [--zorla]` → bugünden önceki mühürsüz her gün (kaçanlar dahil): `*.csv` → `*.csv.gz` (sıkıştırılmış dosya baştan okunup doğrulanmadan orijinal silinmez), `MANIFEST.sha256` (kişi dosyaları dahil), `zincir.txt` hash zinciri (yarım satıra dayanıklı), dosyalar 400. Son 5 dk'da yazılmış dosya varsa `GUN_KAPAT_ERTELENDI`.
+- `ctl dogrula [--son N]`: zincir her zaman baştan, dosya hash'leri; bozulan dosyayı adıyla söyler. `ctl temizle [--kuru]`: `retention_days` (730) aşan **ve yedeklenmiş** günler silinir, yedeksiz gün asla (`YEDEKSIZ_GUN`); kişi listesinden 2 yıldır gelmeyenler çıkar. `ctl yedekle`: rsync, günler `--ignore-existing`, zincir/index'in önceki sürümü sunucuda `eski/` altına (1 saat zaman aşımı).
+- Zamanlayıcılar (cron yerine): `wificorrect-gun-kapat.timer` 00:15, `wificorrect-gece.timer` 02:00 (yedekle, sonra temizle); `Persistent=true` — cihaz kapalıysa açılışta çalışır.
+- RFC 3161 zaman damgası henüz yok (sağlayıcı seçilince); hash zinciri her durumda çalışıyor.
+- 38 birim testi geçti (mühürleme/erteleme/zincir, bir bayt değişince dosya adıyla yakalama, zincir kırılması, yalnızca yedeklenmiş eski günlerin silinmesi, yedek hata/yeniden deneme).
+- Yedek: `[backup] enabled = false` — sunucu hesabı ve SSH anahtarı bekleniyor.

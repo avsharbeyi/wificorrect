@@ -236,16 +236,28 @@ pub fn read_index(root: &str) -> BTreeMap<String, [String; 5]> {
     out
 }
 
-pub fn upsert_index(root: &str, phone: &str, ad: &str, soyad: &str, zaman: &str) -> std::io::Result<()> {
-    let mut rows = read_index(root);
-    let first = rows.get(phone).map(|r| r[3].clone()).unwrap_or_else(|| zaman.to_string());
-    rows.insert(phone.into(), [phone.into(), ad.into(), soyad.into(), first, zaman.into()]);
+fn write_index(root: &str, rows: &BTreeMap<String, [String; 5]>) -> std::io::Result<()> {
     let mut out = format!("{BOM}{}\r\n", INDEX_HEADER.join(";"));
     for r in rows.values() {
         out.push_str(&r.iter().map(|c| csv_cell(c)).collect::<Vec<_>>().join(";"));
         out.push_str("\r\n");
     }
     write_atomic(&index_path(root), out.as_bytes())
+}
+
+pub fn upsert_index(root: &str, phone: &str, ad: &str, soyad: &str, zaman: &str) -> std::io::Result<()> {
+    let mut rows = read_index(root);
+    let first = rows.get(phone).map(|r| r[3].clone()).unwrap_or_else(|| zaman.to_string());
+    rows.insert(phone.into(), [phone.into(), ad.into(), soyad.into(), first, zaman.into()]);
+    write_index(root, &rows)
+}
+
+pub fn remove_from_index(root: &str, phones: &[String]) -> std::io::Result<()> {
+    let mut rows = read_index(root);
+    for p in phones {
+        rows.remove(p);
+    }
+    write_index(root, &rows)
 }
 
 // ---------------------------------------------------------------- durum dosyaları
@@ -369,11 +381,15 @@ pub fn nft_set_cmd(verb: &str, set: &str, mac: &str) -> Option<Cmd> {
 
 /// Komutu kabuksuz çalıştırır, 15 sn içinde bitmezse öldürür. Başarı = çıkış kodu 0.
 pub fn run(cmd: &[String]) -> bool {
+    run_timeout(cmd, 15)
+}
+
+pub fn run_timeout(cmd: &[String], secs: u64) -> bool {
     let Some((prog, args)) = cmd.split_first() else { return false };
     let Ok(mut child) = Command::new(prog).args(args).stdout(Stdio::null()).stderr(Stdio::null()).spawn() else {
         return false;
     };
-    let deadline = Instant::now() + Duration::from_secs(15);
+    let deadline = Instant::now() + Duration::from_secs(secs);
     loop {
         match child.try_wait() {
             Ok(Some(st)) => return st.success(),

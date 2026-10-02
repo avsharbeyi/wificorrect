@@ -1,0 +1,11 @@
+[Unit]
+Description=WifiCorrect gece: sunucuya yedek + saklama suresi temizligi
+RequiresMountsFor=/srv
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+# Yedek başarısız olsa da temizlik çalışır; temizlik zaten yedeklenmemiş günü silmez
+ExecStart=-/usr/local/bin/wificorrect ctl yedekle
+ExecStart=/usr/local/bin/wificorrect ctl temizle

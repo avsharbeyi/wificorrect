@@ -1,0 +1,10 @@
+[Unit]
+Description=Her gece 00:15 onceki gunleri muhurle
+
+[Timer]
+OnCalendar=*-*-* 00:15:00
+# Cihaz o saatte kapalıysa açılışta çalışır (kaçan günler de kapanır)
+Persistent=true
+
+[Install]
+WantedBy=timers.target

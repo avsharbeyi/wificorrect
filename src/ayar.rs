@@ -18,6 +18,8 @@ pub struct Main {
     pub log_root: String,
     pub state_root: String,
     pub leases_file: String,
+    /// Kayıtlar cihazda kaç gün kalır (730 = 2 yıl); yalnızca yedeklenmiş günler silinir.
+    pub retention_days: u64,
 }
 
 impl Default for Main {
@@ -33,6 +35,7 @@ impl Default for Main {
             log_root: "/srv/5651".into(),
             state_root: "/srv/hotspot/state".into(),
             leases_file: "/var/lib/misc/dnsmasq.leases".into(),
+            retention_days: 730,
         }
     }
 }
@@ -93,6 +96,21 @@ impl Default for Limits {
     }
 }
 
+/// Uzak yedek (rsync, SSH). Hedef kafe başına salt-yazma hesap: `kafe-<ad>@sunucu:`.
+#[derive(Deserialize, Clone, Debug)]
+#[serde(default)]
+pub struct Backup {
+    pub enabled: bool,
+    pub target: String,
+    pub ssh: String,
+}
+
+impl Default for Backup {
+    fn default() -> Self {
+        Backup { enabled: false, target: String::new(), ssh: "ssh -i /root/.ssh/yedek_anahtar".into() }
+    }
+}
+
 /// Portalsız geçen (`[[allow]]`, ör. AP, personel; trafiği yine kaydedilir) ya da yasaklı (`[[ban]]`) cihaz.
 #[derive(Deserialize, Clone, Debug, Default)]
 pub struct Device {
@@ -107,6 +125,7 @@ pub struct Config {
     pub main: Main,
     pub netgsm: Netgsm,
     pub limits: Limits,
+    pub backup: Backup,
     pub allow: Vec<Device>,
     pub ban: Vec<Device>,
 }

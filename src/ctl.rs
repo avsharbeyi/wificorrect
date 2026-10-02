@@ -113,8 +113,34 @@ pub fn run(cfg: Config, args: &[String]) -> ExitCode {
             oturumlar(&cfg, now);
             ExitCode::SUCCESS
         }
+        Some("gun-kapat") => {
+            let day = args.iter().skip(1).find(|a| !a.starts_with("--")).map(String::as_str);
+            let out = crate::muhur::gun_kapat(&cfg, day, now, args.iter().any(|a| a == "--zorla"));
+            println!("{}", if out.is_empty() { "Kapatılacak gün yok".to_string() } else { out.join("\n") });
+            if out.iter().any(|l| l.contains("HATA")) { ExitCode::from(1) } else { ExitCode::SUCCESS }
+        }
+        Some("dogrula") => {
+            let last = args.iter().position(|a| a == "--son").and_then(|i| args.get(i + 1)).and_then(|n| n.parse().ok());
+            let r = crate::muhur::verify(&cfg, last);
+            println!("{}", crate::muhur::format_verify(&r));
+            if r.iter().any(|(_, p, _)| !p.is_empty()) { ExitCode::from(1) } else { ExitCode::SUCCESS }
+        }
+        Some("temizle") => {
+            let out = crate::muhur::prune(&cfg, now, args.iter().any(|a| a == "--kuru"));
+            println!("{}", if out.is_empty() { "Silinecek kayıt yok".to_string() } else { out.join("\n") });
+            ExitCode::SUCCESS
+        }
+        Some("yedekle") => {
+            // ponytail: bir gün 1 saatte gitmezse YEDEK_HATA; ertesi gece kaldığı yerden devam eder
+            let msg = crate::muhur::backup(&cfg, now, &|c: &[String]| ortak::run_timeout(c, 3600));
+            println!("{msg}");
+            if msg.contains("HATA") { ExitCode::from(1) } else { ExitCode::SUCCESS }
+        }
         _ => {
-            eprintln!("Kullanım: wificorrect ctl <dhcp-olay <add|old|del> <mac> <ip> [ad] | yukle | oturumlar>");
+            eprintln!(
+                "Kullanım: wificorrect ctl <komut>\n  dhcp-olay <add|old|del> <mac> <ip> [ad]\n  yukle\n  oturumlar\n  \
+                 gun-kapat [YYYY-AA-GG] [--zorla]\n  dogrula [--son N]\n  temizle [--kuru]\n  yedekle"
+            );
             ExitCode::from(2)
         }
     }
