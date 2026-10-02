@@ -56,3 +56,9 @@ Son ürün, aynı donanımlı boş bir cihaza yüklenen bir ISO olacak; ilk aç�
 - 35 birim testi geçti (sahadan alınmış gerçek conntrack/dnsmasq satırlarıyla, `tests/fixtures/`).
 - Cihazda uçtan uca: DHCP_ATAMA/YENILEME ✔, giriş → trafik + DNS satırları telefonla ✔, IP değişimi → SMS'siz taşıma + `OTURUM_IP_DEGISTI` + yeni IP'nin ilk isteği bile telefonla ✔, kapanış satırları bayt + süreyle ✔, yeniden başlatmada `1 oturum geri yüklendi` + nft'de kalan süre ✔.
 - Bellek: portal 4,5 MB, kaydedici 8,5 MB (Python: 20,3 + 11,5 MB).
+
+## Farklı modem ağları (2026-10-02)
+- İnternet alan port DHCP istemcisi: modem hangi havuzu verirse (192.168.0.x, 10.x …) IP, ağ geçidi ve DNS kendiliğinden alınır.
+- Yönetim erişimi (SSH 22, panel 8443) artık `192.168.1.0/24`'e değil, internet alan portun arkasındaki **bütün özel ağlara** açık (10/8, 172.16/12, 192.168/16). Cihaz doğrudan genel IP alırsa internetten yönetim kapalı kalır.
+- Cihaz ekranındaki giriş istemi yönetim adresini gösterir (`/etc/issue.d/wificorrect.issue`, `\4{enp3s0}`).
+- Bilinen sınır: modem ağı 10.50.0.0/24 ise müşteri ağıyla çakışır (çok nadir); müşteri ağı sahiplendirme ekranında seçilebilir yapılacak.

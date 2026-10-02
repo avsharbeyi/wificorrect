@@ -2,7 +2,9 @@
 # WifiCorrect temel güvenlik duvarı (OpenWrt'deki fw4'ün yerine). Giriş kapısı tabloları kapi.nft'te.
 # Müşteri (br-hotspot) → internet (enp3s0) yalnızca 0x5651 işaretli paketler; işareti kapi.nft koyar.
 # kapi.nft yüklenmezse hiçbir paket işaretlenmez → kimse internete çıkamaz (kapalıyken güvenli).
-# ponytail: arayüz adları ve yönetim alt ağı sabit; çok kafeli kurulumda uygulama bu dosyayı ayardan üretecek.
+# ponytail: arayüz adları sabit; çok kafeli kurulumda uygulama bu dosyayı ayardan üretecek.
+# Yönetim: internet alan portun arkasındaki her özel ağdan (modem hangi havuzu verirse versin).
+# Cihaz doğrudan genel IP alırsa (modem köprü modunda) internetten gelen yönetim istekleri kapalı kalır.
 
 table inet wfc
 delete table inet wfc
@@ -15,9 +17,9 @@ table inet wfc {
 		iif lo accept
 		icmpv6 type { nd-neighbor-solicit, nd-neighbor-advert, nd-router-solicit, nd-router-advert } accept
 
-		# Yönetim: yalnızca dükkân ağından SSH ve panel
-		iifname "enp3s0" ip saddr 192.168.1.0/24 tcp dport { 22, 8443 } accept
-		iifname "enp3s0" ip saddr 192.168.1.0/24 icmp type echo-request accept
+		# Yönetim: yalnızca dükkân ağından (özel adresler) SSH ve panel
+		iifname "enp3s0" ip saddr { 10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16 } tcp dport { 22, 8443 } accept
+		iifname "enp3s0" ip saddr { 10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16 } icmp type echo-request accept
 
 		# Müşteri tarafından cihaza yalnızca DNS, DHCP, portal, ping
 		iifname "br-hotspot" udp dport { 53, 67 } accept
