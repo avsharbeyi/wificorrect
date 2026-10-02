@@ -1,0 +1,62 @@
+#!/usr/sbin/nft -f
+# WifiCorrect giriş kapısı (eski OpenWrt hotspot.nft'nin Debian karşılığı, mantık birebir aynı).
+# Setler: auth (MAC . IP, süreli), allow_mac (portalsız geçen), ban_mac (yasaklı).
+# ponytail: br-hotspot / 10.50.0.1 / 8080 sabit; uygulama yazılınca ayardan üretilecek.
+
+table inet hotspot
+delete table inet hotspot
+
+table inet hotspot {
+	set auth {
+		type ether_addr . ipv4_addr
+		flags timeout
+	}
+
+	set allow_mac {
+		type ether_addr
+	}
+
+	set ban_mac {
+		type ether_addr
+	}
+
+	chain ban_in {
+		type filter hook input priority filter - 5; policy accept;
+		iifname "br-hotspot" ether saddr @ban_mac counter drop
+	}
+
+	chain pre_nat {
+		type nat hook prerouting priority dstnat - 5; policy accept;
+		iifname "br-hotspot" ether saddr @ban_mac drop
+		# Bütün DNS cihaza (kayıt eksiksiz olsun, başka DNS yazmak atlatmasın)
+		iifname "br-hotspot" meta l4proto { tcp, udp } th dport 53 counter redirect to :53
+		iifname "br-hotspot" ether saddr @allow_mac return
+		iifname "br-hotspot" ether saddr . ip saddr @auth return
+		# Giriş yapmamışın HTTP'si portala (telefonların "Ağda oturum açın" bildirimi)
+		iifname "br-hotspot" ip daddr != 10.50.0.1 tcp dport 80 counter redirect to :8080
+	}
+
+	chain gate {
+		type filter hook forward priority filter - 5; policy accept;
+		iifname "br-hotspot" ether saddr @ban_mac counter drop
+		iifname "br-hotspot" meta nfproto ipv6 counter drop
+		iifname "br-hotspot" ip daddr { 10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16, 100.64.0.0/10, 169.254.0.0/16 } counter reject with icmpx type admin-prohibited
+		iifname "br-hotspot" tcp dport 853 counter reject with tcp reset
+		iifname "br-hotspot" ether saddr @allow_mac meta mark set 0x5651 accept
+		iifname "br-hotspot" ether saddr . ip saddr @auth meta mark set 0x5651 counter accept
+		# Diğer her şey anında reddedilir (HTTPS zaman aşımına düşmesin)
+		iifname "br-hotspot" meta l4proto tcp counter reject with tcp reset
+		iifname "br-hotspot" counter reject with icmpx type admin-prohibited
+	}
+}
+
+# Köprü portları arası iletim yok: kablolu AP müşterisi ile cihazın Wi-Fi müşterisi birbirini göremez.
+table bridge hotspot
+delete table bridge hotspot
+
+table bridge hotspot {
+	chain isolate {
+		type filter hook forward priority 0; policy accept;
+		meta ibrname "br-hotspot" counter drop
+	}
+}

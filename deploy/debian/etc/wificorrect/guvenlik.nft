@@ -1,0 +1,40 @@
+#!/usr/sbin/nft -f
+# WifiCorrect temel güvenlik duvarı (OpenWrt'deki fw4'ün yerine). Giriş kapısı tabloları kapi.nft'te.
+# Müşteri (br-hotspot) → internet (enp3s0) yalnızca 0x5651 işaretli paketler; işareti kapi.nft koyar.
+# kapi.nft yüklenmezse hiçbir paket işaretlenmez → kimse internete çıkamaz (kapalıyken güvenli).
+# ponytail: arayüz adları ve yönetim alt ağı sabit; çok kafeli kurulumda uygulama bu dosyayı ayardan üretecek.
+
+table inet wfc
+delete table inet wfc
+
+table inet wfc {
+	chain input {
+		type filter hook input priority filter; policy drop;
+		ct state established,related accept
+		ct state invalid drop
+		iif lo accept
+		icmpv6 type { nd-neighbor-solicit, nd-neighbor-advert, nd-router-solicit, nd-router-advert } accept
+
+		# Yönetim: yalnızca dükkân ağından SSH ve panel
+		iifname "enp3s0" ip saddr 192.168.1.0/24 tcp dport { 22, 8443 } accept
+		iifname "enp3s0" ip saddr 192.168.1.0/24 icmp type echo-request accept
+
+		# Müşteri tarafından cihaza yalnızca DNS, DHCP, portal, ping
+		iifname "br-hotspot" udp dport { 53, 67 } accept
+		iifname "br-hotspot" tcp dport { 53, 8080 } accept
+		iifname "br-hotspot" icmp type echo-request accept
+		iifname "br-hotspot" meta l4proto tcp reject with tcp reset
+		iifname "br-hotspot" reject with icmpx type admin-prohibited
+	}
+
+	chain forward {
+		type filter hook forward priority filter; policy drop;
+		ct state established,related accept
+		iifname "br-hotspot" oifname "enp3s0" meta mark 0x5651 accept
+	}
+
+	chain postrouting {
+		type nat hook postrouting priority srcnat; policy accept;
+		oifname "enp3s0" ip saddr 10.50.0.0/24 masquerade
+	}
+}
