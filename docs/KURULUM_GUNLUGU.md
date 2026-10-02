@@ -70,3 +70,7 @@ Son ürün, aynı donanımlı boş bir cihaza yüklenen bir ISO olacak; ilk aç�
 - RFC 3161 zaman damgası henüz yok (sağlayıcı seçilince); hash zinciri her durumda çalışıyor.
 - 38 birim testi geçti (mühürleme/erteleme/zincir, bir bayt değişince dosya adıyla yakalama, zincir kırılması, yalnızca yedeklenmiş eski günlerin silinmesi, yedek hata/yeniden deneme).
 - Yedek: `[backup] enabled = false` — sunucu hesabı ve SSH anahtarı bekleniyor.
+
+## Bekleyen işler (kullanıcı kararıyla ertelendi)
+- **Uzak yedek — arşiv sunucusu kurulunca yapılacak** (2026-10-02 kullanıcı kararı): cihazda yeni SSH anahtarı üret (`/root/.ssh/yedek_anahtar`), sunucuda kafe hesabına (`kafe-<ad>`, salt-yazma, rrsync) ekle, `/etc/wificorrect/ayarlar.toml` → `[backup] enabled = true`, `target = "kafe-<ad>@<sunucu>:"`; `ctl yedekle` ile dene. O zamana kadar günler cihazda mühürlenip birikir; `temizle` yedeklenmemiş günü silmez.
+- Eski OpenWrt cihazının kayıtları/ayarları yeni sisteme taşınmayacak (kullanıcı kararı).
