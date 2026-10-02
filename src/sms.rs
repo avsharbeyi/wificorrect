@@ -1,4 +1,4 @@
-//! NetGSM OTP SMS gönderimi (eski netgsm.py; docs/MASTER_ENGINEERING.md §12). Twilio sonraki adımda.
+//! SMS: sağlayıcı seçimi + deneme modu + NetGSM OTP (eski netgsm.py; docs/MASTER_ENGINEERING.md §12). Twilio: twilio.rs.
 
 use crate::ayar::Config;
 use std::time::Duration;
@@ -6,9 +6,58 @@ use std::time::Duration;
 #[derive(Debug, Clone, PartialEq)]
 pub struct Sonuc {
     pub ok: bool,
-    /// NetGSM kodu ("0" başarılı) ya da "AG" (ağ hatası) / "PARSE" (anlaşılmayan cevap).
+    /// Sağlayıcı kodu ("0" başarılı) ya da "AG" (ağ hatası) / "PARSE" (anlaşılmayan cevap).
     pub kod: String,
     pub is: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum Saglayici {
+    Netgsm,
+    Twilio,
+}
+
+impl Saglayici {
+    pub fn ad(self) -> &'static str {
+        match self {
+            Saglayici::Netgsm => "netgsm",
+            Saglayici::Twilio => "twilio",
+        }
+    }
+}
+
+pub const YABANCI_YOK: &str = "Yabancı numaralara şu an SMS gönderilemiyor, lütfen personele başvurun.";
+
+/// Türk numaraları ayardaki sağlayıcıdan; yabancı numaralar Twilio'dan (açıksa). NetGSM yalnızca Türk numaralarına gönderir.
+pub fn route(cfg: &Config, phone: &str) -> Result<Saglayici, &'static str> {
+    if cfg.sms.provider == "twilio" {
+        Ok(Saglayici::Twilio)
+    } else if crate::ulkeler::is_tr(phone) {
+        Ok(Saglayici::Netgsm)
+    } else if cfg.twilio.enabled {
+        Ok(Saglayici::Twilio)
+    } else {
+        Err(YABANCI_YOK)
+    }
+}
+
+/// Deneme modunda hiçbir sağlayıcıya istek gitmez; kod sistem günlüğüne yazılır ve yerelde karşılaştırılır.
+pub fn send(cfg: &Config, p: Saglayici, phone: &str, code: &str) -> Sonuc {
+    if cfg.sms.mock {
+        eprintln!("MOCK OTP {phone} -> {code}");
+        return Sonuc { ok: true, kod: "0".into(), is: Some("MOCK".into()) };
+    }
+    match p {
+        Saglayici::Netgsm => send_netgsm(cfg, phone.strip_prefix("90").unwrap_or(phone), code),
+        Saglayici::Twilio => crate::twilio::send(cfg, phone),
+    }
+}
+
+pub fn message_for(p: Saglayici, kod: &str) -> &'static str {
+    match p {
+        Saglayici::Netgsm => user_message(kod),
+        Saglayici::Twilio => crate::twilio::user_message(kod),
+    }
 }
 
 pub fn user_message(kod: &str) -> &'static str {
@@ -59,12 +108,10 @@ pub fn parse_response(text: &str) -> (String, Option<String>) {
     }
 }
 
-pub fn send_otp(cfg: &Config, phone: &str, code: &str) -> Sonuc {
+/// `national`: 10 haneli Türk numarası (5XXXXXXXXX).
+fn send_netgsm(cfg: &Config, national: &str, code: &str) -> Sonuc {
     let n = &cfg.netgsm;
-    if n.mock {
-        eprintln!("MOCK OTP {phone} -> {code}");
-        return Sonuc { ok: true, kod: "0".into(), is: Some("MOCK".into()) };
-    }
+    let phone = national;
     let msg = n.message.replace("{kod}", code);
     let body = build_xml(&n.usercode, &n.password, &n.msgheader, &n.appkey, &msg, phone);
     // Yeniden deneme yok: çift SMS ve çift ücret riski (§12.1)
@@ -115,8 +162,20 @@ mod tests {
     }
 
     #[test]
+    fn routing() {
+        let mut c = Config::default();
+        assert_eq!(route(&c, "905334553132"), Ok(Saglayici::Netgsm));
+        assert_eq!(route(&c, "4915123456789"), Err(YABANCI_YOK)); // Twilio kapalı
+        c.twilio.enabled = true;
+        assert_eq!(route(&c, "4915123456789"), Ok(Saglayici::Twilio));
+        assert_eq!(route(&c, "905334553132"), Ok(Saglayici::Netgsm));
+        c.sms.provider = "twilio".into();
+        assert_eq!(route(&c, "905334553132"), Ok(Saglayici::Twilio));
+    }
+
+    #[test]
     fn mock_sends_nothing() {
-        let r = send_otp(&Config::default(), "5334553132", "123456");
+        let r = send(&Config::default(), Saglayici::Twilio, "4915123456789", "123456");
         assert_eq!(r, Sonuc { ok: true, kod: "0".into(), is: Some("MOCK".into()) });
     }
 }

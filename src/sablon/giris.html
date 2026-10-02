@@ -10,7 +10,7 @@
 <input type="text" id="soyad" name="soyad" value="$soyad" autocomplete="family-name" maxlength="40" required>
 <p class="hata">$hata_soyad</p>
 <label for="telefon">Cep telefonu</label>
-<input type="tel" id="telefon" name="telefon" value="$telefon" inputmode="numeric" autocomplete="tel" placeholder="5XX XXX XX XX" maxlength="20" required>
+<div class="tel"><select name="ulke" aria-label="Ülke kodu">$ulke_secenekleri_html</select><input type="tel" id="telefon" name="telefon" value="$telefon" inputmode="tel" autocomplete="tel-national" placeholder="5XX XXX XX XX" maxlength="20" required></div>
 <p class="hata">$hata_telefon</p>
 <label class="onay"><input type="checkbox" name="kvkk" value="1" $kvkk_checked required><span><a href="$portal/kvkk">KVKK Aydınlatma Metni</a>'ni okudum.</span></label>
 <p class="hata">$hata_kvkk</p>

@@ -3,10 +3,12 @@
 
 use crate::ayar::Config;
 use crate::ortak::{self, Row, Runner, Session};
-use crate::sms::{self, Sonuc};
+use crate::sms::{self, Saglayici, Sonuc};
+use crate::ulkeler;
 use std::collections::{HashMap, VecDeque};
 use std::io::Read;
 use std::process::ExitCode;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard};
 
 const NO_MAC: &str = "Cihazınız tanınamadı. Wi-Fi bağlantısını kapatıp yeniden açın; sorun sürerse personele başvurun.";
@@ -14,7 +16,10 @@ const AFTER_LOGIN_URL: &str = "http://www.google.com/"; // istenen sayfa bilinmi
 
 pub type Form = HashMap<String, String>;
 pub type Clock = dyn Fn() -> f64 + Send + Sync;
-pub type SmsFn = dyn Fn(&Config, &str, &str) -> Sonuc + Send + Sync;
+/// (ayar, sağlayıcı, numara E.164, kod) → sonuç. Twilio gerçek modda kodu kendisi üretir.
+pub type SmsFn = dyn Fn(&Config, Saglayici, &str, &str) -> Sonuc + Send + Sync;
+/// Twilio Verify uzaktan doğrulama: (onaylandı, ağ hatası).
+pub type CheckFn = dyn Fn(&Config, &str, &str) -> (bool, Option<String>) + Send + Sync;
 
 fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
     m.lock().unwrap_or_else(|e| e.into_inner()) // bir istekteki panik diğerlerini kilitlemesin
@@ -28,10 +33,6 @@ pub fn safe_dst(dst: &str) -> String {
     } else {
         String::new()
     }
-}
-
-pub fn mask_phone(p: &str) -> String {
-    format!("{}XX XXX XX {}", &p[..1], &p[p.len() - 2..])
 }
 
 /// Kayan pencere sayacı. ponytail: anahtarlar bellekten silinmez; kafe ölçeğinde önemsiz, gerekirse periyodik temizlik.
@@ -80,6 +81,9 @@ struct Pending {
     expires: f64,
     attempts: u32,
     sent_at: f64,
+    provider: Saglayici,
+    /// Uzaktan doğrulama sürerken kod yenilendiyse sonuç eski koda uygulanmasın
+    nonce: u64,
 }
 
 pub struct Portal {
@@ -90,6 +94,8 @@ pub struct Portal {
     wall: Box<Clock>,
     runner: Box<Runner>,
     send_sms: Box<SmsFn>,
+    check_sms: Box<CheckFn>,
+    nonce: AtomicU64,
     pub host: String,
     pub base_url: String,
 }
@@ -155,7 +161,7 @@ fn otp_code() -> String {
 }
 
 impl Portal {
-    pub fn new(cfg: Config, clock: Box<Clock>, wall: Box<Clock>, runner: Box<Runner>, send_sms: Box<SmsFn>) -> Portal {
+    pub fn new(cfg: Config, clock: Box<Clock>, wall: Box<Clock>, runner: Box<Runner>, send_sms: Box<SmsFn>, check_sms: Box<CheckFn>) -> Portal {
         let host = format!("{}:{}", cfg.main.router_ip, cfg.main.portal_port);
         Portal {
             base_url: format!("http://{host}"),
@@ -167,7 +173,17 @@ impl Portal {
             wall,
             runner,
             send_sms,
+            check_sms,
+            nonce: AtomicU64::new(1),
         }
+    }
+
+    /// Bekleyen koddan formu yeniden doldurmak için (numara `+` ile, ülke seçimi yok sayılır).
+    fn prefill(p: &Pending) -> Form {
+        [("ad", p.ad.clone()), ("soyad", p.soyad.clone()), ("telefon", format!("+{}", p.phone)), ("kvkk", "1".into()), ("dst", p.dst.clone())]
+            .into_iter()
+            .map(|(k, v)| (k.to_string(), v))
+            .collect()
     }
 
     // --- sayfalar
@@ -196,6 +212,7 @@ impl Portal {
             ("telefon", f("telefon")),
             ("kvkk_checked", if f("kvkk") == "1" { "checked".into() } else { String::new() }),
             ("dst", dst.to_string()),
+            ("ulke_secenekleri_html", ulkeler::options_html(form.get("ulke").map_or("TR", String::as_str))),
         ];
         for k in ["hata_genel", "hata_ad", "hata_soyad", "hata_telefon", "hata_kvkk"] {
             let v = errors.iter().find(|(e, _)| *e == k).map(|(_, v)| v.clone()).unwrap_or_default();
@@ -209,7 +226,7 @@ impl Portal {
         Page::new(
             "kod",
             vec![
-                ("telefon_maskeli", mask_phone(&p.phone)),
+                ("telefon_maskeli", ulkeler::mask_phone(&p.phone)),
                 ("dakika", dakika.to_string()),
                 ("not", note.into()),
                 ("hata", error.into()),
@@ -294,7 +311,8 @@ impl Portal {
         let get = |k: &str| form.get(k).map(String::as_str).unwrap_or("");
         let dst = safe_dst(get("dst"));
         let Some(mac) = mac else { return self.error_page(NO_MAC) };
-        let (ad, soyad, phone) = (ortak::clean_name(get("ad")), ortak::clean_name(get("soyad")), ortak::normalize_phone(get("telefon")));
+        let ulke = if get("ulke").is_empty() { "TR" } else { get("ulke") };
+        let (ad, soyad, phone) = (ortak::clean_name(get("ad")), ortak::clean_name(get("soyad")), ulkeler::normalize_phone(ulke, get("telefon")));
         let mut errors = vec![];
         if ad.is_none() {
             errors.push(("hata_ad", "Adınızı harflerle yazın (2-40 karakter).".to_string()));
@@ -303,13 +321,25 @@ impl Portal {
             errors.push(("hata_soyad", "Soyadınızı harflerle yazın (2-40 karakter).".to_string()));
         }
         if phone.is_none() {
-            errors.push(("hata_telefon", "Geçerli bir cep telefonu numarası girin (5XX XXX XX XX).".to_string()));
+            let msg = if ulke == "TR" && !get("telefon").trim_start().starts_with('+') {
+                "Geçerli bir cep telefonu numarası girin (5XX XXX XX XX)."
+            } else {
+                "Geçerli bir telefon numarası girin (ülke kodunu kontrol edin)."
+            };
+            errors.push(("hata_telefon", msg.to_string()));
         }
         if get("kvkk") != "1" {
             errors.push(("hata_kvkk", "Devam etmek için aydınlatma metnini onaylayın.".to_string()));
         }
         let (Some(ad), Some(soyad), Some(phone), true) = (ad, soyad, phone, errors.is_empty()) else {
             return self.form_page(form, errors, &dst);
+        };
+        let provider = match sms::route(&self.cfg, &phone) {
+            Ok(p) => p,
+            Err(msg) => {
+                self.audit("OTP_ISTEK", ip, mac, &phone, "red=yabanci_numara");
+                return self.form_page(form, vec![("hata_genel", msg.to_string())], &dst);
+            }
         };
         let now = (self.clock)();
         let day = ortak::day_of(&ortak::now_iso((self.wall)())).to_string();
@@ -333,10 +363,10 @@ impl Portal {
             ortak::sms_count_inc(&self.cfg.main.state_root, &day);
             otp_code()
         };
-        let r = (self.send_sms)(&self.cfg, &phone, &code); // ağ çağrısı kilit dışında
+        let r = (self.send_sms)(&self.cfg, provider, &phone, &code); // ağ çağrısı kilit dışında
         if !r.ok {
-            self.audit("OTP_HATA", ip, mac, &phone, &format!("netgsm={}", r.kod));
-            return self.form_page(form, vec![("hata_genel", sms::user_message(&r.kod).to_string())], &dst);
+            self.audit("OTP_HATA", ip, mac, &phone, &format!("{}={}", provider.ad(), r.kod));
+            return self.form_page(form, vec![("hata_genel", sms::message_for(provider, &r.kod).to_string())], &dst);
         }
         let p = Pending {
             phone: phone.clone(),
@@ -347,10 +377,13 @@ impl Portal {
             expires: now + self.cfg.limits.otp_ttl_sec as f64,
             attempts: 0,
             sent_at: now,
+            provider,
+            nonce: self.nonce.fetch_add(1, Ordering::Relaxed),
         };
         let page = self.code_page(&p, "", "");
         lock(&self.pending).insert(mac.to_string(), p);
-        self.audit("OTP_GONDERILDI", ip, mac, &phone, &format!("job={}", r.is.as_deref().unwrap_or("None")));
+        let job = r.is.as_deref().unwrap_or("None");
+        self.audit("OTP_GONDERILDI", ip, mac, &phone, &format!("{}={job}", provider.ad()));
         page
     }
 
@@ -359,11 +392,7 @@ impl Portal {
         let Some(p) = p else {
             return self.form_page(&Form::new(), vec![("hata_genel", "Kod bulunamadı, lütfen bilgilerinizi yeniden girin.".into())], "");
         };
-        let form: Form = [("ad", p.ad), ("soyad", p.soyad), ("telefon", p.phone), ("kvkk", "1".into()), ("dst", p.dst)]
-            .into_iter()
-            .map(|(k, v)| (k.to_string(), v))
-            .collect();
-        self.send_code(ip, mac, &form)
+        self.send_code(ip, mac, &Self::prefill(&p))
     }
 
     pub fn verify(&self, ip: &str, mac: Option<&str>, form: &Form) -> Page {
@@ -377,35 +406,45 @@ impl Portal {
                 fail_lock / 60
             ));
         }
+        let not_found = || self.form_page(&Form::new(), vec![("hata_genel", "Kod bulunamadı, lütfen yeni kod isteyin.".into())], "");
         let code: String = form.get("kod").map(|k| k.chars().filter(char::is_ascii_digit).collect()).unwrap_or_default();
-        let (p, wrong_page) = {
+        // 1) bekleyen kod
+        let p = {
             let mut pending = lock(&self.pending);
-            let Some(p) = pending.get_mut(mac) else {
-                return self.form_page(&Form::new(), vec![("hata_genel", "Kod bulunamadı, lütfen yeni kod isteyin.".into())], "");
-            };
-            let prefill: Form = [("ad", &p.ad), ("soyad", &p.soyad), ("telefon", &p.phone), ("kvkk", &"1".to_string())]
-                .into_iter()
-                .map(|(k, v)| (k.to_string(), v.clone()))
-                .collect();
+            let Some(p) = pending.get(mac).cloned() else { return not_found() };
             if now >= p.expires {
-                let dst = p.dst.clone();
                 pending.remove(mac);
-                return self.form_page(&prefill, vec![("hata_genel", "Kodun süresi doldu. Yeni kod isteyin.".into())], &dst);
+                return self.form_page(&Self::prefill(&p), vec![("hata_genel", "Kodun süresi doldu. Yeni kod isteyin.".into())], &p.dst);
             }
-            if ct_eq(&code, &p.code) {
-                (pending.remove(mac).expect("bekleyen kod var"), None)
+            p
+        };
+        // 2) karşılaştır: Twilio gerçek modda kodu Twilio doğrular (ağ çağrısı kilit dışında); diğerlerinde yerelde
+        let matched = if p.provider == Saglayici::Twilio && !self.cfg.sms.mock {
+            let (ok, err) = (self.check_sms)(&self.cfg, &p.phone, &code);
+            if err.is_some() {
+                return self.code_page(&p, "", "Kod şu an doğrulanamadı, lütfen birkaç saniye sonra tekrar deneyin.");
+            }
+            ok
+        } else {
+            ct_eq(&code, &p.code)
+        };
+        // 3) sonucu uygula — bu arada kod yenilendiyse eski sonuç uygulanmaz
+        let wrong_page = {
+            let mut pending = lock(&self.pending);
+            let Some(cur) = pending.get_mut(mac).filter(|c| c.nonce == p.nonce) else { return not_found() };
+            if matched {
+                pending.remove(mac);
+                None
             } else {
-                p.attempts += 1;
+                cur.attempts += 1;
                 self.rl.hit(&fail_key, now);
-                let left = self.cfg.limits.otp_max_attempts.saturating_sub(p.attempts);
-                let snapshot = p.clone();
-                let page = if left == 0 {
+                let left = self.cfg.limits.otp_max_attempts.saturating_sub(cur.attempts);
+                Some(if left == 0 {
                     pending.remove(mac);
-                    self.form_page(&prefill, vec![("hata_genel", "Çok fazla hatalı deneme. Yeni kod isteyin.".into())], &snapshot.dst)
+                    self.form_page(&Self::prefill(&p), vec![("hata_genel", "Çok fazla hatalı deneme. Yeni kod isteyin.".into())], &p.dst)
                 } else {
-                    self.code_page(&snapshot, "", &format!("Kod hatalı. Kalan deneme hakkı: {left}"))
-                };
-                (snapshot, Some(page))
+                    self.code_page(&p, "", &format!("Kod hatalı. Kalan deneme hakkı: {left}"))
+                })
             }
         };
         if let Some(page) = wrong_page {
@@ -597,9 +636,9 @@ fn handle(p: &Portal, per_ip: &RateLimiter, mut req: tiny_http::Request) {
 }
 
 pub fn run(cfg: Config) -> ExitCode {
-    let missing = cfg.netgsm_missing();
+    let missing = cfg.sms_missing();
     if !missing.is_empty() {
-        eprintln!("portal: NetGSM ayarları eksik: {}", missing.join(", "));
+        eprintln!("portal: SMS ayarları eksik: {}", missing.join(", "));
         return ExitCode::from(1);
     }
     let addr = format!("{}:{}", cfg.main.router_ip, cfg.main.portal_port);
@@ -615,10 +654,11 @@ pub fn run(cfg: Config) -> ExitCode {
         Box::new(ortak::monotonic),
         Box::new(ortak::wall),
         Box::new(|c: &[String]| ortak::run(c)),
-        Box::new(sms::send_otp),
+        Box::new(sms::send),
+        Box::new(crate::twilio::check),
     ));
     portal.audit("SERVIS_BASLADI", "", "", "", "portal");
-    eprintln!("portal: {addr} dinleniyor (SMS deneme modu: {})", if portal.cfg.netgsm.mock { "açık" } else { "kapalı" });
+    eprintln!("portal: {addr} dinleniyor (SMS deneme modu: {})", if portal.cfg.sms.mock { "açık" } else { "kapalı" });
     let per_ip = Arc::new(RateLimiter::default());
     // ponytail: 8 işçi + gövde ≤ 4 KB; yavaş istemci bir işçiyi en çok gövde okuma süresince tutar. Kafe ölçeğinde yeterli.
     let workers: Vec<_> = (0..8)
@@ -656,7 +696,7 @@ mod tests {
         mono: Arc<Mutex<f64>>,
         wall: Arc<Mutex<f64>>,
         calls: Arc<Mutex<Vec<Vec<String>>>>,
-        sms: Arc<Mutex<Vec<(String, String)>>>,
+        sms: Arc<Mutex<Vec<(String, String, &'static str)>>>,
         root: std::path::PathBuf,
     }
 
@@ -685,9 +725,15 @@ mod tests {
                 c2.lock().unwrap().push(c.to_vec());
                 !c.iter().any(|a| a.contains("10.50.0.99")) // .99'a nft ekleme başarısız sayılır
             }),
-            Box::new(move |_c: &Config, phone: &str, code: &str| {
-                s2.lock().unwrap().push((phone.into(), code.into()));
+            Box::new(move |_c: &Config, prov: Saglayici, phone: &str, code: &str| {
+                s2.lock().unwrap().push((phone.into(), code.into(), prov.ad()));
                 Sonuc { ok: true, kod: "0".into(), is: Some("J1".into()) }
+            }),
+            // Twilio uzaktan doğrulama: 424242 onaylı, 999999 ağ hatası
+            Box::new(|_c: &Config, _phone: &str, code: &str| match code {
+                "424242" => (true, None),
+                "999999" => (false, Some("AG".into())),
+                _ => (false, None),
             }),
         );
         T { p, mono, wall, calls, sms: sms_log, root }
@@ -738,8 +784,9 @@ mod tests {
         let t = setup(|_| {});
         let pg = t.p.send_code(IP, Some(MAC), &good("0533 455 31 32"));
         assert_eq!(pg.tpl, "kod");
-        assert_eq!(pg.get("telefon_maskeli"), "5XX XXX XX 32");
-        assert_eq!(t.sms.lock().unwrap()[0].0, "5334553132");
+        assert_eq!(pg.get("telefon_maskeli"), "+90 5XX XXX XX 32");
+        assert_eq!(t.sms.lock().unwrap()[0].0, "905334553132");
+        assert_eq!(t.sms.lock().unwrap()[0].2, "netgsm");
         let code = t.last_code();
         assert_eq!(code.len(), 6);
         let wrong = if code == "000000" { "111111" } else { "000000" };
@@ -752,13 +799,13 @@ mod tests {
         assert!(calls.iter().any(|c| c.last().unwrap() == &format!("{{ {MAC} . {IP} timeout 2592000s }}")));
         let ses = ortak::load_sessions(&t.p.cfg.main.state_root);
         assert_eq!(ses[MAC].ip, IP);
-        assert_eq!(ses[MAC].phone, "5334553132");
-        let user = t.read("5651/gunluk/2026-09-29/kullanicilar/5334553132.csv");
+        assert_eq!(ses[MAC].phone, "905334553132");
+        let user = t.read("5651/gunluk/2026-09-29/kullanicilar/905334553132.csv");
         assert!(user.starts_with('\u{feff}'));
-        assert!(user.contains(";KAYIT;5334553132;Ayşe;Yılmaz;aa:bb:cc:dd:ee:01;10.50.0.23;"));
+        assert!(user.contains(";KAYIT;905334553132;Ayşe;Yılmaz;aa:bb:cc:dd:ee:01;10.50.0.23;"));
         assert!(user.contains(";OTURUM_BASLA;"));
         assert!(t.read("5651/gunluk/2026-09-29/oturum.csv").contains("OTURUM_BASLA"));
-        assert!(t.read("5651/kullanicilar/index.csv").contains("5334553132;Ayşe;Yılmaz;2026-09-29T21:05:34+03:00"));
+        assert!(t.read("5651/kullanicilar/index.csv").contains("905334553132;Ayşe;Yılmaz;2026-09-29T21:05:34+03:00"));
         let a = t.audit_text();
         for olay in ["OTP_GONDERILDI", "OTP_HATALI_KOD", "OTP_BASARILI"] {
             assert!(a.contains(olay), "{olay}");
@@ -792,7 +839,7 @@ mod tests {
         }
         let pg = t.p.verify(IP, Some(MAC), &form(&[("kod", wrong)]));
         assert_eq!((pg.tpl, pg.get("hata_genel")), ("giris", "Çok fazla hatalı deneme. Yeni kod isteyin."));
-        assert_eq!(pg.get("telefon"), "5334553132");
+        assert_eq!(pg.get("telefon"), "+905334553132");
         assert!(t.p.verify(IP, Some(MAC), &form(&[("kod", wrong)])).get("hata_genel").contains("Kod bulunamadı"));
 
         t.advance(61.0);
@@ -889,5 +936,43 @@ mod tests {
         let mut v = HashMap::new();
         v.insert("site", "X".to_string());
         assert_eq!(substitute("$site'ye $bilinmeyen $$5", &v), "X'ye $bilinmeyen $5");
+    }
+
+    #[test]
+    fn foreign_numbers_and_twilio() {
+        // Twilio kapalı: yabancı numaraya SMS yok
+        let t = setup(|_| {});
+        let f = form(&[("ad", "John"), ("soyad", "Smith"), ("ulke", "DE"), ("telefon", "0151 2345 6789"), ("kvkk", "1")]);
+        let pg = t.p.send_code(IP, Some(MAC), &f);
+        assert_eq!(pg.get("hata_genel"), sms::YABANCI_YOK);
+        assert!(t.p.render(&pg).contains("<option value=\"DE\" selected>")); // seçim korunur
+        assert_eq!(t.sms_count(), 0);
+        // Twilio açık, deneme modu: yabancı numara Twilio'dan, kod yerelde doğrulanır
+        let t = setup(|c| c.twilio.enabled = true);
+        let pg = t.p.send_code(IP, Some(MAC), &f);
+        assert_eq!((pg.tpl, pg.get("telefon_maskeli")), ("kod", "+49 XXXXXXXXX89"));
+        let code = t.last_code();
+        assert_eq!(t.sms.lock().unwrap()[0], ("4915123456789".to_string(), code.clone(), "twilio"));
+        assert_eq!(t.p.verify(IP, Some(MAC), &form(&[("kod", &code)])).tpl, "basarili");
+        assert_eq!(ortak::load_sessions(&t.p.cfg.main.state_root)[MAC].phone, "4915123456789");
+        // Türk numarası Twilio açıkken de NetGSM'den
+        let t = setup(|c| c.twilio.enabled = true);
+        t.p.send_code(IP, Some(MAC), &good("5334553132"));
+        assert_eq!(t.sms.lock().unwrap()[0].2, "netgsm");
+    }
+
+    #[test]
+    fn twilio_real_mode_checks_remotely() {
+        let t = setup(|c| {
+            c.sms.mock = false;
+            c.sms.provider = "twilio".into();
+        });
+        assert_eq!(t.p.send_code(IP, Some(MAC), &good("5334553132")).tpl, "kod");
+        // ağ hatası: deneme hakkı düşmez
+        let pg = t.p.verify(IP, Some(MAC), &form(&[("kod", "999999")]));
+        assert_eq!(pg.get("hata"), "Kod şu an doğrulanamadı, lütfen birkaç saniye sonra tekrar deneyin.");
+        let pg = t.p.verify(IP, Some(MAC), &form(&[("kod", "111111")]));
+        assert_eq!(pg.get("hata"), "Kod hatalı. Kalan deneme hakkı: 4");
+        assert_eq!(t.p.verify(IP, Some(MAC), &form(&[("kod", "424242")])).tpl, "basarili");
     }
 }

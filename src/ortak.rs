@@ -47,17 +47,6 @@ pub fn monotonic() -> f64 {
 }
 
 // ---------------------------------------------------------------- doğrulayıcılar
-/// Türkiye GSM numarası → `5XXXXXXXXX`; geçersizse None.
-pub fn normalize_phone(raw: &str) -> Option<String> {
-    let mut d: String = raw.chars().filter(char::is_ascii_digit).collect();
-    if d.len() == 12 && d.starts_with("90") {
-        d.drain(..2);
-    } else if d.len() == 11 && d.starts_with('0') {
-        d.drain(..1);
-    }
-    (d.len() == 10 && d.starts_with('5')).then_some(d)
-}
-
 /// Ad/soyad: boşluklar teke, 2–40 karakter, harfle başlar; yalnızca harf, boşluk, `-`, `'`, `.`.
 pub fn clean_name(raw: &str) -> Option<String> {
     let s = raw.split_whitespace().collect::<Vec<_>>().join(" ");
@@ -522,16 +511,6 @@ mod tests {
         assert_eq!(now_iso(1_790_705_134.9), "2026-09-29T21:05:34+03:00");
         assert_eq!(now_iso(951_782_400.0), "2000-02-29T03:00:00+03:00"); // artık yıl
         assert_eq!(day_of("2026-09-29T21:05:34+03:00"), "2026-09-29");
-    }
-
-    #[test]
-    fn phones() {
-        for ok in ["+90 (533) 455 31 32", "0533 455 3132", "5334553132", "905334553132", "05334553132"] {
-            assert_eq!(normalize_phone(ok).as_deref(), Some("5334553132"), "{ok}");
-        }
-        for bad in ["2124553132", "533455313", "53345531321", "abc", "", "+1 533 455 3132", "0212 455 31 32"] {
-            assert_eq!(normalize_phone(bad), None, "{bad}");
-        }
     }
 
     #[test]

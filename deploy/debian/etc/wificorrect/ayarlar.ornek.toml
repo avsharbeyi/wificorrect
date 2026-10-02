@@ -9,16 +9,28 @@ subnet = "10.50.0.0/24"
 portal_port = 8080
 session_minutes = 43200        # 30 gün; müşteriye gösterilmez
 max_devices_per_phone = 3
+retention_days = 730            # kayıtlar cihazda 2 yıl (yalnızca yedeklenmiş günler silinir)
 log_root = "/srv/5651"
 state_root = "/srv/hotspot/state"
 leases_file = "/var/lib/misc/dnsmasq.leases"
 
-[netgsm]
+[sms]
 mock = true                    # true: SMS gönderilmez, kod sistem günlüğüne yazılır. Yalnızca hizmet sağlayıcı değiştirir.
+provider = "netgsm"            # Türk numaraları için: netgsm | twilio. Yabancı numaralar Twilio açıksa Twilio'dan.
+
+[netgsm]                       # yalnızca Türk numaralarına gönderir
 usercode = ""
 password = ""                  # yalnızca cihazda; repoya asla girmez
 msgheader = ""
 message = "WiFi dogrulama kodunuz: {kod}. Kod 3 dakika gecerlidir."
+
+[twilio]                       # Twilio Verify; yabancı numaralar için. Bilgiler yalnızca cihazda, repoya girmez.
+enabled = false
+account_sid = ""               # AC...
+verify_sid = ""                # VA...
+auth_token = ""                # ya da api_key_sid (SK...) + api_key_secret
+api_key_sid = ""
+api_key_secret = ""
 
 [limits]
 otp_ttl_sec = 180
@@ -29,3 +41,8 @@ sms_per_phone_day = 10
 sms_per_mac_hour = 5
 sms_global_day = 300
 verify_fail_lock_min = 15
+
+[backup]                       # uzak yedek: arşiv sunucusu kurulunca açılacak
+enabled = false
+target = ""                    # kafe-<ad>@<sunucu>:
+ssh = "ssh -i /root/.ssh/yedek_anahtar"

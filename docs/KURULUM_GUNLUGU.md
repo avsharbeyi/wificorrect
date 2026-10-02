@@ -74,3 +74,11 @@ Son ürün, aynı donanımlı boş bir cihaza yüklenen bir ISO olacak; ilk aç�
 ## Bekleyen işler (kullanıcı kararıyla ertelendi)
 - **Uzak yedek — arşiv sunucusu kurulunca yapılacak** (2026-10-02 kullanıcı kararı): cihazda yeni SSH anahtarı üret (`/root/.ssh/yedek_anahtar`), sunucuda kafe hesabına (`kafe-<ad>`, salt-yazma, rrsync) ekle, `/etc/wificorrect/ayarlar.toml` → `[backup] enabled = true`, `target = "kafe-<ad>@<sunucu>:"`; `ctl yedekle` ile dene. O zamana kadar günler cihazda mühürlenip birikir; `temizle` yedeklenmemiş günü silmez.
 - Eski OpenWrt cihazının kayıtları/ayarları yeni sisteme taşınmayacak (kullanıcı kararı).
+
+## Twilio + ülke kodu seçimi (2026-10-02, kullanıcı isteği)
+- Portal formunda telefonun yanında ülke seçimi: varsayılan 🇹🇷 +90, 159 ülke (`src/ulkeler.rs`; bayrak ISO kodundan üretilir, JS yok). Numara `+…`/`00…` ile yazılırsa seçim yok sayılır. Türkiye için 5XX XXX XX XX kuralı, diğerlerinde 4–14 haneli ulusal numara.
+- **Telefon biçimi değişti:** her yerde uluslararası biçim (E.164, + olmadan): `905334553132`, `4915123456789` — oturum, CSV `telefon` sütunu, kişi dosyası adı, kişi listesi. Ekranda `+90 5XX XXX XX 32`.
+- SMS yönlendirme (`sms::route`): Türk numaraları `[sms] provider` (netgsm|twilio); yabancı numaralar Twilio açıksa Twilio'dan, değilse "Yabancı numaralara şu an SMS gönderilemiyor". NetGSM'e 10 haneli ulusal numara gider. Deneme modu tek anahtar: `[sms] mock` (iki sağlayıcıyı da kapsar).
+- `src/twilio.rs` (eski twilio.py): Verify API; gerçek modda kodu Twilio üretir/doğrular, ağ hatasında deneme hakkı düşmez; doğrulama sürerken kod yenilenirse sonuç eski koda uygulanmaz. Yerel ayar: Türk numarası `tr`, diğerleri `en`.
+- KVKK aydınlatma metnine yurt dışı aktarım (Twilio, ABD) eklendi — **hukukçuya onaylatılmalı (KVKK m.9).**
+- 44 birim testi geçti; cihazda: varsayılan +90 seçili, Almanya / `+49` numarası Twilio kapalıyken düzgün reddediliyor (`OTP_ISTEK red=yabanci_numara`), Türk numarası NetGSM (deneme) ile kod alıyor.
