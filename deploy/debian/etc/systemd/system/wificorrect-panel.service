@@ -1,0 +1,19 @@
+[Unit]
+Description=WifiCorrect yonetim paneli (HTTPS 8443)
+After=wificorrect-guvenlik.service network-online.target
+Wants=network-online.target
+RequiresMountsFor=/srv
+
+[Service]
+# İlk açılışta /etc/wificorrect/panel.{crt,key} yoksa öz-imzalı sertifika üretir
+ExecStart=/usr/local/bin/wificorrect panel
+Restart=always
+RestartSec=5
+NoNewPrivileges=yes
+ProtectSystem=full
+ReadWritePaths=/etc/wificorrect /srv
+ProtectHome=yes
+PrivateTmp=yes
+
+[Install]
+WantedBy=multi-user.target

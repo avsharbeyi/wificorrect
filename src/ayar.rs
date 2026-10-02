@@ -1,11 +1,11 @@
 //! Ayar dosyası (/etc/wificorrect/ayarlar.toml). Eski UCI `hotspot` yapılandırmasının karşılığı;
 //! bölüm ve anahtar adları docs/MASTER_ENGINEERING.md §8 ile aynı. Eksik anahtar varsayılanı alır.
 
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
 pub const PATH: &str = "/etc/wificorrect/ayarlar.toml";
 
-#[derive(Deserialize, Clone, Debug)]
+#[derive(Serialize, Deserialize, Clone, Debug)]
 #[serde(default)]
 pub struct Main {
     pub site_name: String,
@@ -42,7 +42,7 @@ impl Default for Main {
 
 /// SMS genel ayarı. `mock`: deneme modu (gerçek SMS gitmez, kod sistem günlüğüne yazılır) — yalnızca hizmet sağlayıcı değiştirir.
 /// `provider`: Türk numaraları için "netgsm" ya da "twilio". Yabancı numaralar Twilio açıksa Twilio'dan gider.
-#[derive(Deserialize, Clone, Debug)]
+#[derive(Serialize, Deserialize, Clone, Debug)]
 #[serde(default)]
 pub struct Sms {
     pub mock: bool,
@@ -56,7 +56,7 @@ impl Default for Sms {
 }
 
 /// Twilio Verify (kodu Twilio üretir ve doğrular). Kimlik: Auth Token ya da API Key SID + Secret.
-#[derive(Deserialize, Clone, Debug)]
+#[derive(Serialize, Deserialize, Clone, Debug)]
 #[serde(default)]
 pub struct Twilio {
     pub enabled: bool,
@@ -82,7 +82,7 @@ impl Default for Twilio {
     }
 }
 
-#[derive(Deserialize, Clone, Debug)]
+#[derive(Serialize, Deserialize, Clone, Debug)]
 #[serde(default)]
 pub struct Netgsm {
     pub url: String,
@@ -108,7 +108,7 @@ impl Default for Netgsm {
     }
 }
 
-#[derive(Deserialize, Clone, Debug)]
+#[derive(Serialize, Deserialize, Clone, Debug)]
 #[serde(default)]
 pub struct Limits {
     pub otp_ttl_sec: u64,
@@ -137,7 +137,7 @@ impl Default for Limits {
 }
 
 /// Uzak yedek (rsync, SSH). Hedef kafe başına salt-yazma hesap: `kafe-<ad>@sunucu:`.
-#[derive(Deserialize, Clone, Debug)]
+#[derive(Serialize, Deserialize, Clone, Debug)]
 #[serde(default)]
 pub struct Backup {
     pub enabled: bool,
@@ -152,14 +152,14 @@ impl Default for Backup {
 }
 
 /// Portalsız geçen (`[[allow]]`, ör. AP, personel; trafiği yine kaydedilir) ya da yasaklı (`[[ban]]`) cihaz.
-#[derive(Deserialize, Clone, Debug, Default)]
+#[derive(Serialize, Deserialize, Clone, Debug, Default)]
 pub struct Device {
     pub mac: String,
     #[serde(default)]
     pub name: String,
 }
 
-#[derive(Deserialize, Clone, Debug, Default)]
+#[derive(Serialize, Deserialize, Clone, Debug, Default)]
 #[serde(default)]
 pub struct Config {
     pub main: Main,
@@ -175,6 +175,12 @@ pub struct Config {
 impl Config {
     pub fn parse(text: &str) -> Result<Config, String> {
         toml::from_str(text).map_err(|e| format!("ayar dosyası okunamadı: {e}"))
+    }
+
+    /// Panelden kayıt: atomik, izin 600. ponytail: dosyadaki yorumlar korunmaz (örnek dosyada duruyor).
+    pub fn save(&self, path: &str) -> Result<(), String> {
+        let text = toml::to_string_pretty(self).map_err(|e| format!("ayar yazılamadı: {e}"))?;
+        crate::ortak::write_atomic(std::path::Path::new(path), text.as_bytes()).map_err(|e| format!("{path} yazılamadı: {e}"))
     }
 
     pub fn load(path: &str) -> Result<Config, String> {
@@ -239,6 +245,8 @@ mod tests {
         let c = Config::parse("[sms]\nmock = false\nprovider = 'twilio'\n[twilio]\naccount_sid = 'AC1'\napi_key_sid = 'SK1'\n").unwrap();
         assert_eq!(c.sms_missing(), vec!["twilio.auth_token veya api_key_sid+api_key_secret", "twilio.verify_sid"]);
         let c = Config::parse("[[allow]]\nmac = 'AA-BB-CC-DD-EE-99'\nname = 'AP'\n[[allow]]\nmac = 'bozuk'\n").unwrap();
+        let back = Config::parse(&toml::to_string_pretty(&c).unwrap()).unwrap(); // yaz-oku aynı
+        assert_eq!(back.allow.len(), 2);
         assert_eq!(Config::devices(&c.allow).into_iter().collect::<Vec<_>>(), vec![("aa:bb:cc:dd:ee:99".into(), "AP".into())]);
         assert!(Config::parse("[main\n").is_err());
     }

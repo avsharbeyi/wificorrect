@@ -2,9 +2,11 @@
 
 mod ayar;
 mod ctl;
+mod hesap;
 mod kaydedici;
 mod muhur;
 mod ortak;
+mod panel;
 mod portal;
 mod sms;
 mod twilio;
@@ -50,9 +52,9 @@ fn main() -> ExitCode {
             Ok(cfg) => ctl::run(cfg, &args[1..]),
             Err(code) => code,
         },
-        Some(cmd @ "panel") => {
-            eprintln!("'{cmd}' henüz yazılmadı");
-            ExitCode::from(2)
+        Some("panel") => {
+            let path = std::env::var("WFC_AYAR").unwrap_or_else(|_| ayar::PATH.to_string());
+            panel::run(&path)
         }
         _ => {
             eprintln!("{USAGE}");

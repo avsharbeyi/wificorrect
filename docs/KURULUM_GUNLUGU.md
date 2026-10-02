@@ -82,3 +82,12 @@ Son ürün, aynı donanımlı boş bir cihaza yüklenen bir ISO olacak; ilk aç�
 - `src/twilio.rs` (eski twilio.py): Verify API; gerçek modda kodu Twilio üretir/doğrular, ağ hatasında deneme hakkı düşmez; doğrulama sürerken kod yenilenirse sonuç eski koda uygulanmaz. Yerel ayar: Türk numarası `tr`, diğerleri `en`.
 - KVKK aydınlatma metnine yurt dışı aktarım (Twilio, ABD) eklendi — **hukukçuya onaylatılmalı (KVKK m.9).**
 - 44 birim testi geçti; cihazda: varsayılan +90 seçili, Almanya / `+49` numarası Twilio kapalıyken düzgün reddediliyor (`OTP_ISTEK red=yabanci_numara`), Türk numarası NetGSM (deneme) ile kod alıyor.
+
+## Adım 8a — Yönetim paneli çekirdeği (2026-10-02)
+- `wificorrect panel` → `wificorrect-panel.service`, https://<WAN IP>:8443 (yalnızca dükkân ağı; müşteri ağından istek 403). İlk açılışta `/etc/wificorrect/panel.{crt,key}` öz-imzalı (EC P-256, 10 yıl) cihazda üretilir; kalıba girmez.
+- **İlk açılış = `/kurulum`:** kafe adı + hizmet sağlayıcı hesabı + kafe sahibi hesabı (kullanıcı adları ve parolalar kurulumda seçilir, varsayılan hesap yok, parola ≥ 10). Hesaplar `/etc/wificorrect/hesaplar.json` (600, PBKDF2-SHA256 120.000, kullanıcı başına tuz). Kurulum bir kez yapılır; bozuk hesap dosyası kurulum ekranını açmaz.
+- Giriş: 5 hatalı deneme / 15 dk (IP ve kullanıcı başına) kilit; çerez `HttpOnly; Secure; SameSite=Strict`, 12 saat; her POST'ta CSRF. Parola değişince kullanıcının diğer oturumları kapanır.
+- Sayfalar: Özet (bağlı cihaz, bugün farklı kullanıcı, SMS/tavan, disk, uyarılar) · Bağlı cihazlar (+ bağlantı kes) · Yasaklı / izinli cihazlar · Ayarlar · Sistem (servisler, günü kapat, bütünlüğü doğrula, yeniden başlat) · Hesaplar (yalnızca hizmet sağlayıcı) · Şifremi değiştir.
+- Roller (A14): kafe sahibi SMS deneme modunu ve NetGSM/Twilio bilgilerini görmez/değiştiremez (formda gönderse de yok sayılır), yalnızca "tanımlı/eksik" görür; bağlı cihazlarda numara ve ad maskeli. Şifre alanları yalnızca yazılır (boş = aynı kalır), denetimde `***`. Her işlem `denetim.csv`'ye `PANEL_*`.
+- Ayar kaydı `ayarlar.toml`'u yeniden yazar (yorumlar gider; örnek dosyada duruyor) ve portalı yeniden başlatır; bağlı müşteriler düşmez.
+- Sonraki: 8b kayıtlar / resmi talep (yalnızca hizmet sağlayıcı), 8c portlar + Wi-Fi.

@@ -373,6 +373,12 @@ pub fn run(cmd: &[String]) -> bool {
     run_timeout(cmd, 15)
 }
 
+/// Komutun standart çıktısı (kabuksuz; hata → boş).
+pub fn capture(cmd: &[&str]) -> String {
+    let Some((prog, args)) = cmd.split_first() else { return String::new() };
+    Command::new(prog).args(args).stderr(Stdio::null()).output().map(|o| String::from_utf8_lossy(&o.stdout).into_owned()).unwrap_or_default()
+}
+
 pub fn run_timeout(cmd: &[String], secs: u64) -> bool {
     let Some((prog, args)) = cmd.split_first() else { return false };
     let Ok(mut child) = Command::new(prog).args(args).stdout(Stdio::null()).stderr(Stdio::null()).spawn() else {
