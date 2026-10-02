@@ -1,6 +1,8 @@
 //! WifiCorrect — tek program, alt komutlarla çalışır (docs/RUST_YENIDEN_YAZIM.md, B/C bölümleri).
 
 mod ayar;
+mod ctl;
+mod kaydedici;
 mod ortak;
 mod portal;
 mod sms;
@@ -37,7 +39,15 @@ fn main() -> ExitCode {
             Ok(cfg) => portal::run(cfg),
             Err(code) => code,
         },
-        Some(cmd @ ("kaydedici" | "panel" | "ctl")) => {
+        Some("kaydedici") => match config() {
+            Ok(cfg) => kaydedici::run(cfg),
+            Err(code) => code,
+        },
+        Some("ctl") => match config() {
+            Ok(cfg) => ctl::run(cfg, &args[1..]),
+            Err(code) => code,
+        },
+        Some(cmd @ "panel") => {
             eprintln!("'{cmd}' henüz yazılmadı");
             ExitCode::from(2)
         }

@@ -1,0 +1,8 @@
+1790964762.597450 cihaz dnsmasq[1240]: 31 10.50.0.88/51814 reply site1.example is 203.0.113.70
+1790964762.616431 cihaz dnsmasq[1240]: 32 10.50.0.88/51814 reply site1.example is 2001:db8::1
+1790964763.902386 cihaz dnsmasq[1240]: 33 10.50.0.88/54755 query[A] site2.example from 10.50.0.88
+1790964763.902435 cihaz dnsmasq[1240]: 33 10.50.0.88/54755 cached site2.example is <CNAME>
+1790964763.902476 cihaz dnsmasq[1240]: 33 10.50.0.88/54755 cached site3.example is 198.51.100.71
+1790964763.902627 cihaz dnsmasq[1240]: 34 10.50.0.88/54755 query[AAAA] site2.example from 10.50.0.88
+1790964763.902667 cihaz dnsmasq[1240]: 34 10.50.0.88/54755 cached site2.example is <CNAME>
+1790964763.902711 cihaz dnsmasq[1240]: 34 10.50.0.88/54755 cached site3.example is 2001:db8::2

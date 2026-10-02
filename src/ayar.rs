@@ -93,12 +93,22 @@ impl Default for Limits {
     }
 }
 
+/// Portalsız geçen (`[[allow]]`, ör. AP, personel; trafiği yine kaydedilir) ya da yasaklı (`[[ban]]`) cihaz.
+#[derive(Deserialize, Clone, Debug, Default)]
+pub struct Device {
+    pub mac: String,
+    #[serde(default)]
+    pub name: String,
+}
+
 #[derive(Deserialize, Clone, Debug, Default)]
 #[serde(default)]
 pub struct Config {
     pub main: Main,
     pub netgsm: Netgsm,
     pub limits: Limits,
+    pub allow: Vec<Device>,
+    pub ban: Vec<Device>,
 }
 
 impl Config {
@@ -109,6 +119,11 @@ impl Config {
     pub fn load(path: &str) -> Result<Config, String> {
         let text = std::fs::read_to_string(path).map_err(|e| format!("{path} açılamadı: {e}"))?;
         Self::parse(&text)
+    }
+
+    /// Geçerli MAC'li girdiler: {mac: ad}.
+    pub fn devices(list: &[Device]) -> std::collections::BTreeMap<String, String> {
+        list.iter().filter_map(|d| crate::ortak::norm_mac(&d.mac).map(|m| (m, d.name.clone()))).collect()
     }
 
     /// Gerçek SMS modunda eksik NetGSM bilgileri (portal bunlarla başlamaz).
@@ -137,6 +152,8 @@ mod tests {
         assert_eq!(c.limits.otp_ttl_sec, 180);
         assert_eq!(c.netgsm_missing(), vec!["password", "msgheader"]);
         assert!(Config::parse("").unwrap().netgsm_missing().is_empty()); // varsayılan: deneme modu
+        let c = Config::parse("[[allow]]\nmac = 'AA-BB-CC-DD-EE-99'\nname = 'AP'\n[[allow]]\nmac = 'bozuk'\n").unwrap();
+        assert_eq!(Config::devices(&c.allow).into_iter().collect::<Vec<_>>(), vec![("aa:bb:cc:dd:ee:99".into(), "AP".into())]);
         assert!(Config::parse("[main\n").is_err());
     }
 }

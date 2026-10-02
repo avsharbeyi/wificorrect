@@ -1,0 +1,16 @@
+[Unit]
+Description=WifiCorrect 5651 kaydedici (baglanti, DNS, oturum bakimi)
+After=wificorrect-guvenlik.service dnsmasq.service
+RequiresMountsFor=/srv
+
+[Service]
+ExecStart=/usr/local/bin/wificorrect kaydedici
+Restart=always
+RestartSec=5
+NoNewPrivileges=yes
+ProtectSystem=full
+ProtectHome=yes
+PrivateTmp=yes
+
+[Install]
+WantedBy=multi-user.target

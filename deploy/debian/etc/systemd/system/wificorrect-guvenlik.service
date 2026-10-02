@@ -13,7 +13,11 @@ ExecStartPre=/usr/sbin/sysctl -qw net.ipv4.ip_forward=0
 ExecStart=/usr/sbin/nft -f /etc/wificorrect/guvenlik.nft
 ExecStart=/usr/sbin/nft -f /etc/wificorrect/kapi.nft
 # Kurallardan önce açılmış bağlantı kayıtları yeni NAT/kapı kurallarından geçmemiştir → temizle
+# Bayt sayacı ve süre (5651 trafik kaydı); conntrack modülü artık yüklü
+ExecStartPost=/usr/sbin/sysctl -q -p /etc/wificorrect/conntrack.sysctl
 ExecStartPost=-/usr/sbin/conntrack -F
+# Kayıtlı oturumları ve izinli/yasaklı cihazları kapıya geri yükle (müşteri tekrar SMS istemez)
+ExecStartPost=-/usr/local/bin/wificorrect ctl yukle
 ExecStartPost=/usr/sbin/sysctl -qw net.ipv4.ip_forward=1
 # Durdurmak kuralları SİLMEZ (Debian nftables.service'in aksine): servis durunca da kapı kapalı kalır.
 

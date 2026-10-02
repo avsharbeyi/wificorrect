@@ -1,0 +1,5 @@
+# conntrack modülü yüklendikten sonra uygulanır (wificorrect-guvenlik.service); sysctl.d'ye konmaz çünkü
+# açılışta modül henüz yokken bu anahtarlar bulunamaz.
+net.netfilter.nf_conntrack_acct = 1
+net.netfilter.nf_conntrack_timestamp = 1
+net.netfilter.nf_conntrack_max = 65536

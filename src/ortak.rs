@@ -360,6 +360,13 @@ pub fn nft_del_cmd(mac: &str, ip: &str) -> Option<Cmd> {
     })
 }
 
+/// `allow_mac` / `ban_mac` kümesine ekle (`add`) ya da çıkar (`delete`).
+pub fn nft_set_cmd(verb: &str, set: &str, mac: &str) -> Option<Cmd> {
+    (norm_mac(mac).as_deref() == Some(mac) && matches!(set, "allow_mac" | "ban_mac") && matches!(verb, "add" | "delete")).then(|| {
+        ["nft", verb, "element", "inet", "hotspot", set].iter().map(|s| s.to_string()).chain([format!("{{ {mac} }}")]).collect()
+    })
+}
+
 /// Komutu kabuksuz çalıştırır, 15 sn içinde bitmezse öldürür. Başarı = çıkış kodu 0.
 pub fn run(cmd: &[String]) -> bool {
     let Some((prog, args)) = cmd.split_first() else { return false };
@@ -382,7 +389,7 @@ pub fn run(cmd: &[String]) -> bool {
 
 pub type Runner = dyn Fn(&[String]) -> bool + Send + Sync;
 
-fn run_opt(runner: &Runner, cmd: Option<Cmd>) -> bool {
+pub fn run_opt(runner: &Runner, cmd: Option<Cmd>) -> bool {
     cmd.is_some_and(|c| runner(&c))
 }
 
