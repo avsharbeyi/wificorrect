@@ -27,3 +27,14 @@ Sistem: Debian 13 "trixie", çekirdek 6.12.111, cihaz adı `wificorrect`. Yönet
 - dnsmasq: yalnızca `br-hotspot`, havuz 10.50.0.20–249, kira 2 saat, `log-queries=extra`.
 - Doğrulama (cihaz içinde sanal müşteri, `ip netns` + veth): DHCP ✔, DNS yönlendirme ✔ (30–60 ms), girişsiz HTTPS anında red ✔, girişsiz HTTP → portala ✔, izinli müşteri HTTPS/HTTP ✔, dükkân ağı / DoT 853 / IPv6 engelli ✔, yeniden başlatmada hepsi kendiliğinden ✔ (~25 sn).
 - Tuzak: **example.com** bu hattan neredeyse hiç çözülmüyor (PC'den de 7 sn). DNS testlerinde başka ad kullanın.
+
+## Hedef: kurulum kalıbı (ISO) — bütün adımlarda geçerli kurallar
+Son ürün, aynı donanımlı boş bir cihaza yüklenen bir ISO olacak; ilk açılışta **sahiplendirme ekranı** (kurulum sihirbazı) gelecek.
+- Cihaza elle yapılan her ayar repoda (`deploy/debian/`) dosya olarak durur; kalıp yalnızca repodan üretilir.
+- Kalıba cihaza/kafeye özel hiçbir şey girmez: MAC, IP sabitlemesi, SSH sunucu anahtarları (ilk açılışta yeniden üretilir), root parolası, panel hesapları, SMS bilgileri, yedek anahtarı. Hepsini sahiplendirme ekranı sorar veya üretir.
+- Uygulama `.deb` paketi olarak paketlenir; ürün paketi GitHub Actions'ta derlenir. **Kalıpta derleyici yoktur.**
+
+## Adım 4 — Rust geliştirme ortamı (2026-10-02)
+- WSL kullanılamadı (varsayılan dağıtımın diski yok; diğerleri başka projelerin). Geliştirme döneminde **cihazın kendisinde** derleniyor: `cargo`, `rustc` 1.85.1, `gcc`, `libc6-dev`, `pkg-config` (~1,7 GB kök alanı). Ürün aşamasında kaldırılacak.
+- `scripts/gelistir.sh`: kaynağı `tar | ssh` ile `/root/rza`'ya gönderir, `cargo build --release`, `/usr/local/bin/wificorrect`'e kurar (~30 sn). `Cargo.lock` geri alınıp repoda tutulur.
+- İskelet: tek program, alt komutlar `portal`, `kaydedici`, `panel`, `ctl`, `surum`.

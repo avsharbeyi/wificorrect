@@ -1,0 +1,16 @@
+[package]
+name = "wificorrect"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.85"
+description = "Kafeler için 5651 uyumlu, SMS doğrulamalı misafir internet sistemi"
+publish = false
+
+[dependencies]
+
+[profile.release]
+opt-level = "z"
+lto = true
+codegen-units = 1
+panic = "abort"
+strip = true
