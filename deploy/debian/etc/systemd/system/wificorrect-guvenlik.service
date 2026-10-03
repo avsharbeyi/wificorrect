@@ -18,6 +18,8 @@ ExecStartPost=/usr/sbin/sysctl -q -p /etc/wificorrect/conntrack.sysctl
 ExecStartPost=-/usr/sbin/conntrack -F
 # Kayıtlı oturumları ve izinli/yasaklı cihazları kapıya geri yükle (müşteri tekrar SMS istemez)
 ExecStartPost=-/usr/local/bin/wificorrect ctl yukle
+# Yasaklı siteler / kelimeler (panel); hata açılışı durdurmaz
+ExecStartPost=-/usr/local/bin/wificorrect ctl filtre-uygula
 ExecStartPost=/usr/sbin/sysctl -qw net.ipv4.ip_forward=1
 # Durdurmak kuralları SİLMEZ (Debian nftables.service'in aksine): servis durunca da kapı kapalı kalır.
 

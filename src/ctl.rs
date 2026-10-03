@@ -176,6 +176,14 @@ pub fn run(cfg: Config, args: &[String]) -> ExitCode {
             ExitCode::SUCCESS
         }
         Some("admin-parola") => admin_parola(crate::hesap::PATH),
+        // Açılışta (wificorrect-guvenlik) ve panelden: yasaklı site / kelime listelerini uygula
+        Some("filtre-uygula") => match crate::filtre::uygula(&cfg, std::path::Path::new(crate::filtre::DNSMASQ_CONF), &runner) {
+            Ok(()) => ExitCode::SUCCESS,
+            Err(e) => {
+                eprintln!("{e}");
+                ExitCode::from(1)
+            }
+        },
         Some(c @ ("ag-uygula" | "ag-gecis" | "ag-onayla" | "ag-geri-al" | "ag-acilis")) => {
             use crate::ag;
             let y = ag::Yollar::sistem();
@@ -249,7 +257,7 @@ pub fn run(cfg: Config, args: &[String]) -> ExitCode {
         _ => {
             eprintln!(
                 "Kullanım: wificorrect ctl <komut>\n  dhcp-olay <add|old|del> <mac> <ip> [ad]\n  yukle\n  oturumlar\n  \
-                 gun-kapat [YYYY-AA-GG] [--zorla]\n  dogrula [--son N]\n  temizle [--kuru]\n  yedekle\n  ara ...  (ayrıntı: ctl ara)\n  disa-aktar --baslangic G --bitis G --cikti DOSYA\n  ag-uygula | ag-gecis DOSYA | ag-onayla | ag-geri-al\n  admin-parola"
+                 gun-kapat [YYYY-AA-GG] [--zorla]\n  dogrula [--son N]\n  temizle [--kuru]\n  yedekle\n  ara ...  (ayrıntı: ctl ara)\n  disa-aktar --baslangic G --bitis G --cikti DOSYA\n  ag-uygula | ag-gecis DOSYA | ag-onayla | ag-geri-al\n  filtre-uygula\n  admin-parola"
             );
             ExitCode::from(2)
         }

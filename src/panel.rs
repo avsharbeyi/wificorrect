@@ -13,6 +13,7 @@ use std::io::Read;
 use std::process::ExitCode;
 use std::sync::Arc;
 
+mod filtre_sayfasi;
 mod kayit_sayfalari;
 mod portlar;
 
@@ -310,6 +311,8 @@ pub struct Panel {
     ag_yollar: crate::ag::Yollar,
     /// /sys/class/net (testte geçici klasör)
     sys: std::path::PathBuf,
+    /// dnsmasq yasaklı site dosyası (testte geçici)
+    filtre_conf: std::path::PathBuf,
 }
 
 const MENU: &[(&str, &str, bool)] = &[
@@ -317,6 +320,7 @@ const MENU: &[(&str, &str, bool)] = &[
     ("/oturumlar", "Bağlı cihazlar", false),
     ("/yasak", "Yasaklı cihazlar", false),
     ("/izinli", "İzinli cihazlar", false),
+    ("/yasakli-siteler", "Yasaklı siteler", false),
     ("/kayitlar", "Kayıtlar", false),
     ("/kullanicilar", "Kullanıcılar", false),
     ("/talep", "Resmi talep", false),
@@ -339,6 +343,7 @@ impl Panel {
             clock,
             ag_yollar: crate::ag::Yollar::sistem(),
             sys: "/sys/class/net".into(),
+            filtre_conf: crate::filtre::DNSMASQ_CONF.into(),
         }
     }
 
@@ -437,6 +442,9 @@ impl Panel {
             ("GET", "/kullanici") => self.kullanici(&cfg, req, &o),
             ("GET", "/talep") => self.talep(&cfg, req, &o, now),
             ("GET", "/talep/paket") => self.talep_paket(&cfg, req, &o),
+            ("GET", "/yasakli-siteler") => self.filtre_sayfa(&cfg, req, &o),
+            ("POST", "/yasakli-siteler/ekle") => self.filtre_degistir(cfg, req, &o, true),
+            ("POST", "/yasakli-siteler/kaldir") => self.filtre_degistir(cfg, req, &o, false),
             ("GET", "/portlar") => self.portlar(&cfg, req, &o, now),
             ("POST", "/portlar") => self.portlar_uygula(&cfg, req, &o),
             ("POST", "/portlar/onayla") => self.portlar_onayla(&cfg, req, &o),
@@ -1381,5 +1389,32 @@ mod tests {
         let audit = std::fs::read_to_string(e.root.join("5651/gunluk/2026-09-29/denetim.csv")).unwrap();
         assert!(audit.contains("PANEL_PORT;") || audit.contains(";PANEL_PORT"));
         assert!(audit.contains("PANEL_PORT_ONAY") && audit.contains("PANEL_PORT_GERI_AL") && audit.contains("Ethernet 2 (sol) alır"));
+    }
+
+    #[test]
+    fn owner_manages_blocked_sites_and_words() {
+        let mut e = env();
+        e.p.filtre_conf = e.root.join("yasak.conf");
+        let (tok, csrf) = setup_and_login(&e, "mudur", "sahip-parola-12");
+        let page = e.p.handle(&req("GET", "/yasakli-siteler", &[], Some(&tok))).body;
+        assert!(page.matches("Liste boş").count() == 3); // boş başlar
+        let add = |liste: &str, v: &str| e.p.handle(&req("POST", "/yasakli-siteler/ekle", &[("csrf", &csrf), ("liste", liste), ("deger", v)], Some(&tok)));
+        assert!(!loc(&add("site", "https://www.Bet365.com/tr")).contains("e=1"));
+        assert!(!loc(&add("kelime", "Bet")).contains("e=1"));
+        assert!(!loc(&add("istisna", "alphabet")).contains("e=1"));
+        assert!(loc(&add("kelime", "bet")).contains("e=1")); // aynısı iki kez yok
+        assert!(loc(&add("kelime", "şans")).contains("e=1"));
+        assert!(loc(&add("site", "x.com\naddress=/y/1.2.3.4")).contains("e=1")); // dosyaya satır sokulamaz
+        let c = Config::load(&e.p.cfg_path).unwrap();
+        assert_eq!((c.filtre.siteler.clone(), c.filtre.kelimeler.clone(), c.filtre.istisnalar.clone()), (vec!["www.bet365.com".to_string()], vec!["bet".to_string()], vec!["alphabet".to_string()]));
+        assert!(std::fs::read_to_string(&e.p.filtre_conf).unwrap().contains("address=/www.bet365.com/"));
+        assert!(e.calls.lock().unwrap().iter().any(|c| c[0] == "iptables-restore"));
+        let page = e.p.handle(&get("/yasakli-siteler", &[("ad", "superbet.com.tr")], &tok)).body;
+        assert!(page.contains("engelli (yasaklı kelime: bet)"));
+        assert!(e.p.handle(&get("/yasakli-siteler", &[("ad", "alphabet.com")], &tok)).body.contains("engelli değil"));
+        e.p.handle(&req("POST", "/yasakli-siteler/kaldir", &[("csrf", &csrf), ("liste", "kelime"), ("deger", "bet")], Some(&tok)));
+        assert!(Config::load(&e.p.cfg_path).unwrap().filtre.kelimeler.is_empty());
+        let audit = std::fs::read_to_string(e.root.join("5651/gunluk/2026-09-29/denetim.csv")).unwrap();
+        assert!(audit.contains("PANEL_FILTRE_EKLE") && audit.contains("liste=site deger=www.bet365.com") && audit.contains("PANEL_FILTRE_KALDIR"));
     }
 }

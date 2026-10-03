@@ -151,6 +151,15 @@ impl Default for Backup {
     }
 }
 
+/// Yasaklı siteler / kelimeler (src/filtre.rs). Boş başlar; kafe sahibi panelden yazar.
+#[derive(Serialize, Deserialize, Clone, Debug, Default)]
+#[serde(default)]
+pub struct Filtre {
+    pub siteler: Vec<String>,
+    pub kelimeler: Vec<String>,
+    pub istisnalar: Vec<String>,
+}
+
 /// Portalsız geçen (`[[allow]]`, ör. AP, personel; trafiği yine kaydedilir) ya da yasaklı (`[[ban]]`) cihaz.
 #[derive(Serialize, Deserialize, Clone, Debug, Default)]
 pub struct Device {
@@ -168,6 +177,7 @@ pub struct Config {
     pub twilio: Twilio,
     pub limits: Limits,
     pub backup: Backup,
+    pub filtre: Filtre,
     pub allow: Vec<Device>,
     pub ban: Vec<Device>,
 }
