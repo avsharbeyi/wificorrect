@@ -353,7 +353,8 @@ impl Panel {
         });
         let mut v: HashMap<&str, String> = HashMap::new();
         v.insert("baslik", h(title));
-        v.insert("site", h(&cfg.main.site_name));
+        // kurulum bitmeden kafe adı yok (eski/örnek ayardaki ad görünmesin)
+        v.insert("site", h(if self.hesaplar.needs_setup() { "WifiCorrect" } else { &cfg.main.site_name }));
         v.insert("govde", if o.is_some() { String::new() } else { "yalin".into() });
         v.insert("menu_html", menu);
         v.insert("mesaj_html", msg.unwrap_or_default());
@@ -376,20 +377,19 @@ impl Panel {
             return text(403, "Yasak"); // müşteri ağından panel yok
         }
         let now = (self.clock)();
-        if self.hesaplar.needs_setup() {
-            return match (req.method.as_str(), req.path.as_str()) {
-                ("GET", "/kurulum") => self.kurulum(&cfg, req, &HashMap::new()),
-                ("POST", "/kurulum") => self.kurulum_post(cfg, req),
-                _ => redirect("/kurulum", None),
-            };
-        }
+        // Kafe sahibi hesabı yokken giriş yapmamış herkes kurulum ekranına; admin yine /giris'ten girebilir.
+        let setup = self.hesaplar.needs_setup();
         match (req.method.as_str(), req.path.as_str()) {
             ("GET", "/giris") => return self.giris(&cfg, req, ""),
             ("POST", "/giris") => return self.giris_post(&cfg, req, now),
+            ("GET", "/kurulum") if setup => return self.kurulum(&cfg, req, &HashMap::new()),
+            ("POST", "/kurulum") if setup => return self.kurulum_post(cfg, req),
             ("GET" | "POST", "/kurulum") => return redirect("/giris", None),
             _ => {}
         }
-        let Some(o) = req.token.as_deref().and_then(|t| self.oturumlar.get(t, now)) else { return redirect("/giris", None) };
+        let Some(o) = req.token.as_deref().and_then(|t| self.oturumlar.get(t, now)) else {
+            return redirect(if setup { "/kurulum" } else { "/giris" }, None);
+        };
         if req.method == "POST" && !hesap::ct_eq(req.form.get("csrf").map_or("", String::as_str), &o.csrf) {
             return text(403, "Geçersiz form (CSRF). Sayfayı yenileyip tekrar deneyin.");
         }
@@ -443,30 +443,18 @@ impl Panel {
 
     // --- kurulum ve giriş
     fn kurulum(&self, cfg: &Config, req: &Req, errors: &HashMap<&str, String>) -> Resp {
-        let f = |k: &str| h(req.form.get(k).map_or("", String::as_str));
         let err = |k: &str| errors.get(k).map_or(String::new(), |e| format!("<div class=\"hata\">{}</div>", h(e)));
         let field = |k: &str, label: &str, kind: &str| {
-            let val = match (kind, k) {
-                ("password", _) => String::new(),
-                (_, "site_name") if req.form.is_empty() => h(&cfg.main.site_name),
-                _ => f(k),
-            };
+            let val = if kind == "password" { String::new() } else { h(req.form.get(k).map_or("", String::as_str)) };
             format!("<label for=\"{k}\">{}</label><input type=\"{kind}\" id=\"{k}\" name=\"{k}\" value=\"{val}\" autocomplete=\"off\" required>{}", h(label), err(k))
         };
         let body = format!(
-            "<div class=\"kart dar\"><p class=\"not\">Cihaz ilk kez açıldı. Kafe adını ve iki hesabı oluşturun. Varsayılan hesap yoktur; \
-             parolalar en az 10 karakter.</p>{}<form method=\"post\" action=\"/kurulum\">{}\
-             <h2 style=\"margin-top:24px\">Hizmet sağlayıcı hesabı</h2>{}{}{}\
-             <h2 style=\"margin-top:24px\">Kafe sahibi hesabı</h2>{}{}{}\
-             <div style=\"margin-top:24px\"><button>Kurulumu tamamla</button></div></form></div>",
+            "<div class=\"kart dar\"><p class=\"not\">Cihaz ilk kez açıldı. Kafe adını yazın ve yönetim hesabınızı oluşturun (parola en az 10 karakter).</p>{}<form method=\"post\" action=\"/kurulum\">{}{}{}{}<div style=\"margin-top:24px\"><button>Kurulumu tamamla</button></div></form></div>",
             err("genel"),
             field("site_name", "Kafe adı", "text"),
-            field("hizmet_kullanici", "Kullanıcı adı", "text"),
-            field("hizmet_parola", "Parola", "password"),
-            field("hizmet_parola2", "Parola (tekrar)", "password"),
-            field("sahip_kullanici", "Kullanıcı adı", "text"),
-            field("sahip_parola", "Parola", "password"),
-            field("sahip_parola2", "Parola (tekrar)", "password"),
+            field("kullanici", "Kullanıcı adı", "text"),
+            field("parola", "Parola", "password"),
+            field("parola2", "Parola (tekrar)", "password"),
         );
         self.page(cfg, req, None, "Kurulum", &body)
     }
@@ -474,31 +462,28 @@ impl Panel {
     fn kurulum_post(&self, mut cfg: Config, req: &Req) -> Resp {
         let g = |k: &str| req.form.get(k).map_or("", String::as_str).trim().to_string();
         let mut errors: HashMap<&str, String> = HashMap::new();
-        let site = g("site_name");
-        if !(ALANLAR[0].tur_ok(&site)) {
+        let (site, user) = (g("site_name"), g("kullanici"));
+        let pw = req.form.get("parola").cloned().unwrap_or_default();
+        if !ALANLAR[0].tur_ok(&site) {
             errors.insert("site_name", "Kafe adı 1-40 karakter olmalı (harf, rakam, boşluk, . - ' &).".into());
         }
-        for (u, p, p2) in [("hizmet_kullanici", "hizmet_parola", "hizmet_parola2"), ("sahip_kullanici", "sahip_parola", "sahip_parola2")] {
-            if let Some(e) = hesap::username_problem(&g(u)) {
-                errors.insert(u, e.into());
-            }
-            let pw = req.form.get(p).cloned().unwrap_or_default();
-            if let Some(e) = hesap::password_problem(&pw) {
-                errors.insert(p, e.into());
-            } else if req.form.get(p2) != Some(&pw) {
-                errors.insert(p2, "Parolalar aynı değil.".into());
-            }
+        if let Some(e) = hesap::username_problem(&user) {
+            errors.insert("kullanici", e.into());
+        }
+        if let Some(e) = hesap::password_problem(&pw) {
+            errors.insert("parola", e.into());
+        } else if req.form.get("parola2") != Some(&pw) {
+            errors.insert("parola2", "Parolalar aynı değil.".into());
         }
         if errors.is_empty() {
-            let pw = |k: &str| req.form.get(k).cloned().unwrap_or_default();
-            match self.hesaplar.setup((&g("hizmet_kullanici"), &pw("hizmet_parola")), (&g("sahip_kullanici"), &pw("sahip_parola"))) {
+            match self.hesaplar.setup(&user, &pw) {
                 Ok(()) => {
                     cfg.main.site_name = site;
                     if let Err(e) = cfg.save(&self.cfg_path) {
                         eprintln!("panel: {e}");
                     }
                     (self.runner)(&cmd(&["systemctl", "restart", "wificorrect-portal"]));
-                    self.audit(&cfg, req, None, "PANEL_KURULUM", &format!("hizmet={} sahip={}", g("hizmet_kullanici"), g("sahip_kullanici")));
+                    self.audit(&cfg, req, None, "PANEL_KURULUM", &format!("sahip={user}"));
                     return redirect("/giris", Some(("Kurulum tamamlandı. Giriş yapabilirsiniz.", false)));
                 }
                 Err(e) => {
@@ -854,7 +839,7 @@ impl Panel {
                          <button class=\"ikincil\">Parolayı sıfırla</button></form> {}",
                         csrf_input(o),
                         h(u),
-                        post_button(o, "/hesaplar/sil", "Sil", &[("kullanici", u)], "tehlike")
+                        if u == hesap::ADMIN { String::new() } else { post_button(o, "/hesaplar/sil", "Sil", &[("kullanici", u)], "tehlike") }
                     ),
                 ]
             })
@@ -1092,9 +1077,9 @@ mod tests {
 
     fn setup_and_login(e: &Env, user: &str, pw: &str) -> (String, String) {
         if e.p.hesaplar.needs_setup() {
+            e.p.hesaplar.set_admin("hizmet-parola-1").unwrap();
             let r = e.p.handle(&req("POST", "/kurulum", &[
-                ("site_name", "Bocafe Göztepe"), ("hizmet_kullanici", "goztepe"), ("hizmet_parola", "hizmet-parola-1"),
-                ("hizmet_parola2", "hizmet-parola-1"), ("sahip_kullanici", "mudur"), ("sahip_parola", "sahip-parola-12"), ("sahip_parola2", "sahip-parola-12"),
+                ("site_name", "Bocafe Göztepe"), ("kullanici", "mudur"), ("parola", "sahip-parola-12"), ("parola2", "sahip-parola-12"),
             ], None));
             assert_eq!((r.status, loc(&r).starts_with("/giris")), (303, true));
         }
@@ -1106,14 +1091,26 @@ mod tests {
         (token, csrf)
     }
 
+    fn setup_and_login_admin_only(e: &Env) -> (String, String) {
+        assert!(e.p.hesaplar.needs_setup());
+        let r = e.p.handle(&req("POST", "/giris", &[("kullanici", "admin"), ("parola", "hizmet-parola-1")], None));
+        let cookie = r.headers.iter().find(|(k, _)| k == "Set-Cookie").map(|(_, v)| v.clone()).expect("çerez");
+        (cookie.trim_start_matches("wfc=").split(';').next().unwrap().to_string(), String::new())
+    }
+
     #[test]
     fn setup_then_login_lock_and_customer_network_denied() {
         let e = env();
         assert_eq!(loc(&e.p.handle(&req("GET", "/", &[], None))), "/kurulum");
-        let r = e.p.handle(&req("POST", "/kurulum", &[("site_name", "Bocafe"), ("hizmet_kullanici", "goztepe"), ("hizmet_parola", "kisa")], None));
-        assert!(r.status == 200 && r.body.contains("en az 10 karakter"));
+        let page = e.p.handle(&req("GET", "/kurulum", &[], None)).body;
+        assert!(!page.contains("Bocafe") && !page.contains("Hizmet sağlayıcı")); // kafe adı boş, yalnızca sahip hesabı
+        let r = e.p.handle(&req("POST", "/kurulum", &[("site_name", "Bocafe"), ("kullanici", "admin"), ("parola", "kisa")], None));
+        assert!(r.status == 200 && r.body.contains("en az 10 karakter") && r.body.contains("ayrılmış"));
         assert!(e.p.hesaplar.needs_setup());
-        setup_and_login(&e, "goztepe", "hizmet-parola-1");
+        e.p.hesaplar.set_admin("hizmet-parola-1").unwrap();
+        let (tok, _) = setup_and_login_admin_only(&e); // admin kurulumdan önce de girebilir
+        assert_eq!(e.p.handle(&req("GET", "/", &[], Some(&tok))).status, 200);
+        setup_and_login(&e, "admin", "hizmet-parola-1");
         assert_eq!(Config::load(&e.p.cfg_path).unwrap().main.site_name, "Bocafe Göztepe");
         assert_eq!(loc(&e.p.handle(&req("GET", "/kurulum", &[], None))), "/giris"); // kurulum bir kez
         for _ in 0..5 {
@@ -1146,7 +1143,10 @@ mod tests {
     #[test]
     fn provider_sets_secrets_write_only_and_validates() {
         let e = env();
-        let (tok, csrf) = setup_and_login(&e, "goztepe", "hizmet-parola-1");
+        let (tok, csrf) = setup_and_login(&e, "admin", "hizmet-parola-1");
+        let page = e.p.handle(&req("GET", "/hesaplar", &[], Some(&tok))).body;
+        assert!(page.contains(">admin<") && page.matches(">Sil<").count() == 1); // admin silinemez, sahip silinebilir
+        assert!(e.p.handle(&req("POST", "/hesaplar/sil", &[("csrf", &csrf), ("kullanici", "admin")], Some(&tok))).headers.iter().any(|(_, v)| v.contains("e=1")));
         let page = e.p.handle(&req("GET", "/ayarlar", &[], Some(&tok))).body;
         assert!(page.contains("name=\"netgsm.password\"") && page.contains("sms.mock"));
         let r = e.p.handle(&req("POST", "/ayarlar", &[("csrf", &csrf), ("netgsm.password", "gizli-sifre-1"), ("netgsm.usercode", "8503027084"), ("sms.mock", "1"), ("main.max_devices_per_phone", "99")], Some(&tok)));

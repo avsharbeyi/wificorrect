@@ -96,6 +96,51 @@ fn oturumlar(cfg: &Config, now: f64) {
     }
 }
 
+/// Parolayı ekrana yazdırmadan okur (terminal değilse düz satır: kurulum betikleri için).
+fn read_secret(prompt: &str) -> String {
+    use std::io::Write;
+    eprint!("{prompt}");
+    let _ = std::io::stderr().flush();
+    // SAFETY: termios yalnızca stdin için okunur/yazılır, okuma bitince eski hali geri konur.
+    let mut old: libc::termios = unsafe { std::mem::zeroed() };
+    let tty = unsafe { libc::tcgetattr(0, &mut old) } == 0;
+    if tty {
+        let mut t = old;
+        t.c_lflag &= !libc::ECHO;
+        unsafe { libc::tcsetattr(0, libc::TCSANOW, &t) };
+    }
+    let mut line = String::new();
+    let _ = std::io::stdin().read_line(&mut line);
+    if tty {
+        unsafe { libc::tcsetattr(0, libc::TCSANOW, &old) };
+        eprintln!();
+    }
+    line.trim_end_matches(['\r', '\n']).to_string()
+}
+
+/// `admin` (hizmet sağlayıcı) parolası: yalnızca cihaz konsolundan / SSH'tan, root olarak.
+fn admin_parola(path: &str) -> ExitCode {
+    let pw = read_secret("Yeni admin parolası: ");
+    if let Some(e) = crate::hesap::password_problem(&pw) {
+        eprintln!("{e}");
+        return ExitCode::from(1);
+    }
+    if read_secret("Tekrar: ") != pw {
+        eprintln!("Parolalar aynı değil.");
+        return ExitCode::from(1);
+    }
+    match crate::hesap::Hesaplar::new(path).set_admin(&pw) {
+        Ok(()) => {
+            println!("admin parolası kaydedildi.");
+            ExitCode::SUCCESS
+        }
+        Err(e) => {
+            eprintln!("{e}");
+            ExitCode::from(1)
+        }
+    }
+}
+
 pub fn run(cfg: Config, args: &[String]) -> ExitCode {
     let runner = |c: &[String]| ortak::run(c);
     let now = ortak::wall();
@@ -130,6 +175,7 @@ pub fn run(cfg: Config, args: &[String]) -> ExitCode {
             println!("{}", if out.is_empty() { "Silinecek kayıt yok".to_string() } else { out.join("\n") });
             ExitCode::SUCCESS
         }
+        Some("admin-parola") => admin_parola(crate::hesap::PATH),
         Some("yedekle") => {
             // ponytail: bir gün 1 saatte gitmezse YEDEK_HATA; ertesi gece kaldığı yerden devam eder
             let msg = crate::muhur::backup(&cfg, now, &|c: &[String]| ortak::run_timeout(c, 3600));
@@ -139,7 +185,7 @@ pub fn run(cfg: Config, args: &[String]) -> ExitCode {
         _ => {
             eprintln!(
                 "Kullanım: wificorrect ctl <komut>\n  dhcp-olay <add|old|del> <mac> <ip> [ad]\n  yukle\n  oturumlar\n  \
-                 gun-kapat [YYYY-AA-GG] [--zorla]\n  dogrula [--son N]\n  temizle [--kuru]\n  yedekle"
+                 gun-kapat [YYYY-AA-GG] [--zorla]\n  dogrula [--son N]\n  temizle [--kuru]\n  yedekle\n  admin-parola"
             );
             ExitCode::from(2)
         }
