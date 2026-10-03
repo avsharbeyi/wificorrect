@@ -233,6 +233,11 @@ pub fn parse_permaddr(ip_link: &str) -> Option<String> {
     it.find(|w| *w == "permaddr").and(it.next()).and_then(ortak::norm_mac)
 }
 
+/// WAN'ın DHCP istemcisini tutan birim (Debian ifupdown, udev ile allow-hotplug arayüzler için).
+pub fn wan_unit(wan: &str) -> String {
+    format!("ifup@{wan}.service")
+}
+
 fn cmd(parts: &[&str]) -> Vec<String> {
     parts.iter().map(|s| s.to_string()).collect()
 }
@@ -253,7 +258,9 @@ pub fn switch(cfg: &Config, ag: &Ag, y: &Yollar, runner: &Runner) -> Vec<String>
         errs.push(e);
     }
     runner(&cmd(&["ifup", "-a"]));
-    runner(&cmd(&["ifup", &ag.wan])); // allow-hotplug: ifup -a getirmez
+    // WAN (allow-hotplug; ifup -a getirmez) kendi biriminde: dhcpcd buradan (geçici bir systemd işinden) başlatılsaydı
+    // iş bitince systemd onu da öldürürdü ve IP kira sonunda (modemde 1 saat) düşerdi (2026-10-03'te yaşandı)
+    runner(&cmd(&["systemctl", "restart", &wan_unit(&ag.wan)]));
     if !runner(&cmd(&["nft", "-f", "/etc/wificorrect/guvenlik.nft"])) {
         errs.push("güvenlik duvarı yüklenemedi".into());
     }
@@ -445,7 +452,8 @@ mod tests {
             let timer = c.iter().position(|x| x.starts_with("systemd-run --unit wfc-ag-geri-al-")).unwrap();
             let down = c.iter().position(|x| x == "ifdown -a --exclude=lo").unwrap();
             assert!(timer < down); // önce zamanlayıcı, sonra ağ
-            assert!(c.iter().any(|x| x == "ifup enp1s0") && c.iter().any(|x| x == "systemctl stop wificorrect-wifi"));
+            assert!(c.iter().any(|x| x == "systemctl restart ifup@enp1s0.service") && c.iter().any(|x| x == "systemctl stop wificorrect-wifi"));
+            assert!(!c.iter().any(|x| x == "ifup enp1s0")); // dhcpcd geçici işin içinde başlamasın
         }
         assert!(fs::read_to_string(&y.nft).unwrap().contains("\"enp1s0\""));
         save(&staged, &old).unwrap();

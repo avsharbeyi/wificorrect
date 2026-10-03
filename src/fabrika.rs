@@ -186,7 +186,7 @@ mod tests {
         // portlar varsayılan, ağ yeniden kuruldu
         assert!(std::fs::read_to_string(&y.nft).unwrap().contains("\"enp3s0\"") && !y.ag.exists());
         let v = calls.lock().unwrap();
-        assert!(v.iter().any(|x| x == "ifup enp3s0") && v.iter().any(|x| x.starts_with("systemctl restart wificorrect-portal")));
+        assert!(v.iter().any(|x| x == "systemctl restart ifup@enp3s0.service") && v.iter().any(|x| x.starts_with("systemctl restart wificorrect-portal")));
         // yeni işletmenin kaydı FABRIKA_AYARI ile başlar
         let denetim = std::fs::read_to_string(root.join("5651/gunluk/2026-10-03/denetim.csv")).unwrap();
         assert!(denetim.contains("FABRIKA_AYARI") && !denetim.contains("FABRIKA_IPTAL"));

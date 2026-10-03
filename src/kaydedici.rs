@@ -171,6 +171,11 @@ pub struct Kaydedici {
     user_copy: bool,
     last_disk_warn: f64,
     pub runner: Box<Runner>,
+    /// WAN DHCP bekçisi: port görevleri dosyası ve /sys/class/net (testte geçici)
+    pub ag_path: std::path::PathBuf,
+    pub sys: std::path::PathBuf,
+    wan_bad_since: Option<f64>,
+    wan_last_fix: f64,
 }
 
 impl Kaydedici {
@@ -185,6 +190,10 @@ impl Kaydedici {
             user_copy: true,
             last_disk_warn: 0.0,
             runner,
+            ag_path: crate::ag::Yollar::sistem().ag,
+            sys: "/sys/class/net".into(),
+            wan_bad_since: None,
+            wan_last_fix: f64::NEG_INFINITY,
         }
     }
 
@@ -351,6 +360,30 @@ impl Kaydedici {
         }
         drop(_g);
         self.check_disk(now);
+        self.check_wan(now);
+    }
+
+    /// İnternet portunda kablo takılıyken DHCP istemcisi (dhcpcd) 1 dk'dan uzun yoksa WAN birimi yeniden başlatılır
+    /// (en çok 5 dk'da bir). dhcpcd ölürse IP kira sonunda düşer, cihaz internetini ve uzaktan yönetimini kaybeder.
+    /// Kablo yoksa ya da dhcpcd var ama IP alamıyorsa (modem kapalı) dokunulmaz: dhcpcd zaten deniyor.
+    fn check_wan(&mut self, now: f64) {
+        let wan = crate::ag::load(&self.ag_path).wan;
+        let carrier = std::fs::read_to_string(self.sys.join(&wan).join("carrier")).is_ok_and(|c| c.trim() == "1");
+        let alive = (self.runner)(&["pgrep".to_string(), "-f".to_string(), format!("^dhcpcd: {wan} ")]);
+        if !carrier || alive {
+            self.wan_bad_since = None;
+            return;
+        }
+        let since = *self.wan_bad_since.get_or_insert(now);
+        if now - since < 60.0 || now - self.wan_last_fix < 300.0 {
+            return;
+        }
+        self.wan_last_fix = now;
+        let unit = crate::ag::wan_unit(&wan);
+        let ok = (self.runner)(&["systemctl".to_string(), "restart".to_string(), unit.clone()]);
+        let row = Row::new("WAN_DHCP_YENIDEN", &ortak::now_iso(now)).set("ek", format!("arayuz={wan} birim={unit} sonuc={}", if ok { "tamam" } else { "hata" }));
+        ortak::audit(&self.cfg.main.log_root, row);
+        eprintln!("kaydedici: {wan} DHCP istemcisi yoktu, {unit} yeniden başlatıldı");
     }
 
     /// %80'de saatte bir uyarı; %95'te kişi kopyaları durur, günlük yasal dosyalar yazılmaya devam eder.
@@ -699,5 +732,44 @@ mod tests {
         let c = ct_cmd("10.50.0.0/24");
         assert_eq!(&c[c.len() - 2..], ["-s", "10.50.0.0/24"]);
         assert!(c.contains(&"33554432".to_string()));
+    }
+
+    #[test]
+    fn wan_dhcp_watchdog_restarts_dead_client() {
+        let (mut k, root, _) = setup();
+        let sys = root.join("sys");
+        std::fs::create_dir_all(sys.join("enp3s0")).unwrap();
+        std::fs::write(sys.join("enp3s0/carrier"), "1\n").unwrap();
+        k.sys = sys.clone();
+        k.ag_path = root.join("yok-ag.toml"); // varsayılan: WAN enp3s0
+        let alive = Arc::new(Mutex::new(true));
+        let calls = Arc::new(Mutex::new(Vec::<String>::new()));
+        let (a2, c2) = (alive.clone(), calls.clone());
+        k.runner = Box::new(move |c: &[String]| {
+            c2.lock().unwrap().push(c.join(" "));
+            if c[0] == "pgrep" { *a2.lock().unwrap() } else { true }
+        });
+        let restarts = |calls: &Arc<Mutex<Vec<String>>>| calls.lock().unwrap().iter().filter(|x| *x == "systemctl restart ifup@enp3s0.service").count();
+        k.check_wan(1000.0);
+        assert_eq!(restarts(&calls), 0); // sağlam
+        assert!(calls.lock().unwrap().iter().any(|x| x == "pgrep -f ^dhcpcd: enp3s0 "));
+        *alive.lock().unwrap() = false;
+        k.check_wan(1030.0);
+        assert_eq!(restarts(&calls), 0); // 1 dk beklenir (anlık durum olabilir)
+        k.check_wan(1095.0);
+        assert_eq!(restarts(&calls), 1);
+        k.check_wan(1125.0);
+        k.check_wan(1300.0);
+        assert_eq!(restarts(&calls), 1); // 5 dk'da bir en çok
+        k.check_wan(1400.0);
+        assert_eq!(restarts(&calls), 2);
+        // kablo yoksa dokunulmaz
+        std::fs::write(sys.join("enp3s0/carrier"), "0\n").unwrap();
+        k.check_wan(2000.0);
+        k.check_wan(2100.0);
+        k.check_wan(2400.0);
+        assert_eq!(restarts(&calls), 2);
+        let audit = std::fs::read_to_string(root.join(format!("5651/gunluk/{}/denetim.csv", ortak::day_of(&ortak::now_iso(1095.0))))).unwrap();
+        assert!(audit.contains("WAN_DHCP_YENIDEN") && audit.contains("arayuz=enp3s0 birim=ifup@enp3s0.service sonuc=tamam"));
     }
 }
