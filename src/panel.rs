@@ -1499,7 +1499,7 @@ mod tests {
         let e = env();
         let (tok, csrf) = setup_and_login(&e, "mudur", "sahip-parola-12");
         let page = e.p.handle(&get("/portal-metinleri", &[], &tok)).body;
-        assert!(page.contains("Aydınlatma Metni (KVKK)") && page.contains("Açık Rıza Metni") && page.contains("İnternet Kullanım Sözleşmesi"));
+        assert!(page.contains("KVKK Aydınlatma Metni") && page.contains("Açık Rıza Metni") && page.contains("İnternet Kullanım Sözleşmesi"));
         let r = e.p.handle(&req("POST", "/portal-metinleri", &[("csrf", &csrf), ("aydinlatma", "Veri sorumlusu: <Bocafe>\r\n\r\nİkinci paragraf"), ("sozlesme", "Kurallar"), ("acik_riza_zorunlu", "1")], Some(&tok)));
         assert!(!loc(&r).contains("e=1"));
         let c = Config::load(&e.p.cfg_path).unwrap();

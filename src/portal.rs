@@ -152,16 +152,36 @@ pub fn metin_html(text: &str) -> String {
         .map(str::trim)
         .filter(|p| !p.is_empty())
         .map(|p| {
-            // tamamı büyük harf satırlar (madde başlıkları) kalın
-            let lines: Vec<String> = p
-                .lines()
-                .map(|l| {
-                    let e = html_escape(l.trim());
+            // "* " / "• " / "- " ile başlayan satırlar madde listesi; tamamı büyük harf satırlar (başlıklar) kalın
+            let mut html = String::new();
+            let (mut lines, mut items): (Vec<String>, Vec<String>) = (vec![], vec![]);
+            let flush = |html: &mut String, lines: &mut Vec<String>, items: &mut Vec<String>| {
+                if !lines.is_empty() {
+                    html.push_str(&format!("<p>{}</p>", lines.join("<br>")));
+                    lines.clear();
+                }
+                if !items.is_empty() {
+                    html.push_str(&format!("<ul>{}</ul>", items.iter().map(|i| format!("<li>{i}</li>")).collect::<String>()));
+                    items.clear();
+                }
+            };
+            for l in p.lines().map(str::trim) {
+                if let Some(item) = l.strip_prefix("* ").or_else(|| l.strip_prefix("• ")).or_else(|| l.strip_prefix("- ")) {
+                    if !lines.is_empty() {
+                        flush(&mut html, &mut lines, &mut vec![]);
+                    }
+                    items.push(html_escape(item.trim()));
+                } else {
+                    if !items.is_empty() {
+                        flush(&mut html, &mut vec![], &mut items);
+                    }
+                    let e = html_escape(l);
                     let heading = l.chars().any(char::is_alphabetic) && !l.chars().any(char::is_lowercase);
-                    if heading { format!("<strong>{e}</strong>") } else { e }
-                })
-                .collect();
-            format!("<p>{}</p>", lines.join("<br>"))
+                    lines.push(if heading { format!("<strong>{e}</strong>") } else { e });
+                }
+            }
+            flush(&mut html, &mut lines, &mut items);
+            html
         })
         .collect();
     if paras.is_empty() { "<p class=\"not\">Metin henüz eklenmedi.</p>".into() } else { paras.concat() }
@@ -1073,10 +1093,12 @@ mod tests {
     fn consent_texts_and_recording() {
         assert_eq!(metin_html(""), "<p class=\"not\">Metin henüz eklenmedi.</p>");
         assert_eq!(metin_html("Birinci <b>\r\nsatır\r\n\r\nİkinci"), "<p>Birinci &lt;b&gt;<br>satır</p><p>İkinci</p>");
+        assert_eq!(metin_html("BAŞLIK\ngiriş:\n* bir\n* <iki>\nson"), "<p><strong>BAŞLIK</strong><br>giriş:</p><ul><li>bir</li><li>&lt;iki&gt;</li></ul><p>son</p>");
         let t = setup(|_| {});
         let page = t.p.render(&t.p.form_page(&Form::new(), vec![], ""));
         assert!(page.contains("Açık Rıza Metni") && page.contains("İnternet Kullanım Sözleşmesi") && page.contains("Aydınlatma Metni"));
-        assert!(page.contains("(İsteğe bağlı)") && page.matches("Metin henüz eklenmedi").count() == 2); // sözleşme ürünle gelir
+        assert!(page.contains("(İsteğe bağlı)") && page.matches("Metin henüz eklenmedi").count() == 1); // sözleşme ve aydınlatma ürünle gelir
+        assert!(page.contains("<summary>KVKK Aydınlatma Metni</summary>") && page.contains("<li>Haberleşme ve İletişim Bilgileri: Telefon numarası</li>"));
         assert!(page.contains("<strong>SON KULLANICI LİSANS SÖZLEŞMESİ</strong>") && page.contains("Bocafe’nin uhdesindeki") && !page.contains("İŞLETMECİ"));
         assert!(page.contains("<strong>9. BOCAFE’NİN YETKİ VE İMKÂNLARI</strong>"));
         // rıza işaretlenmeden de girilir, kayda riza=0 yazılır

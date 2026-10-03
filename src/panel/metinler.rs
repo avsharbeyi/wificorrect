@@ -5,7 +5,7 @@ use super::*;
 
 const EN_FAZLA: usize = 20_000;
 const METINLER: &[(&str, &str, &str)] = &[
-    ("aydinlatma", "Aydınlatma Metni (KVKK)", "Giriş sayfasında \"Aydınlatma Metni\" bağlantısıyla açılır; onay kutusu yoktur."),
+    ("aydinlatma", "KVKK Aydınlatma Metni", "Giriş sayfasında \"KVKK Aydınlatma Metni\" bağlantısıyla açılır; onay kutusu yoktur. \"* \" ile başlayan satırlar madde listesi olur."),
     ("acik_riza", "Açık Rıza Metni", "Müşteri onay kutusunu işaretler. KVKK gereği hizmet açık rızaya bağlanamaz; aşağıdaki kutuyla zorunlu yapılabilir (hukukçunuza danışın)."),
     ("sozlesme", "İnternet Kullanım Sözleşmesi", "Müşteri \"okudum, kabul ediyorum\" kutusunu işaretlemeden devam edemez."),
 ];
