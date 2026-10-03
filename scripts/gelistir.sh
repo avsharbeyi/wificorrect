@@ -8,8 +8,9 @@ cd "$(dirname "$0")/.."
 files=(Cargo.toml .cargo src tests)
 [ -f Cargo.lock ] && files+=(Cargo.lock)
 tar -cf - "${files[@]}" | ssh "$host" 'set -e; mkdir -p /root/rza; rm -rf /root/rza/src; tar -xf - -C /root/rza
-cd /root/rza; cargo build --release -q 2>&1 | grep -v "^$" || true
-test -x target/release/wificorrect
+cd /root/rza
+# Bellek sınırlı (cihaz 2 GB, takas yok): aşılırsa yalnızca derleme durur, sistem kilitlenmez (2026-10-03)
+if ! systemd-run --scope -q -p MemoryMax=1200M nice -n 10 cargo build --release -q -j 2; then echo "DERLEME BAŞARISIZ" >&2; exit 1; fi
 install -m 755 target/release/wificorrect /usr/local/bin/wificorrect
 echo "kuruldu: $(wificorrect surum), $(stat -c %s /usr/local/bin/wificorrect) bayt"'
 # Cargo.lock cihazda üretilir; repoda tutulsun diye geri al

@@ -118,3 +118,13 @@ Son ürün, aynı donanımlı boş bir cihaza yüklenen bir ISO olacak; ilk aç�
 - AP hazırlık listesi: çalışma modu Access Point · **DHCP sunucusu kapalı** (Smart IP / otomatik DHCP gibi "gerekirse kendin dağıt" modları da kapalı; yönetim IP'si sabit, ör. 10.50.0.2/24, ağ geçidi 10.50.0.1 — DHCP havuzu .20–.249 dışında) · ağ adı önceden belirlenmiş · şifresiz · **istemci yalıtımı (AP isolation) açık** · **yönetim parolası fabrika ayarında bırakılmamalı** (ağ şifresiz; müşteri AP'nin kendi sayfasına ulaşabilir).
 - İlk denenen: TP-Link TL-WA901ND (70:4f:57:dd:7a:e8), 100 Mb/s; `GoztepeBilgisayar_Misafir`, şifresiz, DHCP kapalı, AP isolation açık, sabit 10.50.0.2. Telefon AP üzerinden 10.50.0.x aldı, portal açıldı. AP yönetimine bilgisayardan: `ssh -L 8091:10.50.0.2:80 wificorrect` → http://127.0.0.1:8091 (TP-Link girişten sonra kendi IP'sine yönlendirir; aynı yolu tünel adresiyle açmak gerekir).
 - Portal başlığı kafe adını kurulum ekranından alır (`main.site_name`); ek kafe adının son harfine göre değişmesin diye "<ad> Wi-Fi'ye hoş geldiniz".
+
+## Panel hareketleri — kafe sahibinin izlenmesi (2026-10-03, kullanıcı isteği)
+- İstek: kafe sahibinin hesabının da kaydı tutulsun; kafe sahibinin müşterileri sürekli izlemesi istenmiyor.
+- Kişisel veri gösteren her sayfa açılışı denetime yazılır, kim + rol + IP ile (`kullanici=mudur rol=sahip ip=…`): `PANEL_OTURUMLAR` (bağlı cihazlar), `PANEL_KULLANICILAR` / `PANEL_KULLANICI_ARA` / `PANEL_KULLANICI`, `PANEL_KAYIT_GUN`, `PANEL_KAYIT_GORUNTULE` (her sayfa), `PANEL_KAYIT_INDIR`, `PANEL_TALEP_ARA`, `PANEL_TALEP_PAKET`; ayrıca `PANEL_GIRIS`, `PANEL_CIKIS`. Denetim günlük mühürlenir; panelden silinemez.
+- Bu sayfalarda uyarı: "her görüntüleme, arama ve indirme kimin yaptığıyla birlikte kaydedilir ve hizmet sağlayıcı tarafından denetlenir".
+- **Panel hareketleri** sayfası (yalnızca admin): hesap başına son 7 gün / dönem kişisel veriye bakma sayısı, son giriş; hesap ve "yalnızca kişisel veri" süzgeci, son 1000 hareket.
+
+## Geliştirme notu: cihaz derlemede kilitlendi (2026-10-03)
+- `cargo test --release` (LTO, tek codegen birimi) sırasında cihaz tamamen dondu (ARP bile yok); fişten kapatıp açmak gerekti. Önceki açılışın günlüğü derleme başında kesiliyor (bellek tükenmesi olası, günlük diske yazılamadı).
+- Önlem: testler `scripts/test.sh` ile optimizasyonsuz, `-j 2`, `systemd-run --scope -p MemoryMax=1200M` içinde; `scripts/gelistir.sh` release derlemesi de aynı sınırla ve derleme başarısızsa eski programı kurmaz. Ürün kalıbında derleyici yok (GitHub Actions'ta derlenecek).

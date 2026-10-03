@@ -14,6 +14,7 @@ use std::process::ExitCode;
 use std::sync::Arc;
 
 mod filtre_sayfasi;
+mod hareketler;
 mod kayit_sayfalari;
 mod portlar;
 
@@ -329,6 +330,7 @@ const MENU: &[(&str, &str, bool)] = &[
     ("/api", "API ayarları", true),
     ("/sistem", "Sistem", false),
     ("/hesaplar", "Hesaplar", false),
+    ("/panel-hareketleri", "Panel hareketleri", true),
     ("/sifre", "Şifremi değiştir", false),
 ];
 
@@ -384,7 +386,7 @@ impl Panel {
     }
 
     fn audit(&self, cfg: &Config, req: &Req, o: Option<&Oturum>, olay: &str, ek: &str) {
-        let who = o.map_or("-".to_string(), |o| o.user.clone());
+        let who = o.map_or("-".to_string(), |o| format!("{} rol={}", o.user, if o.rol == Rol::Hizmet { "hizmet" } else { "sahip" }));
         let ek = format!("kullanici={who} ip={}{}{ek}", req.ip, if ek.is_empty() { "" } else { " " });
         ortak::audit(&cfg.main.log_root, Row::new(olay, &ortak::now_iso((self.clock)())).set("ek", ek));
     }
@@ -417,6 +419,7 @@ impl Panel {
         let hizmet = o.rol == Rol::Hizmet;
         match (req.method.as_str(), req.path.as_str()) {
             ("POST", "/cikis") => {
+                self.audit(&cfg, req, Some(&o), "PANEL_CIKIS", "");
                 if let Some(t) = &req.token {
                     self.oturumlar.remove(t);
                 }
@@ -433,6 +436,8 @@ impl Panel {
             ("POST", "/izinli/ekle") => self.liste_ekle(cfg, req, &o, false, now),
             ("POST", "/yasak/kaldir") => self.liste_kaldir(cfg, req, &o, true),
             ("POST", "/izinli/kaldir") => self.liste_kaldir(cfg, req, &o, false),
+            ("GET", "/panel-hareketleri") if hizmet => self.hareketler(&cfg, req, &o, now),
+            ("GET", "/panel-hareketleri") => text(403, "Bu sayfa yalnızca admin'e açık."),
             ("GET", "/kayitlar") => self.kayitlar(&cfg, req, &o),
             ("GET", "/kayitlar/gun") => self.kayit_gun(&cfg, req, &o),
             ("GET", "/kayitlar/dosya") => self.kayit_dosya(&cfg, req, &o),
@@ -610,6 +615,7 @@ impl Panel {
     }
 
     fn oturumlar_sayfa(&self, cfg: &Config, req: &Req, o: &Oturum, now: f64) -> Resp {
+        self.audit(cfg, req, Some(o), "PANEL_OTURUMLAR", "");
         let mut list: Vec<_> = ortak::load_sessions(&cfg.main.state_root).into_iter().collect();
         list.sort_by(|a, b| a.1.start_epoch.total_cmp(&b.1.start_epoch));
         let rows: Vec<Vec<String>> = list
@@ -629,7 +635,7 @@ impl Panel {
             })
             .collect();
         let body = format!(
-            "<p class=\"not\">Bağlantısı kesilen cihaz internete çıkamaz; yeniden SMS ile giriş yapması gerekir.</p>{}",
+            "<p class=\"not\">Bağlantısı kesilen cihaz internete çıkamaz; yeniden SMS ile giriş yapması gerekir.</p><p class=\"not\">Bu sayfadaki her görüntüleme, arama ve indirme kimin yaptığıyla birlikte kaydedilir ve hizmet sağlayıcı tarafından denetlenir.</p>{}",
             table(&["Telefon", "Ad soyad", "MAC", "IP", "Başlangıç", "Kalan", ""], &rows, "Bağlı cihaz yok")
         );
         self.page(cfg, req, Some(o), "Bağlı cihazlar", &body)
@@ -1416,5 +1422,26 @@ mod tests {
         assert!(Config::load(&e.p.cfg_path).unwrap().filtre.kelimeler.is_empty());
         let audit = std::fs::read_to_string(e.root.join("5651/gunluk/2026-09-29/denetim.csv")).unwrap();
         assert!(audit.contains("PANEL_FILTRE_EKLE") && audit.contains("liste=site deger=www.bet365.com") && audit.contains("PANEL_FILTRE_KALDIR"));
+    }
+
+    #[test]
+    fn owner_activity_is_logged_and_only_admin_sees_it() {
+        let e = env();
+        let (tok, csrf) = setup_and_login(&e, "mudur", "sahip-parola-12");
+        e.p.handle(&get("/oturumlar", &[], &tok));
+        e.p.handle(&get("/kullanicilar", &[], &tok));
+        e.p.handle(&get("/kullanicilar", &[("q", "ayşe")], &tok));
+        assert!(e.p.handle(&get("/kullanicilar", &[], &tok)).body.contains("hizmet sağlayıcı tarafından denetlenir"));
+        assert_eq!(e.p.handle(&get("/panel-hareketleri", &[], &tok)).status, 403); // sahip kendi izini göremez/silemez
+        assert!(!e.p.handle(&get("/", &[], &tok)).body.contains("/panel-hareketleri"));
+        e.p.handle(&req("POST", "/cikis", &[("csrf", &csrf)], Some(&tok)));
+        let (atok, _) = setup_and_login(&e, "admin", "hizmet-parola-1");
+        let page = e.p.handle(&get("/panel-hareketleri", &[("kim", "mudur"), ("kisisel", "1")], &atok)).body;
+        assert!(page.contains("Bağlı cihazlara baktı") && page.contains("Kullanıcı listesine baktı") && page.contains("ara=ayşe"));
+        assert!(!page.contains(">Giriş<")); // yalnızca kişisel veri filtresi
+        let page = e.p.handle(&get("/panel-hareketleri", &[], &atok)).body;
+        assert!(page.contains("Kafe sahibi") && page.contains(">4<") && page.contains("Çıkış")); // mudur: 4 kişisel veri bakışı (bağlı cihazlar + 2 liste + arama)
+        let audit = std::fs::read_to_string(e.root.join("5651/gunluk/2026-09-29/denetim.csv")).unwrap();
+        assert!(audit.contains("kullanici=mudur rol=sahip ip="));
     }
 }

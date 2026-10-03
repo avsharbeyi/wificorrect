@@ -80,7 +80,7 @@ impl Panel {
             })
             .collect();
         let body = format!(
-            "<p class=\"not\">Her gün gece 00:15'te mühürlenir (sıkıştırılır, özeti zincire eklenir). Kayıtlar yalnızca okunur; \
+            "<p class=\"not\">Bu sayfadaki her görüntüleme, arama ve indirme kimin yaptığıyla birlikte kaydedilir ve hizmet sağlayıcı tarafından denetlenir.</p><p class=\"not\">Her gün gece 00:15'te mühürlenir (sıkıştırılır, özeti zincire eklenir). Kayıtlar yalnızca okunur; \
              panelden silinemez. \"Günü indir\" mühürlü dosyaları, zinciri ve doğrulama çıktısını tek pakette verir.</p>{}",
             table(&["Gün", "Durum", "Kişi", "Boyut", ""], &rows, "Henüz kayıt yok")
         );
@@ -90,6 +90,7 @@ impl Panel {
     pub(super) fn kayit_gun(&self, cfg: &Config, req: &Req, o: &Oturum) -> Resp {
         let day = q(req, "gun");
         let Some(info) = kayit::day_info(&cfg.main.log_root, day) else { return text(404, "Gün bulunamadı") };
+        self.audit(cfg, req, Some(o), "PANEL_KAYIT_GUN", &format!("gun={day}"));
         let names = ortak::read_index(&cfg.main.log_root);
         let rows: Vec<Vec<String>> = info
             .files
@@ -138,9 +139,7 @@ impl Panel {
         if page < pages {
             pager.push_str(&nav(page + 1, "Sonraki →"));
         }
-        if page == 1 {
-            self.audit(cfg, req, Some(o), "PANEL_KAYIT_GORUNTULE", &format!("gun={day} dosya={rel}{}", if filter.is_empty() { String::new() } else { format!(" ara={filter}") }));
-        }
+        self.audit(cfg, req, Some(o), "PANEL_KAYIT_GORUNTULE", &format!("gun={day} dosya={rel} sayfa={page}{}", if filter.is_empty() { String::new() } else { format!(" ara={filter}") }));
         let body = format!(
             "<p><a href=\"{}\">← {}</a></p>\
              <form class=\"satir kart\" method=\"get\" action=\"/kayitlar/dosya\"><input type=\"hidden\" name=\"gun\" value=\"{}\"><input type=\"hidden\" name=\"dosya\" value=\"{}\">\
@@ -202,12 +201,14 @@ impl Panel {
                 ]
             })
             .collect();
-        if !filter.is_empty() {
+        if filter.is_empty() {
+            self.audit(cfg, req, Some(o), "PANEL_KULLANICILAR", "");
+        } else {
             self.audit(cfg, req, Some(o), "PANEL_KULLANICI_ARA", &format!("ara={filter}"));
         }
         let body = format!(
             "<form class=\"satir kart\" method=\"get\" action=\"/kullanicilar\"><div><label for=\"q\">Telefon ya da ad</label>\
-             <input type=\"text\" id=\"q\" name=\"q\" value=\"{}\"></div><button>Ara</button></form><p class=\"not\">{total} kişi{}</p>{}",
+             <input type=\"text\" id=\"q\" name=\"q\" value=\"{}\"></div><button>Ara</button></form><p class=\"not\">Bu sayfadaki her görüntüleme, arama ve indirme kimin yaptığıyla birlikte kaydedilir ve hizmet sağlayıcı tarafından denetlenir.</p><p class=\"not\">{total} kişi{}</p>{}",
             h(&filter),
             if total > SAYFA { format!(", ilk {SAYFA} gösteriliyor") } else { String::new() },
             table(&["Telefon", "Ad soyad", "İlk kayıt", "Son oturum"], &rows, "Kayıtlı kişi yok")
@@ -276,7 +277,7 @@ impl Panel {
         }
         let today = ortak::day_of(&ortak::now_iso(now)).to_string();
         let body = format!(
-            "<p class=\"not\">Resmi talepler genellikle tarih-saat + IP (+ port) ile gelir. Çift NAT'ta dış port modemde değişir; \
+            "<p class=\"not\">Bu sayfadaki her görüntüleme, arama ve indirme kimin yaptığıyla birlikte kaydedilir ve hizmet sağlayıcı tarafından denetlenir.</p><p class=\"not\">Resmi talepler genellikle tarih-saat + IP (+ port) ile gelir. Çift NAT'ta dış port modemde değişir; \
              o durumda zaman + hedef IP ile arayın. Zaman biçimi: 2026-09-24 14:30.</p>\
              <form class=\"satir kart\" method=\"get\" action=\"/talep\">\
              <div><label for=\"tur\">Arama</label><select id=\"tur\" name=\"tur\">{tur_sec}</select></div>\

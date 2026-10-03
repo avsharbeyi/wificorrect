@@ -239,6 +239,7 @@ Yeni repoya bu dosyayla birlikte `MASTER_ENGINEERING.md` dosyasını da kopyalay
     | Kullanıcılar | ikisi | arama + kişi detayı |
     | Resmi talep | ikisi | iç IP, NAT portu, hedef IP, telefon, MAC + zaman ile arama ve talep paketi indirme |
     | Hesaplar | ikisi (admin'e dokunulamaz) | ekle / sil / şifre sıfırla |
+    | Panel hareketleri | yalnızca admin | panel hesaplarının kişisel veriye bakma kayıtları (kafe sahibinin izleme denetimi) |
 
     - **Ayarlar:** kafe adı, oturum süresi, telefon başına cihaz, SMS sınırları, uzak yedek, saklama günü, zaman damgası, kelime filtresi listesi. NetGSM ve Twilio kimlik alanları ile SMS deneme modu yalnızca hizmet sağlayıcıda.
     - **Portlar:** canlı kablo durumu. Uygula dendiğinde ayar yedeklenir ve **3 dk içinde "Onayla" denmezse eski ayar kendiliğinden geri gelir**. "Hemen geri al" düğmesi ve sağ/sol etiket değiştirme var.
