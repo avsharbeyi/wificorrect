@@ -177,6 +177,18 @@ impl Default for PortalMetin {
     }
 }
 
+/// Uzak erişim (src/uzak.rs): WireGuard tüneli kendi sunucumuza; yalnızca admin görür ve değiştirir.
+#[derive(Serialize, Deserialize, Clone, Debug, Default)]
+#[serde(default)]
+pub struct Uzak {
+    pub enabled: bool,
+    /// `vpn.ornek.com:51820`
+    pub sunucu: String,
+    pub sunucu_anahtar: String,
+    /// cihazın tünel adresi, ör. 10.99.0.17
+    pub adres: String,
+}
+
 /// Yasaklı siteler / kelimeler (src/filtre.rs). Boş başlar; kafe sahibi panelden yazar.
 #[derive(Serialize, Deserialize, Clone, Debug, Default)]
 #[serde(default)]
@@ -205,6 +217,7 @@ pub struct Config {
     pub backup: Backup,
     pub filtre: Filtre,
     pub portal: PortalMetin,
+    pub uzak: Uzak,
     pub allow: Vec<Device>,
     pub ban: Vec<Device>,
 }

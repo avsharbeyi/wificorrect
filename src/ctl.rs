@@ -194,6 +194,21 @@ pub fn run(cfg: Config, args: &[String]) -> ExitCode {
                 }
             }
         }
+        // Panel → Admin ayarları → Uzak erişim kaydedilince (ayrı systemd işinde)
+        Some("uzak-uygula") => {
+            let r = crate::uzak::uygula(&cfg, std::path::Path::new(crate::uzak::KEY), std::path::Path::new(crate::uzak::CONF), &runner);
+            crate::uzak::audit(&cfg, now, &r);
+            match r {
+                Ok(m) => {
+                    println!("{m}");
+                    ExitCode::SUCCESS
+                }
+                Err(e) => {
+                    eprintln!("{e}");
+                    ExitCode::from(1)
+                }
+            }
+        }
         // Açılışta (wificorrect-guvenlik) ve panelden: yasaklı site / kelime listelerini uygula
         Some("filtre-uygula") => match crate::filtre::uygula(&cfg, std::path::Path::new(crate::filtre::DNSMASQ_CONF), &runner) {
             Ok(()) => ExitCode::SUCCESS,

@@ -23,6 +23,9 @@ table inet wfc {
 		iifname $WAN ip saddr { 10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16 } tcp dport { 22, 8443 } accept
 		iifname $WAN ip saddr { 10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16 } icmp type echo-request accept
 
+		# Uzak erişim (WireGuard "wfc", panel → Admin ayarları): yalnızca VPN ağından panel, SSH ve ping; başka hiçbir şey
+		iifname "wfc" ip saddr 10.99.0.0/24 tcp dport { 22, 8443 } accept
+		iifname "wfc" ip saddr 10.99.0.0/24 icmp type echo-request accept
 		# Müşteri tarafından cihaza yalnızca DNS, DHCP, portal, ping
 		iifname "br-hotspot" udp dport { 53, 67 } accept
 		iifname "br-hotspot" tcp dport { 53, 8080 } accept

@@ -174,6 +174,10 @@ const ALANLAR: &[Alan] = &[
     Alan { key: "twilio.auth_token", label: "Auth Token", tur: Tur::Gizli(|s| s.len() == 32 && s.bytes().all(|b| b.is_ascii_hexdigit())), grup: "Twilio", admin: true },
     Alan { key: "twilio.api_key_sid", label: "API Key SID (SK…, opsiyonel)", tur: Tur::Metin(|s| prefixed_hex(s, "SK")), grup: "Twilio", admin: true },
     Alan { key: "twilio.api_key_secret", label: "API Key Secret (opsiyonel)", tur: Tur::Gizli(|s| s.len() == 32 && s.bytes().all(|b| b.is_ascii_alphanumeric())), grup: "Twilio", admin: true },
+    Alan { key: "uzak.enabled", label: "Uzak erişim açık", tur: Tur::Evet, grup: "Uzak erişim", admin: true },
+    Alan { key: "uzak.sunucu", label: "Sunucu (adres:port, ör. vpn.wificorrect.com:51820)", tur: Tur::Metin(|s| s.is_empty() || crate::uzak::endpoint_ok(s)), grup: "Uzak erişim", admin: true },
+    Alan { key: "uzak.sunucu_anahtar", label: "Sunucunun açık anahtarı", tur: Tur::Metin(|s| s.is_empty() || crate::uzak::key_ok(s)), grup: "Uzak erişim", admin: true },
+    Alan { key: "uzak.adres", label: "Bu cihazın tünel adresi (10.99.0.2–254)", tur: Tur::Metin(|s| s.is_empty() || crate::uzak::adres_ok(s)), grup: "Uzak erişim", admin: true },
     Alan { key: "main.retention_days", label: "Kayıtlar cihazda kaç gün saklansın (730 = 2 yıl)", tur: Tur::Sayi(30, 3650), grup: "Kayıt ve yedek", admin: true },
     Alan { key: "backup.enabled", label: "Uzak yedek açık", tur: Tur::Evet, grup: "Kayıt ve yedek", admin: true },
     Alan { key: "backup.target", label: "Yedek hedefi (kullanici@sunucu:)", tur: Tur::Metin(backup_target_ok), grup: "Kayıt ve yedek", admin: true },
@@ -188,6 +192,10 @@ fn get_field(c: &Config, key: &str) -> String {
     match key {
         "main.site_name" => c.main.site_name.clone(),
         "main.unvan" => c.main.unvan.clone(),
+        "uzak.enabled" => b(c.uzak.enabled),
+        "uzak.sunucu" => c.uzak.sunucu.clone(),
+        "uzak.sunucu_anahtar" => c.uzak.sunucu_anahtar.clone(),
+        "uzak.adres" => c.uzak.adres.clone(),
         "main.session_minutes" => c.main.session_minutes.to_string(),
         "main.max_devices_per_phone" => c.main.max_devices_per_phone.to_string(),
         "main.retention_days" => c.main.retention_days.to_string(),
@@ -219,6 +227,10 @@ fn set_field(c: &mut Config, key: &str, v: &str) {
     match key {
         "main.site_name" => c.main.site_name = v.trim().into(),
         "main.unvan" => c.main.unvan = v.split_whitespace().collect::<Vec<_>>().join(" "),
+        "uzak.enabled" => c.uzak.enabled = v == "1",
+        "uzak.sunucu" => c.uzak.sunucu = v.into(),
+        "uzak.sunucu_anahtar" => c.uzak.sunucu_anahtar = v.into(),
+        "uzak.adres" => c.uzak.adres = v.into(),
         "main.session_minutes" => c.main.session_minutes = n(),
         "main.max_devices_per_phone" => c.main.max_devices_per_phone = n() as usize,
         "main.retention_days" => c.main.retention_days = n(),
@@ -326,6 +338,8 @@ pub struct Panel {
     sys: std::path::PathBuf,
     /// dnsmasq yasaklı site dosyası (testte geçici)
     filtre_conf: std::path::PathBuf,
+    /// WireGuard gizli anahtarı (testte geçici)
+    uzak_key: std::path::PathBuf,
 }
 
 const MENU: &[(&str, &str, bool)] = &[
@@ -359,6 +373,7 @@ impl Panel {
             ag_yollar: crate::ag::Yollar::sistem(),
             sys: "/sys/class/net".into(),
             filtre_conf: crate::filtre::DNSMASQ_CONF.into(),
+            uzak_key: crate::uzak::KEY.into(),
         }
     }
 
@@ -817,6 +832,14 @@ impl Panel {
                     ("NetGSM bilgileri", st(cfg.netgsm.password.is_empty() || cfg.netgsm.usercode.is_empty()).into()),
                     ("Twilio (yabancı numaralar)", if cfg.twilio.enabled { st(twilio_missing).into() } else { "kapalı".into() }),
                     ("Son yedek", yedek),
+                    ("Uzak erişim", h(&crate::uzak::durum(cfg, (self.clock)()))),
+                    (
+                        "Bu cihazın açık anahtarı",
+                        match crate::uzak::ensure_key(&self.uzak_key).and_then(|k| crate::uzak::public_key(&k)) {
+                            Ok(p) => format!("<code>{}</code> <span class=\"not\">(sunucuya bu eklenir)</span>", h(&p)),
+                            Err(e) => format!("<span class=\"durum kotu\">{}</span>", h(&e)),
+                        },
+                    ),
                 ])
             ));
         }
@@ -925,11 +948,21 @@ impl Panel {
         for (k, _, new) in &changes {
             set_field(&mut cfg, k, new);
         }
+        if cfg.uzak.enabled {
+            if let Some(e) = crate::uzak::eksik(&cfg) {
+                return redirect(back, Some((&format!("Uzak erişimi açmak için {e} gerekli; hiçbir şey kaydedilmedi."), true)));
+            }
+        }
         if let Err(e) = cfg.save(&self.cfg_path) {
             return redirect(back, Some((&e, true)));
         }
         for (k, old, new) in &changes {
             self.audit(&cfg, req, Some(o), "PANEL_AYAR", &describe(k, old, new));
+        }
+        if changes.iter().any(|(k, _, _)| k.starts_with("uzak.")) {
+            // tünel ayrı işte kurulur (/etc/wireguard panelden yazılamaz; sunucu adı çözülürken panel beklemesin)
+            let unit = format!("wfc-uzak-{}", ortak::random_hex(4));
+            (self.runner)(&cmd(&["systemd-run", "--unit", &unit, "--on-active", "1s", "/usr/local/bin/wificorrect", "ctl", "uzak-uygula"]));
         }
         let ok = (self.runner)(&cmd(&["systemctl", "restart", "wificorrect-portal"]));
         redirect(back, Some(if ok { ("Ayarlar kaydedildi. Giriş sayfası yeniden başlatıldı.", false) } else { ("Ayarlar kaydedildi ama giriş sayfası yeniden başlatılamadı!", true) }))
@@ -1255,6 +1288,9 @@ mod tests {
             }),
             Box::new(|| 1_790_705_134.0),
         );
+        let mut p = p;
+        p.uzak_key = root.join("wg.key"); // testler gerçek anahtara dokunmasın
+        p.filtre_conf = root.join("yasak.conf");
         Env { p, calls, root }
     }
 
@@ -1673,5 +1709,30 @@ mod tests {
         assert!(e.calls.lock().unwrap().iter().any(|c| c.join(" ").ends_with("wificorrect ctl fabrika")));
         let audit = std::fs::read_to_string(e.root.join("5651/gunluk/2026-09-29/denetim.csv")).unwrap();
         assert!(audit.contains("PANEL_FABRIKA_RED") && audit.contains("PANEL_FABRIKA;") || audit.contains(";PANEL_FABRIKA;"));
+    }
+
+    #[test]
+    fn admin_remote_access_settings() {
+        let e = env();
+        let (otok, _) = setup_and_login(&e, "mudur", "sahip-parola-12");
+        assert!(!e.p.handle(&get("/ayarlar", &[], &otok)).body.contains("uzak.")); // işletme sahibi görmez
+        let (tok, csrf) = setup_and_login(&e, "admin", "hizmet-parola-1");
+        let page = e.p.handle(&get("/admin-ayarlari", &[], &tok)).body;
+        assert!(page.contains("uzak.sunucu") && page.contains("Bu cihazın açık anahtarı") && page.contains("sunucuya bu eklenir"));
+        assert!(e.root.join("wg.key").exists()); // anahtar cihazda üretildi
+        let post = |f: &[(&str, &str)]| {
+            let mut v = vec![("csrf", csrf.as_str())];
+            v.extend_from_slice(f);
+            e.p.handle(&req("POST", "/admin-ayarlari", &v, Some(&tok)))
+        };
+        // eksik bilgiyle açılamaz
+        assert!(loc(&post(&[("uzak.enabled", "1"), ("sms.mock", "1")])).contains("e=1"));
+        assert!(!Config::load(&e.p.cfg_path).unwrap().uzak.enabled);
+        let k = "aBcDeFgHiJkLmNoPqRsTuVwXyZ0123456789+/abcdE=";
+        let r = post(&[("uzak.enabled", "1"), ("uzak.sunucu", "vpn.wificorrect.com:51820"), ("uzak.sunucu_anahtar", k), ("uzak.adres", "10.99.0.17"), ("sms.mock", "1")]);
+        assert!(!loc(&r).contains("e=1"), "{}", loc(&r));
+        let c = Config::load(&e.p.cfg_path).unwrap();
+        assert!(c.uzak.enabled && c.uzak.adres == "10.99.0.17");
+        assert!(e.calls.lock().unwrap().iter().any(|c| c.join(" ").ends_with("wificorrect ctl uzak-uygula")));
     }
 }

@@ -176,6 +176,7 @@ pub struct Kaydedici {
     pub sys: std::path::PathBuf,
     wan_bad_since: Option<f64>,
     wan_last_fix: f64,
+    uzak_last_fix: f64,
 }
 
 impl Kaydedici {
@@ -194,6 +195,7 @@ impl Kaydedici {
             sys: "/sys/class/net".into(),
             wan_bad_since: None,
             wan_last_fix: f64::NEG_INFINITY,
+            uzak_last_fix: f64::NEG_INFINITY,
         }
     }
 
@@ -361,6 +363,28 @@ impl Kaydedici {
         drop(_g);
         self.check_disk(now);
         self.check_wan(now);
+        self.check_uzak(now);
+    }
+
+    /// Uzak erişim açıkken tünel yoksa ya da sunucuyla 10 dk'dır el sıkışılmadıysa (açılışta ad çözülemedi, sunucu IP'si
+    /// değişti…) tünel yeniden kurulur; en çok 10 dk'da bir.
+    fn check_uzak(&mut self, now: f64) {
+        if !self.cfg.uzak.enabled || now - self.uzak_last_fix < 600.0 {
+            return;
+        }
+        let up = self.sys.join(crate::uzak::IFACE).exists();
+        let fresh = crate::uzak::last_handshake(&ortak::capture(&["wg", "show", crate::uzak::IFACE, "latest-handshakes"])).is_some_and(|t| now - t < 600.0);
+        if up && fresh {
+            return;
+        }
+        if self.uzak_last_fix.is_infinite() && up {
+            self.uzak_last_fix = now; // yeni açılmış olabilir: ilk el sıkışmaya süre tanı
+            return;
+        }
+        self.uzak_last_fix = now;
+        let ok = (self.runner)(&["systemctl".to_string(), "restart".to_string(), crate::uzak::UNIT.to_string()]);
+        let row = Row::new("UZAK_YENIDEN", &ortak::now_iso(now)).set("ek", format!("arayuz={} sonuc={}", if up { "var" } else { "yok" }, if ok { "tamam" } else { "hata" }));
+        ortak::audit(&self.cfg.main.log_root, row);
     }
 
     /// İnternet portunda kablo takılıyken DHCP istemcisi (dhcpcd) 1 dk'dan uzun yoksa WAN birimi yeniden başlatılır

@@ -15,6 +15,7 @@ mod portal;
 mod sms;
 mod twilio;
 mod ulkeler;
+mod uzak;
 
 use std::process::ExitCode;
 
