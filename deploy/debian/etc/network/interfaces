@@ -1,0 +1,5 @@
+# WifiCorrect: ağ arayüzleri /etc/network/interfaces.d/wificorrect içinde (panel → Portlar üretir).
+source /etc/network/interfaces.d/*
+
+auto lo
+iface lo inet loopback

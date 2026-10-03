@@ -1,0 +1,14 @@
+[Unit]
+Description=WifiCorrect: onaylanmamis port degisikligini acilista geri al
+# Port değişikliği 3 dk içinde onaylanmadan cihaz yeniden açıldıysa eski ayar ağ kalkmadan geri yazılır
+DefaultDependencies=no
+After=local-fs.target
+Before=wificorrect-guvenlik.service networking.service
+ConditionPathExists=/var/lib/wificorrect/ag-bekliyor
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/wificorrect ctl ag-acilis
+
+[Install]
+WantedBy=sysinit.target

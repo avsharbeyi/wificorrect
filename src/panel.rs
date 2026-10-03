@@ -2,7 +2,7 @@
 //! https://<cihaz>:8443, yalnızca dükkân ağından (güvenlik duvarı + burada müşteri ağı reddi).
 //! İki rol (2026-10-03 kullanıcı kararı): kafe sahibi her şeyi görür ve yönetir (kayıtlar dahil);
 //! admin (hizmet sağlayıcı) ondan yalnızca "API ayarları" sayfasıyla ayrılır (SMS sağlayıcısı bilgileri, deneme modu).
-//! 8b kayıtlar / kullanıcılar / resmi talep: panel/kayit_sayfalari.rs. 8c (portlar, Wi-Fi) sonraki adım.
+//! 8b kayıtlar / kullanıcılar / resmi talep: panel/kayit_sayfalari.rs. 8c portlar ve Wi-Fi: panel/portlar.rs.
 
 use crate::ayar::{Config, Device};
 use crate::hesap::{self, Hesaplar, LoginGuard, Oturum, Oturumlar, Rol};
@@ -14,6 +14,7 @@ use std::process::ExitCode;
 use std::sync::Arc;
 
 mod kayit_sayfalari;
+mod portlar;
 
 pub type Clock = dyn Fn() -> f64 + Send + Sync;
 const TPL: &str = include_str!("sablon/panel.html");
@@ -306,6 +307,9 @@ pub struct Panel {
     oturumlar: Oturumlar,
     runner: Box<Runner>,
     clock: Box<Clock>,
+    ag_yollar: crate::ag::Yollar,
+    /// /sys/class/net (testte geçici klasör)
+    sys: std::path::PathBuf,
 }
 
 const MENU: &[(&str, &str, bool)] = &[
@@ -317,6 +321,7 @@ const MENU: &[(&str, &str, bool)] = &[
     ("/kullanicilar", "Kullanıcılar", false),
     ("/talep", "Resmi talep", false),
     ("/ayarlar", "Ayarlar", false),
+    ("/portlar", "Portlar", false),
     ("/api", "API ayarları", true),
     ("/sistem", "Sistem", false),
     ("/hesaplar", "Hesaplar", false),
@@ -332,6 +337,8 @@ impl Panel {
             oturumlar: Oturumlar::default(),
             runner,
             clock,
+            ag_yollar: crate::ag::Yollar::sistem(),
+            sys: "/sys/class/net".into(),
         }
     }
 
@@ -430,6 +437,11 @@ impl Panel {
             ("GET", "/kullanici") => self.kullanici(&cfg, req, &o),
             ("GET", "/talep") => self.talep(&cfg, req, &o, now),
             ("GET", "/talep/paket") => self.talep_paket(&cfg, req, &o),
+            ("GET", "/portlar") => self.portlar(&cfg, req, &o, now),
+            ("POST", "/portlar") => self.portlar_uygula(&cfg, req, &o),
+            ("POST", "/portlar/onayla") => self.portlar_onayla(&cfg, req, &o),
+            ("POST", "/portlar/geri-al") => self.portlar_geri_al(&cfg, req, &o),
+            ("POST", "/portlar/etiket") => self.portlar_etiket(&cfg, req, &o),
             ("GET", "/ayarlar") => self.ayarlar(&cfg, req, &o, &HashMap::new(), false),
             ("POST", "/ayarlar") => self.ayarlar_post(cfg, req, &o, false),
             ("GET", "/api") if hizmet => self.ayarlar(&cfg, req, &o, &HashMap::new(), true),
@@ -1312,5 +1324,62 @@ mod tests {
         for olay in ["PANEL_KAYIT_GORUNTULE", "PANEL_KAYIT_INDIR", "PANEL_KULLANICI", "PANEL_TALEP_ARA", "PANEL_TALEP_PAKET"] {
             assert!(audit.contains(olay), "{olay}");
         }
+    }
+
+    #[test]
+    fn ports_page_change_confirm_and_rollback() {
+        let mut e = env();
+        let sys = e.root.join("sys");
+        for (n, mac, up) in [("enp3s0", "00:0e:c4:ce:a0:9b", "1"), ("enp1s0", "00:0e:c4:ce:a0:9a", "0"), ("wlp2s0", "90:00:4e:b5:b3:c5", "0")] {
+            std::fs::create_dir_all(sys.join(n).join("device")).unwrap();
+            std::fs::write(sys.join(n).join("address"), format!("{mac}\n")).unwrap();
+            std::fs::write(sys.join(n).join("carrier"), up).unwrap();
+            std::fs::write(sys.join(n).join("speed"), "1000").unwrap();
+        }
+        std::fs::create_dir_all(sys.join("wlp2s0").join("wireless")).unwrap();
+        e.p.sys = sys;
+        e.p.ag_yollar = crate::ag::Yollar {
+            ag: e.root.join("ag.toml"),
+            interfaces: e.root.join("interfaces"),
+            nft: e.root.join("arayuzler.nft"),
+            hostapd: e.root.join("hostapd.conf"),
+            issue: e.root.join("issue"),
+            durum: e.root.join("durum"),
+        };
+        let (tok, csrf) = setup_and_login(&e, "mudur", "sahip-parola-12"); // kafe sahibi de port değiştirebilir
+        let page = e.p.handle(&req("GET", "/portlar", &[], Some(&tok))).body;
+        assert!(page.contains("Ethernet 1 (sağ)") && page.contains("bağlı, 1000 Mb/s") && page.contains("Ethernet 2 (sol)") && !page.contains("wlp2s0</span>"));
+        let post = |form: &[(&str, &str)]| {
+            let mut f = vec![("csrf", csrf.as_str())];
+            f.extend_from_slice(form);
+            e.p.handle(&req("POST", "/portlar", &f, Some(&tok)))
+        };
+        // iki port birden internet alamaz; hiçbiri vermiyorsa olmaz
+        assert!(loc(&post(&[("rol_enp3s0", "alir"), ("rol_enp1s0", "alir"), ("wifi", "kapali")])).contains("e=1"));
+        assert!(loc(&post(&[("rol_enp3s0", "alir"), ("rol_enp1s0", "kapali"), ("wifi", "kapali")])).contains("e=1"));
+        assert!(loc(&post(&[("rol_enp3s0", "alir"), ("rol_enp1s0", "verir"), ("wifi", "kapali"), ("kanal", "6")])).contains("%20yok."));
+        // portları değiştir + Wi-Fi aç
+        let r = post(&[("rol_enp3s0", "verir"), ("rol_enp1s0", "alir"), ("wifi", "verir"), ("ssid", "Bocafe Misafir"), ("sifre", ""), ("kanal", "11")]);
+        assert!(!loc(&r).contains("e=1"), "{}", loc(&r));
+        let staged = crate::ag::load(&e.p.ag_yollar.yeni());
+        assert_eq!((staged.wan.as_str(), staged.wan_mac.as_str(), staged.wifi.ssid.as_str()), ("enp1s0", "00:0e:c4:ce:a0:9b", "Bocafe Misafir")); // MAC korunur
+        assert!(e.calls.lock().unwrap().iter().any(|c| c.join(" ").contains("ctl ag-gecis")));
+        // işi elle çalıştır (systemd-run'ın yapacağı), sonra panel onay ister
+        let runner = |_: &[String]| true;
+        let cfg = Config::load(&e.p.cfg_path).unwrap();
+        crate::ag::gecis(&cfg, &e.p.ag_yollar, &e.p.ag_yollar.yeni(), 1_790_705_134.0, &runner).unwrap();
+        let page = e.p.handle(&req("GET", "/portlar", &[], Some(&tok))).body;
+        assert!(page.contains("180 saniye") && page.contains("Hemen geri al"));
+        assert!(loc(&post(&[("rol_enp3s0", "alir"), ("rol_enp1s0", "verir"), ("wifi", "kapali")])).contains("e=1")); // beklerken yeni değişiklik yok
+        assert!(loc(&e.p.handle(&req("POST", "/portlar/geri-al", &[("csrf", &csrf)], Some(&tok)))).contains("geri%20y"));
+        assert!(e.calls.lock().unwrap().iter().any(|c| c.join(" ").contains("ag-geri-al elle")));
+        let r = e.p.handle(&req("POST", "/portlar/onayla", &[("csrf", &csrf)], Some(&tok)));
+        assert!(!loc(&r).contains("e=1") && crate::ag::pending(&e.p.ag_yollar).is_none());
+        assert_eq!(crate::ag::load(&e.p.ag_yollar.ag).wan, "enp1s0");
+        e.p.handle(&req("POST", "/portlar/etiket", &[("csrf", &csrf)], Some(&tok)));
+        assert!(e.p.handle(&req("GET", "/portlar", &[], Some(&tok))).body.contains("Ethernet 1 (sol)"));
+        let audit = std::fs::read_to_string(e.root.join("5651/gunluk/2026-09-29/denetim.csv")).unwrap();
+        assert!(audit.contains("PANEL_PORT;") || audit.contains(";PANEL_PORT"));
+        assert!(audit.contains("PANEL_PORT_ONAY") && audit.contains("PANEL_PORT_GERI_AL") && audit.contains("Ethernet 2 (sol) alır"));
     }
 }

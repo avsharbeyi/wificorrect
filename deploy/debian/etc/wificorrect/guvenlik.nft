@@ -1,10 +1,12 @@
 #!/usr/sbin/nft -f
 # WifiCorrect temel güvenlik duvarı (OpenWrt'deki fw4'ün yerine). Giriş kapısı tabloları kapi.nft'te.
-# Müşteri (br-hotspot) → internet (enp3s0) yalnızca 0x5651 işaretli paketler; işareti kapi.nft koyar.
+# Müşteri (br-hotspot) → internet ($WAN) yalnızca 0x5651 işaretli paketler; işareti kapi.nft koyar.
 # kapi.nft yüklenmezse hiçbir paket işaretlenmez → kimse internete çıkamaz (kapalıyken güvenli).
-# ponytail: arayüz adları sabit; çok kafeli kurulumda uygulama bu dosyayı ayardan üretecek.
+# İnternet alan portun adı (WAN) arayuzler.nft'ten gelir; onu panel → Portlar üretir (wificorrect ctl ag-uygula).
 # Yönetim: internet alan portun arkasındaki her özel ağdan (modem hangi havuzu verirse versin).
 # Cihaz doğrudan genel IP alırsa (modem köprü modunda) internetten gelen yönetim istekleri kapalı kalır.
+
+include "/etc/wificorrect/arayuzler.nft"
 
 table inet wfc
 delete table inet wfc
@@ -18,8 +20,8 @@ table inet wfc {
 		icmpv6 type { nd-neighbor-solicit, nd-neighbor-advert, nd-router-solicit, nd-router-advert } accept
 
 		# Yönetim: yalnızca dükkân ağından (özel adresler) SSH ve panel
-		iifname "enp3s0" ip saddr { 10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16 } tcp dport { 22, 8443 } accept
-		iifname "enp3s0" ip saddr { 10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16 } icmp type echo-request accept
+		iifname $WAN ip saddr { 10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16 } tcp dport { 22, 8443 } accept
+		iifname $WAN ip saddr { 10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16 } icmp type echo-request accept
 
 		# Müşteri tarafından cihaza yalnızca DNS, DHCP, portal, ping
 		iifname "br-hotspot" udp dport { 53, 67 } accept
@@ -32,11 +34,11 @@ table inet wfc {
 	chain forward {
 		type filter hook forward priority filter; policy drop;
 		ct state established,related accept
-		iifname "br-hotspot" oifname "enp3s0" meta mark 0x5651 accept
+		iifname "br-hotspot" oifname $WAN meta mark 0x5651 accept
 	}
 
 	chain postrouting {
 		type nat hook postrouting priority srcnat; policy accept;
-		oifname "enp3s0" ip saddr 10.50.0.0/24 masquerade
+		oifname $WAN ip saddr 10.50.0.0/24 masquerade
 	}
 }

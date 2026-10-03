@@ -176,6 +176,32 @@ pub fn run(cfg: Config, args: &[String]) -> ExitCode {
             ExitCode::SUCCESS
         }
         Some("admin-parola") => admin_parola(crate::hesap::PATH),
+        Some(c @ ("ag-uygula" | "ag-gecis" | "ag-onayla" | "ag-geri-al" | "ag-acilis")) => {
+            use crate::ag;
+            let y = ag::Yollar::sistem();
+            let report = |r: Result<Vec<String>, String>| match r {
+                Ok(errs) if errs.is_empty() => ExitCode::SUCCESS,
+                Ok(errs) => {
+                    eprintln!("{}", errs.join("; "));
+                    ExitCode::from(1)
+                }
+                Err(e) => {
+                    eprintln!("{e}");
+                    ExitCode::from(1)
+                }
+            };
+            match c {
+                // Kurulumda / elle: ag.toml'dan dosyaları üret ve ağı geçir (geri alma zamanlayıcısı yok)
+                "ag-uygula" => report(Ok(ag::switch(&cfg, &ag::load(&y.ag), &y, &runner))),
+                "ag-gecis" => match args.get(1) {
+                    Some(f) => report(ag::gecis(&cfg, &y, std::path::Path::new(f), now, &runner)),
+                    None => report(Err("Kullanım: wificorrect ctl ag-gecis <yeni-ag.toml>".into())),
+                },
+                "ag-onayla" => report(ag::onayla(&cfg, &y, &runner).map(|_| vec![])),
+                "ag-geri-al" => report(ag::geri_al(&cfg, &y, args.get(1).map_or("elle", String::as_str), &runner)),
+                _ => report(ag::geri_al(&cfg, &y, "acilis", &runner)),
+            }
+        }
         Some("ara") => {
             let opt = |name: &str| args.iter().position(|a| a == name).and_then(|i| args.get(i + 1)).map(String::as_str);
             let Some((tur, deger)) = ["ic-ip", "nat-port", "hedef-ip", "telefon", "mac"].iter().find_map(|t| opt(&format!("--{t}")).map(|v| (*t, v))) else {
@@ -223,7 +249,7 @@ pub fn run(cfg: Config, args: &[String]) -> ExitCode {
         _ => {
             eprintln!(
                 "Kullanım: wificorrect ctl <komut>\n  dhcp-olay <add|old|del> <mac> <ip> [ad]\n  yukle\n  oturumlar\n  \
-                 gun-kapat [YYYY-AA-GG] [--zorla]\n  dogrula [--son N]\n  temizle [--kuru]\n  yedekle\n  ara ...  (ayrıntı: ctl ara)\n  disa-aktar --baslangic G --bitis G --cikti DOSYA\n  admin-parola"
+                 gun-kapat [YYYY-AA-GG] [--zorla]\n  dogrula [--son N]\n  temizle [--kuru]\n  yedekle\n  ara ...  (ayrıntı: ctl ara)\n  disa-aktar --baslangic G --bitis G --cikti DOSYA\n  ag-uygula | ag-gecis DOSYA | ag-onayla | ag-geri-al\n  admin-parola"
             );
             ExitCode::from(2)
         }

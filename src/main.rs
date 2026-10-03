@@ -1,5 +1,6 @@
 //! WifiCorrect — tek program, alt komutlarla çalışır (docs/RUST_YENIDEN_YAZIM.md, B/C bölümleri).
 
+mod ag;
 mod ayar;
 mod ctl;
 mod hesap;

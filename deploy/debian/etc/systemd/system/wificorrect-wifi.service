@@ -1,0 +1,13 @@
+[Unit]
+Description=WifiCorrect Wi-Fi yayini (hostapd)
+# Yayın yalnızca panel → Portlar'dan açılınca (o zaman hostapd.conf üretilir)
+ConditionPathExists=/etc/wificorrect/hostapd.conf
+After=network.target wificorrect-guvenlik.service
+
+[Service]
+ExecStart=/usr/sbin/hostapd /etc/wificorrect/hostapd.conf
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
