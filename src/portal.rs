@@ -294,6 +294,8 @@ impl Portal {
     pub fn render(&self, page: &Page) -> String {
         let mut values: HashMap<&str, String> = HashMap::new();
         values.insert("site", self.cfg.main.site_name.clone());
+        // "Bocafe'ye", "Starbucks'a": ek ünlü uyumuyla, kesme işaretiyle ayrılır
+        values.insert("site_ye", format!("{}'{}", self.cfg.main.site_name, ek(&self.cfg.main.site_name, 'y')));
         values.insert("portal", self.base_url.clone());
         for (k, v) in &page.ctx {
             values.insert(k, v.clone());
@@ -1046,7 +1048,7 @@ mod tests {
         let html = t.p.render(&pg);
         assert!(html.contains("&lt;script&gt;"));
         assert!(!html.contains("<script>x"));
-        assert!(html.contains("Bocafe Wi-Fi'ye hoş geldiniz")); // ad hangi harfle biterse bitsin ek doğru
+        assert!(html.contains("<h1>Bocafe&#x27;ye hoş geldiniz</h1>")); // ek ada göre, kesme işaretiyle
         assert!(html.contains("name=\"dst\" value=\"\""));
         assert_eq!(safe_dst("https://a.com/x"), "https://a.com/x");
         assert_eq!(safe_dst(&format!("http://{}", "a".repeat(2050))), "");
@@ -1134,5 +1136,6 @@ mod tests {
         // ponytail: iyelik ekli adlarda doğrusu ’na/’ndan; yazımdan ayırt edilemez, genel kural uygulanır
         assert_eq!(isletme_yerlestir(t, "Kahve Dünyası"), "Kahve Dünyası’ya, Kahve Dünyası’nın, Kahve Dünyası’dan; Kahve Dünyası, 9. KAHVE DÜNYASI’NIN");
         assert_eq!(isletme_yerlestir("Göztepe Kafe’ye", "X"), "Göztepe Kafe’ye"); // başka kelimeye dokunmaz
+        assert_eq!((ek("Hilton Otel", 'y'), ek("Starbucks", 'y'), ek("Kahvecim", 'y'), ek("Boca", 'y')), ("e".into(), "a".into(), "e".into(), "ya".into()));
     }
 }

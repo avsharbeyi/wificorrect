@@ -117,7 +117,7 @@ Son ürün, aynı donanımlı boş bir cihaza yüklenen bir ISO olacak; ilk aç�
 - Kuralı (kullanıcı): her kafede AP farklı olabilir; hepsi önceden hazırlanmış gelir. Sistem AP'ye özel hiçbir şey bilmez/gerektirmez: AP sol porta (müşteri köprüsü) takılır, müşteriler IP'yi cihazdan alır.
 - AP hazırlık listesi: çalışma modu Access Point · **DHCP sunucusu kapalı** (Smart IP / otomatik DHCP gibi "gerekirse kendin dağıt" modları da kapalı; yönetim IP'si sabit, ör. 10.50.0.2/24, ağ geçidi 10.50.0.1 — DHCP havuzu .20–.249 dışında) · ağ adı önceden belirlenmiş · şifresiz · **istemci yalıtımı (AP isolation) açık** · **yönetim parolası fabrika ayarında bırakılmamalı** (ağ şifresiz; müşteri AP'nin kendi sayfasına ulaşabilir).
 - İlk denenen: TP-Link TL-WA901ND (70:4f:57:dd:7a:e8), 100 Mb/s; `GoztepeBilgisayar_Misafir`, şifresiz, DHCP kapalı, AP isolation açık, sabit 10.50.0.2. Telefon AP üzerinden 10.50.0.x aldı, portal açıldı. AP yönetimine bilgisayardan: `ssh -L 8091:10.50.0.2:80 wificorrect` → http://127.0.0.1:8091 (TP-Link girişten sonra kendi IP'sine yönlendirir; aynı yolu tünel adresiyle açmak gerekir).
-- Portal başlığı kafe adını kurulum ekranından alır (`main.site_name`); ek kafe adının son harfine göre değişmesin diye "<ad> Wi-Fi'ye hoş geldiniz".
+- Portal başlığı işletme adını kurulum ekranından alır (`main.site_name`): "<ad>'ye hoş geldiniz", ek ünlü uyumuyla kesme işaretinden sonra (Bocafe'ye, Starbucks'a, Hilton Otel'e). Bu cihazdaki eski sistemden kalma "Bocafe" adı varsayılana ("İşletme") çevrildi; kurulumda girilen ad geçer.
 
 ## Panel hareketleri — kafe sahibinin izlenmesi (2026-10-03, kullanıcı isteği)
 - İstek: kafe sahibinin hesabının da kaydı tutulsun; kafe sahibinin müşterileri sürekli izlemesi istenmiyor.
