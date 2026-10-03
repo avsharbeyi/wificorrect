@@ -8,12 +8,13 @@ use crate::kayit;
 /// Kişisel veri gösteren ya da veren işlemler (izleme sayılır).
 const KISISEL: &[&str] = &[
     "PANEL_OTURUMLAR", "PANEL_KULLANICILAR", "PANEL_KULLANICI_ARA", "PANEL_KULLANICI", "PANEL_KAYIT_GUN",
-    "PANEL_KAYIT_GORUNTULE", "PANEL_KAYIT_INDIR", "PANEL_TALEP_ARA", "PANEL_TALEP_PAKET",
+    "PANEL_KAYIT_GORUNTULE", "PANEL_KAYIT_INDIR", "PANEL_TALEP_ARA", "PANEL_TALEP_PAKET", "PANEL_GEREKCE",
 ];
 
 pub(super) fn olay_adi(olay: &str) -> &str {
     match olay {
         "PANEL_GIRIS" => "Giriş",
+        "PANEL_GEREKCE" => "Gerekçe yazdı",
         "PANEL_CIKIS" => "Çıkış",
         "PANEL_GIRIS_HATA" => "Hatalı giriş",
         "PANEL_GIRIS_KILIT" => "Giriş kilitlendi",
@@ -78,7 +79,7 @@ impl Panel {
             if e.0.is_empty() {
                 e.0 = rol.clone();
             }
-            if KISISEL.contains(&olay.as_str()) {
+            if KISISEL.contains(&olay.as_str()) && olay != "PANEL_GEREKCE" {
                 e.2 += 1;
                 if z.as_str() >= week.as_str() {
                     e.1 += 1;

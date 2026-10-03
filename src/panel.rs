@@ -14,6 +14,7 @@ use std::process::ExitCode;
 use std::sync::Arc;
 
 mod filtre_sayfasi;
+mod gerekce;
 mod hareketler;
 mod kayit_sayfalari;
 mod portlar;
@@ -387,7 +388,12 @@ impl Panel {
 
     fn audit(&self, cfg: &Config, req: &Req, o: Option<&Oturum>, olay: &str, ek: &str) {
         let who = o.map_or("-".to_string(), |o| format!("{} rol={}", o.user, if o.rol == Rol::Hizmet { "hizmet" } else { "sahip" }));
-        let ek = format!("kullanici={who} ip={}{}{ek}", req.ip, if ek.is_empty() { "" } else { " " });
+        let mut ek = format!("kullanici={who} ip={}{}{ek}", req.ip, if ek.is_empty() { "" } else { " " });
+        if let Some((g, until)) = o.and_then(|o| o.gerekce.as_ref()) {
+            if *until > (self.clock)() && olay != "PANEL_GEREKCE" {
+                ek.push_str(&format!(" gerekce={g}"));
+            }
+        }
         ortak::audit(&cfg.main.log_root, Row::new(olay, &ortak::now_iso((self.clock)())).set("ek", ek));
     }
 
@@ -417,7 +423,11 @@ impl Panel {
             return text(403, "Geçersiz form (CSRF). Sayfayı yenileyip tekrar deneyin.");
         }
         let hizmet = o.rol == Rol::Hizmet;
+        if let Some(r) = self.reason_gate(&cfg, req, &o, now) {
+            return r;
+        }
         match (req.method.as_str(), req.path.as_str()) {
+            ("POST", "/gerekce") => self.gerekce_post(&cfg, req, &o, now),
             ("POST", "/cikis") => {
                 self.audit(&cfg, req, Some(&o), "PANEL_CIKIS", "");
                 if let Some(t) = &req.token {
@@ -1285,7 +1295,8 @@ mod tests {
     #[test]
     fn owner_reads_records_people_and_official_requests() {
         let e = env();
-        let (tok, _) = setup_and_login(&e, "mudur", "sahip-parola-12");
+        let (tok, csrf) = setup_and_login(&e, "mudur", "sahip-parola-12");
+        give_reason(&e, &tok, &csrf);
         let cfg = Config::load(&e.p.cfg_path).unwrap();
         let root = cfg.main.log_root.clone();
         let ses = |olay: &str, z: &str| {
@@ -1428,6 +1439,7 @@ mod tests {
     fn owner_activity_is_logged_and_only_admin_sees_it() {
         let e = env();
         let (tok, csrf) = setup_and_login(&e, "mudur", "sahip-parola-12");
+        give_reason(&e, &tok, &csrf);
         e.p.handle(&get("/oturumlar", &[], &tok));
         e.p.handle(&get("/kullanicilar", &[], &tok));
         e.p.handle(&get("/kullanicilar", &[("q", "ayşe")], &tok));
@@ -1443,5 +1455,38 @@ mod tests {
         assert!(page.contains("Kafe sahibi") && page.contains(">4<") && page.contains("Çıkış")); // mudur: 4 kişisel veri bakışı (bağlı cihazlar + 2 liste + arama)
         let audit = std::fs::read_to_string(e.root.join("5651/gunluk/2026-09-29/denetim.csv")).unwrap();
         assert!(audit.contains("kullanici=mudur rol=sahip ip="));
+    }
+
+    fn give_reason(e: &Env, tok: &str, csrf: &str) {
+        let r = e.p.handle(&req("POST", "/gerekce", &[("csrf", csrf), ("gerekce", "Müşteri şikâyeti incelemesi"), ("donus", "/")], Some(tok)));
+        assert_eq!(loc(&r), "/");
+    }
+
+    #[test]
+    fn owner_must_give_reason_before_personal_data() {
+        let e = env();
+        let (tok, csrf) = setup_and_login(&e, "mudur", "sahip-parola-12");
+        let r = e.p.handle(&get("/kullanicilar", &[("q", "ayşe")], &tok));
+        assert!(r.body.contains("Gerekçe gerekli") && r.body.contains("value=\"/kullanicilar?q=ay%C5%9Fe\"")); // dönüş adresi korunur
+        assert!(e.p.handle(&get("/kullanici", &[("tel", "905334553132")], &tok)).body.contains("Gerekçe gerekli"));
+        assert!(!e.p.handle(&get("/talep", &[], &tok)).body.contains("Gerekçe gerekli")); // boş talep formu açılır
+        assert!(e.p.handle(&get("/talep", &[("tur", "telefon"), ("deger", "05334553132")], &tok)).body.contains("Gerekçe gerekli"));
+        assert!(!e.p.handle(&get("/oturumlar", &[], &tok)).body.contains("Gerekçe gerekli")); // bağlı cihazlar gerekçesiz
+        // kısa gerekçe olmaz; başka siteye dönüş olmaz
+        let r = e.p.handle(&req("POST", "/gerekce", &[("csrf", &csrf), ("gerekce", "bakıyorum"), ("donus", "/kullanicilar")], Some(&tok)));
+        assert!(r.body.contains("10-200 karakter"));
+        let r = e.p.handle(&req("POST", "/gerekce", &[("csrf", &csrf), ("gerekce", "Emniyet / savcılık talebi"), ("donus", "//kotu.example/x")], Some(&tok)));
+        assert_eq!(loc(&r), "/");
+        let r = e.p.handle(&req("POST", "/gerekce", &[("csrf", &csrf), ("gerekce", "Emniyet / savcılık talebi"), ("donus", "/kullanicilar?q=ay%C5%9Fe")], Some(&tok)));
+        assert_eq!(loc(&r), "/kullanicilar?q=ay%C5%9Fe");
+        assert!(!e.p.handle(&get("/kullanicilar", &[("q", "ayşe")], &tok)).body.contains("Gerekçe gerekli"));
+        let audit = std::fs::read_to_string(e.root.join("5651/gunluk/2026-09-29/denetim.csv")).unwrap();
+        assert!(audit.contains("PANEL_GEREKCE") && audit.contains("ara=ayşe gerekce=Emniyet / savcılık talebi")); // her bakışa eklenir
+        // süre dolunca yeniden sorulur
+        e.p.oturumlar.set_gerekce(&tok, "eski gerekçe metni", 1_790_705_134.0 - 1.0);
+        assert!(e.p.handle(&get("/kullanicilar", &[], &tok)).body.contains("Gerekçe gerekli"));
+        // admin muaf
+        let (atok, _) = setup_and_login(&e, "admin", "hizmet-parola-1");
+        assert!(!e.p.handle(&get("/kullanicilar", &[], &atok)).body.contains("Gerekçe gerekli"));
     }
 }

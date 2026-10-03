@@ -202,6 +202,8 @@ pub struct Oturum {
     pub rol: Rol,
     pub csrf: String,
     expires: f64,
+    /// Kafe sahibinin kişisel veriye bakma gerekçesi ve geçerlilik sonu (panel/gerekce.rs)
+    pub gerekce: Option<(String, f64)>,
 }
 
 /// Bellekte oturumlar (panel yeniden başlayınca herkes yeniden girer). 12 saat geçerli.
@@ -213,7 +215,7 @@ impl Oturumlar {
 
     pub fn create(&self, user: &str, rol: Rol, now: f64) -> String {
         let token = ortak::random_hex(32);
-        let o = Oturum { user: user.into(), rol, csrf: ortak::random_hex(16), expires: now + Self::TTL };
+        let o = Oturum { user: user.into(), rol, csrf: ortak::random_hex(16), expires: now + Self::TTL, gerekce: None };
         let mut m = self.0.lock().unwrap_or_else(|e| e.into_inner());
         m.retain(|_, v| v.expires > now);
         m.insert(token.clone(), o);
@@ -222,6 +224,12 @@ impl Oturumlar {
 
     pub fn get(&self, token: &str, now: f64) -> Option<Oturum> {
         self.0.lock().unwrap_or_else(|e| e.into_inner()).get(token).filter(|o| o.expires > now).cloned()
+    }
+
+    pub fn set_gerekce(&self, token: &str, text: &str, until: f64) {
+        if let Some(o) = self.0.lock().unwrap_or_else(|e| e.into_inner()).get_mut(token) {
+            o.gerekce = Some((text.to_string(), until));
+        }
     }
 
     pub fn remove(&self, token: &str) {
