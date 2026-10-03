@@ -26,23 +26,26 @@ uygula() { wg-quick strip wg0 > "$DIR/.strip"; wg syncconf wg0 "$DIR/.strip"; rm
 
 case "${1:-}" in
 kur)
+	# Tekrar çalıştırmak güvenli: anahtarlar ve eşler korunur, eksik adımlar tamamlanır.
+	# Ubuntu 26.04'te wg-quick kısıtlı çalışır (PostUp içinden sysctl / nft "permission denied") → ikisi ayrı yerde.
 	[ $# -eq 2 ] || kullanim
-	[ -f "$CONF" ] && { echo "$CONF zaten var" >&2; exit 1; }
 	apt-get install -y --no-install-recommends wireguard-tools nftables >/dev/null
 	umask 077
 	mkdir -p "$DIR"
-	wg genkey > "$DIR/sunucu.key"
+	[ -s "$DIR/sunucu.key" ] || wg genkey > "$DIR/sunucu.key"
 	wg pubkey < "$DIR/sunucu.key" > "$DIR/sunucu.pub"
 	echo "$2:$PORT" > "$DIR/uc-nokta"
-	cat > "$CONF" <<EOF
+	if [ -f "$CONF" ]; then
+		sed -i '/^PostUp/d;/^PostDown/d' "$CONF"
+	else
+		cat > "$CONF" <<EOF
 # WifiCorrect uzak erişim sunucusu (wg-sunucu.sh). Eşler aşağıya eklenir.
 [Interface]
 Address = $NET.1/24
 ListenPort = $PORT
 PrivateKey = $(cat "$DIR/sunucu.key")
-PostUp = sysctl -qw net.ipv4.ip_forward=1; nft -f $DIR/yonlendirme.nft
-PostDown = nft delete table inet wfc_vpn 2>/dev/null || true
 EOF
+	fi
 	cat > "$DIR/yonlendirme.nft" <<EOF
 table inet wfc_vpn
 delete table inet wfc_vpn
@@ -57,8 +60,31 @@ table inet wfc_vpn {
 	}
 }
 EOF
-	systemctl enable --now wg-quick@wg0
-	echo "Kuruldu. Güvenlik duvarında UDP $PORT açık olmalı."
+	# yönlendirme kalıcı açık; tünel kuralı kendi servisiyle (açılışta da)
+	echo 'net.ipv4.ip_forward = 1' > /etc/sysctl.d/99-wificorrect-vpn.conf
+	sysctl -q -p /etc/sysctl.d/99-wificorrect-vpn.conf
+	cat > /etc/systemd/system/wificorrect-vpn.service <<EOF
+[Unit]
+Description=WifiCorrect uzak erisim yonlendirme kurali (yalnizca yonetici -> cihaz)
+After=network-pre.target
+Before=wg-quick@wg0.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/sbin/nft -f $DIR/yonlendirme.nft
+ExecStop=/usr/sbin/nft delete table inet wfc_vpn
+
+[Install]
+WantedBy=multi-user.target
+EOF
+	systemctl daemon-reload
+	systemctl enable wificorrect-vpn.service wg-quick@wg0 >/dev/null 2>&1
+	systemctl restart wificorrect-vpn.service wg-quick@wg0
+	# Ubuntu güvenlik duvarı (ufw) açıksa WireGuard portu
+	if command -v ufw >/dev/null 2>&1 && ufw status | grep -q "Status: active"; then ufw allow $PORT/udp >/dev/null; echo "ufw: $PORT/udp açıldı"; fi
+	echo "Kuruldu: $(systemctl is-active wg-quick@wg0) / yönlendirme kuralı $(systemctl is-active wificorrect-vpn.service)"
+	echo "Modemde UDP $PORT bu sunucuya yönlendirilmeli."
 	echo "Sunucu: $2:$PORT   Açık anahtar: $(cat "$DIR/sunucu.pub")"
 	;;
 yonetici-ekle)
