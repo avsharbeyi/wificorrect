@@ -151,9 +151,79 @@ pub fn metin_html(text: &str) -> String {
         .split("\n\n")
         .map(str::trim)
         .filter(|p| !p.is_empty())
-        .map(|p| format!("<p>{}</p>", html_escape(p).replace('\n', "<br>")))
+        .map(|p| {
+            // tamamı büyük harf satırlar (madde başlıkları) kalın
+            let lines: Vec<String> = p
+                .lines()
+                .map(|l| {
+                    let e = html_escape(l.trim());
+                    let heading = l.chars().any(char::is_alphabetic) && !l.chars().any(char::is_lowercase);
+                    if heading { format!("<strong>{e}</strong>") } else { e }
+                })
+                .collect();
+            format!("<p>{}</p>", lines.join("<br>"))
+        })
         .collect();
     if paras.is_empty() { "<p class=\"not\">Metin henüz eklenmedi.</p>".into() } else { paras.concat() }
+}
+
+fn tr_lower(s: &str) -> String {
+    s.chars().map(|c| match c { 'I' => "ı".into(), 'İ' => "i".into(), c => c.to_lowercase().to_string() }).collect()
+}
+
+fn tr_upper(s: &str) -> String {
+    s.chars().map(|c| match c { 'i' => "İ".into(), 'ı' => "I".into(), c => c.to_uppercase().to_string() }).collect()
+}
+
+/// Ada uygun ek (ünlü uyumu): 'y' yönelme (’ye/’ya), 'n' tamlayan (’nin/’ın/’un/’ün), 'd' ayrılma (’den/’tan).
+/// ponytail: yazımdan çıkarılır; okunuşu farklı yabancı adlarda (Starbucks) ek yazıma göre olur.
+fn ek(name: &str, kind: char) -> String {
+    const UNLU: &str = "aeıioöuü";
+    let l: Vec<char> = tr_lower(name).chars().filter(|c| c.is_alphabetic()).collect();
+    let last_v = l.iter().rev().find(|c| UNLU.contains(**c)).copied().unwrap_or('e');
+    let ends_vowel = l.last().is_some_and(|c| UNLU.contains(*c));
+    let a2 = if "aıou".contains(last_v) { 'a' } else { 'e' };
+    let i4 = match last_v {
+        'a' | 'ı' => 'ı',
+        'o' | 'u' => 'u',
+        'ö' | 'ü' => 'ü',
+        _ => 'i',
+    };
+    match kind {
+        'y' => format!("{}{a2}", if ends_vowel { "y" } else { "" }),
+        'n' => format!("{}{i4}n", if ends_vowel { "n" } else { "" }),
+        _ => format!("{}{a2}n", if l.last().is_some_and(|c| "çfhkpsşt".contains(*c)) { 't' } else { 'd' }),
+    }
+}
+
+/// Metindeki "İŞLETMECİ" → kafe adı; kesme işaretinden sonraki ek ada göre yeniden kurulur, büyük harfli yerde ad da büyük.
+pub fn isletme_yerlestir(text: &str, name: &str) -> String {
+    const KELIME: &str = "İŞLETMECİ";
+    let mut out = String::with_capacity(text.len());
+    let mut rest = text;
+    while let Some(i) = rest.find(KELIME) {
+        out.push_str(&rest[..i]);
+        rest = &rest[i + KELIME.len()..];
+        let apos = rest.chars().next().filter(|c| *c == '’' || *c == '\'');
+        let suffix: String = apos.map_or(String::new(), |a| rest[a.len_utf8()..].chars().take_while(|c| c.is_alphabetic()).collect());
+        let upper = !suffix.is_empty() && !suffix.chars().any(char::is_lowercase);
+        let kind = match tr_lower(&suffix).chars().next() {
+            Some('y') => Some('y'),
+            Some('n') => Some('n'),
+            Some('d') | Some('t') => Some('d'),
+            _ => None,
+        };
+        match (apos, kind) {
+            (Some(a), Some(k)) => {
+                let e = ek(name, k);
+                out.push_str(&if upper { format!("{}{a}{}", tr_upper(name), tr_upper(&e)) } else { format!("{name}{a}{e}") });
+                rest = &rest[a.len_utf8() + suffix.len()..];
+            }
+            _ => out.push_str(name),
+        }
+    }
+    out.push_str(rest);
+    out
 }
 
 /// Sabit sürede karşılaştırma (zamanlama ile kod tahminini önler).
@@ -228,9 +298,9 @@ impl Portal {
             ("riza_checked", if f("riza") == "1" { "checked".into() } else { String::new() }),
             ("riza_required", if self.cfg.portal.acik_riza_zorunlu { "required".into() } else { String::new() }),
             ("riza_not", if self.cfg.portal.acik_riza_zorunlu { String::new() } else { " (İsteğe bağlı)".into() }),
-            ("acik_riza_html", metin_html(&self.cfg.portal.acik_riza)),
-            ("sozlesme_html", metin_html(&self.cfg.portal.sozlesme)),
-            ("aydinlatma_html", metin_html(&self.cfg.portal.aydinlatma)),
+            ("acik_riza_html", metin_html(&isletme_yerlestir(&self.cfg.portal.acik_riza, &self.cfg.main.site_name))),
+            ("sozlesme_html", metin_html(&isletme_yerlestir(&self.cfg.portal.sozlesme, &self.cfg.main.site_name))),
+            ("aydinlatma_html", metin_html(&isletme_yerlestir(&self.cfg.portal.aydinlatma, &self.cfg.main.site_name))),
             ("dst", dst.to_string()),
             ("ulke_secenekleri_html", ulkeler::options_html(form.get("ulke").map_or("TR", String::as_str))),
         ];
@@ -1006,7 +1076,9 @@ mod tests {
         let t = setup(|_| {});
         let page = t.p.render(&t.p.form_page(&Form::new(), vec![], ""));
         assert!(page.contains("Açık Rıza Metni") && page.contains("İnternet Kullanım Sözleşmesi") && page.contains("Aydınlatma Metni"));
-        assert!(page.contains("(İsteğe bağlı)") && page.matches("Metin henüz eklenmedi").count() == 3);
+        assert!(page.contains("(İsteğe bağlı)") && page.matches("Metin henüz eklenmedi").count() == 2); // sözleşme ürünle gelir
+        assert!(page.contains("<strong>SON KULLANICI LİSANS SÖZLEŞMESİ</strong>") && page.contains("Bocafe’nin uhdesindeki") && !page.contains("İŞLETMECİ"));
+        assert!(page.contains("<strong>9. BOCAFE’NİN YETKİ VE İMKÂNLARI</strong>"));
         // rıza işaretlenmeden de girilir, kayda riza=0 yazılır
         let pg = t.p.send_code(IP, Some(MAC), &form(&[("ad", "Ayşe"), ("soyad", "Yılmaz"), ("telefon", "05334553132"), ("sozlesme", "1")]));
         assert_eq!(pg.tpl, "kod");
@@ -1023,5 +1095,16 @@ mod tests {
         assert!(t.p.render(&pg).contains("name=\"riza\" value=\"1\"  required"));
         let pg = t.p.send_code(IP, Some(MAC), &form(&[("ad", "Ayşe"), ("soyad", "Yılmaz"), ("telefon", "05334553132"), ("sozlesme", "1"), ("riza", "1")]));
         assert_eq!(pg.tpl, "kod");
+    }
+
+    #[test]
+    fn business_name_with_turkish_suffixes() {
+        let t = "İŞLETMECİ’ye, İŞLETMECİ’nin, İŞLETMECİ’den; İŞLETMECİ, 9. İŞLETMECİ’NİN";
+        assert_eq!(isletme_yerlestir(t, "Bocafe"), "Bocafe’ye, Bocafe’nin, Bocafe’den; Bocafe, 9. BOCAFE’NİN");
+        assert_eq!(isletme_yerlestir(t, "Starbucks"), "Starbucks’a, Starbucks’un, Starbucks’tan; Starbucks, 9. STARBUCKS’UN");
+        assert_eq!(isletme_yerlestir(t, "Kahvecim"), "Kahvecim’e, Kahvecim’in, Kahvecim’den; Kahvecim, 9. KAHVECİM’İN");
+        // ponytail: iyelik ekli adlarda doğrusu ’na/’ndan; yazımdan ayırt edilemez, genel kural uygulanır
+        assert_eq!(isletme_yerlestir(t, "Kahve Dünyası"), "Kahve Dünyası’ya, Kahve Dünyası’nın, Kahve Dünyası’dan; Kahve Dünyası, 9. KAHVE DÜNYASI’NIN");
+        assert_eq!(isletme_yerlestir("Göztepe Kafe’ye", "X"), "Göztepe Kafe’ye"); // başka kelimeye dokunmaz
     }
 }

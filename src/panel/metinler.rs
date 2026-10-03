@@ -20,7 +20,12 @@ fn field<'a>(cfg: &'a Config, key: &str) -> &'a str {
 
 impl Panel {
     pub(super) fn metinler(&self, cfg: &Config, req: &Req, o: &Oturum) -> Resp {
-        let mut body = format!("<form method=\"post\" action=\"/portal-metinleri\">{}", csrf_input(o));
+        let mut body = format!(
+            "<p class=\"not\">Metinlerde geçen <b>İŞLETMECİ</b> kelimesi giriş sayfasında kafe adıyla (şu an: <b>{}</b>) değişir; ekleri ada göre ayarlanır (İŞLETMECİ’nin → {}’nin gibi).</p><form method=\"post\" action=\"/portal-metinleri\">{}",
+            h(&cfg.main.site_name),
+            h(&cfg.main.site_name),
+            csrf_input(o)
+        );
         for (key, title, note) in METINLER {
             body.push_str(&format!(
                 "<section class=\"kart\"><h2><label for=\"{key}\" style=\"margin:0\">{}</label></h2><p class=\"not\">{}</p>\

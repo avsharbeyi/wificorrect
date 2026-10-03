@@ -152,14 +152,27 @@ impl Default for Backup {
 }
 
 /// Giriş sayfasındaki metinler (panel → Portal metinleri). Boş başlar; kafe sahibi ya da admin yazar.
-/// Düz metin: boş satır paragraf ayırır. Açık rıza KVKK gereği varsayılan olarak isteğe bağlı (hizmet rızaya bağlanamaz).
-#[derive(Serialize, Deserialize, Clone, Debug, Default)]
+/// Düz metin: boş satır paragraf ayırır; "İŞLETMECİ" giriş sayfasında kafe adıyla değişir (ekleri uyumlu).
+/// Açık rıza KVKK gereği varsayılan olarak isteğe bağlı (hizmet rızaya bağlanamaz).
+/// Sözleşme varsayılanı ürünle gelir (2026-10-03, kullanıcı metni); aydınlatma ve açık rıza boş başlar.
+#[derive(Serialize, Deserialize, Clone, Debug)]
 #[serde(default)]
 pub struct PortalMetin {
     pub aydinlatma: String,
     pub acik_riza: String,
     pub sozlesme: String,
     pub acik_riza_zorunlu: bool,
+}
+
+impl Default for PortalMetin {
+    fn default() -> Self {
+        PortalMetin {
+            aydinlatma: String::new(),
+            acik_riza: String::new(),
+            sozlesme: include_str!("sablon/sozlesme.txt").trim().to_string(),
+            acik_riza_zorunlu: false,
+        }
+    }
 }
 
 /// Yasaklı siteler / kelimeler (src/filtre.rs). Boş başlar; kafe sahibi panelden yazar.

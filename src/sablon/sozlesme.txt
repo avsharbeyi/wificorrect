@@ -1,0 +1,79 @@
+SON KULLANICI LİSANS SÖZLEŞMESİ
+
+LÜTFEN BU METNİ DİKKATLE İNCELEYİNİZ.
+
+İŞBU METİN, wificorrect PROFESYONEL SERVİSİNDEN İSTİFADE EDEBİLMENİZ İÇİN BELİRLENEN ESASLARI BARINDIRMAKTADIR.
+
+wificorrect PROFESYONEL SERVİSİNİ KULLANMAK AMACIYLA İŞBU LİSANS MUTABAKATINI TASDİK EDEREK METNİ OKUDUĞUNUZU, MUHTEVİYATINI KAVRADIĞINIZI VE MADDELERİNİ TAAHHÜT ETTİĞİNİZİ BEYAN ETMEKTESİNİZ.
+
+1. FİKRİ VE SINAİ HAKLAR
+wificorrect Profesyonel servisi vasıtasıyla yahut bu servis nezdinde temin edilen tüm materyaller, yazılımlar ve ürünler üzerindeki gayrimaddi hakların mülkiyeti İŞLETMECİ’ye, iştiraklerine ve/veya altyapı/içerik sağlayıcılarına aittir. Bahse konu servisin tahsisi, ABONE’ye sunulan eser ve içerikler hususunda herhangi bir mülkiyet ya da tekel hakkı bahşetmez. ABONE; İŞLETMECİ’nin veya üçüncü taraf paydaşların fikri mülkiyet haklarını zedeleyecek yahut ihlal edecek hiçbir girişimde bulunamaz.
+
+ABONE; wificorrect Profesyonel ile sağlanan içerik unsurlarını tahrif etmemeyi, dönüştürmemeyi, tercüme etmemeyi, ticarete konu etmemeyi; bu ürünlerden türev çalışmalar üretmemeyi, yapısını bozmamayı, servis dahilindeki hiçbir görseli, işitsel kaydı, melodiyi veya besteyi sözleşme gayesi haricinde kullanmamayı, deşifre/tersine mühendislik (reverse engineering) süreçlerine tabi tutmamayı ve herhangi bir mecrada yaymamayı taahhüt eder.
+
+ABONE, sistem dahilinde yahut üçüncü şahıslara ait unsurlarda bulunan telif, marka veya tescil işaretlerini kaldıramaz, maskeleyemez ve başkalaştıramaz.
+
+ABONE, kullanım sürecinde muttali olduğu İŞLETMECİ’ye veya iş ortaklarına dair her neviden ticari sırrı ve gizli bilgiyi muhafaza etmekle, hiçbir surette üçüncü kişilere aktarmamakla mükelleftir.
+
+Bu kural ve yükümlülüklerin çiğnenmesi halinde doğacak zararların, üçüncü kişi tazminat taleplerinin, yargılama ve avukatlık masraflarının yegane mesulü ABONE olacak; bahse konu giderleri derhal karşılayacaktır. İŞLETMECİ’nin uhdesindeki tüm know-how, marka, patent, ticari itibar ve malvarlığı hakları saklıdır.
+
+2. SORUMLULUĞUN KAPSAMI VE SINIRLILIKLAR
+İŞLETMECİ, wificorrect Profesyonel altyapısının işletimi esnasında ABONE donanım veya yazılımlarında teşekkül edebilecek aksaklıklardan ve hasarlardan sorumlu tutulamaz. ABONE, sistemin işleyişi esnasında ortaya çıkabilecek olası tüm rizikoları bilerek ve üstlenerek bağlantı kurduğunu kabul eder. Servisin kesintiye uğraması, çalışmaması, hatalı işlemesi veya harici müdahaleler neticesinde oluşacak veri kayıpları ve donanım tahribatları tamamen ABONE’nin mesuliyetindedir; İŞLETMECİ bu durumlarda hiçbir taahhüt ve güvence sunmamaktadır. Bağlantı sürecinde antivirüs ve güvenlik duvarı gibi lüzumlu tedbirleri almak münhasıran ABONE’nin yükümlülüğündedir.
+
+İŞLETMECİ, sunulan veri ve içeriklerin kullanımı sonucu tecelli edebilecek dolaylı veya dolaysız hasarlardan, doküman ve yazılım bozulmalarından katiyen mesul tutulamaz. İŞLETMECİ, sunulan hizmetin kapsamını ve niteliğini dilediği vakit tek taraflı tasarrufuyla tadil etme yetkisine haizdir.
+
+3. HİZMETİN KULLANIM ESASLARI VE GENEL KURALLAR
+ABONE, wificorrect aracılığıyla kablosuz ağ bağlantısı hizmeti temin etmektedir. İŞLETMECİ’nin tahsis ettiği faydalanma yetkisi yalnızca bireysel istifade içindir; ABONE bu erişim üzerinden doğrudan ya da dolaylı hiçbir maddi kazanç veya menfaat sağlayamaz.
+
+ABONE, yararlanacağı paketin nitelik ve limitlerine www.wificorrect.com web adresinden veya duyurulacak diğer mecralardan erişebilecektir. Sözleşmenin tasdikiyle bu şartlar da kayıtsız şartsız onaylanmış addedilir. İŞLETMECİ, abonelik dahilindeki koşulları ve paket kapsamlarını dilediği vakit güncelleme hakkını saklı tutar.
+
+ABONE; altyapı sağlayıcıların ve İŞLETMECİ’nin platformlarına, sunucularına, yazılımlarına hasar verecek, erişilebilirliği sekteye uğratacak, sisteme haddinden fazla yük bindirecek veya başkalarının hizmet almasını engelleyecek müdahalelerden kaçınmak zorundadır.
+
+Bu mutabakatla sağlanan yetkiler, İŞLETMECİ’nin yazılı muvafakati temin edilmeksizin ivazsız dahi olsa başkalarına devredilemez, kiralanamaz, tahsis edilemez veya pazarlanamaz.
+
+4. MÜCBİR HALLER
+Mevzuat uyarınca mücbir sebep kabul edilen durumlarda İŞLETMECİ, taahhütlerini geç ifa etmekten, eksik icra etmekten yahut ifa edememekten ötürü sorumlu tutulamaz. Bu neviden gecikmeler temerrüt yahut kusur sayılmayacağı gibi İŞLETMECİ aleyhine hiçbir tazminat yükümlülüğü doğurmaz. Doğal afetler, toplumsal kargaşalar, harpler, salgınlar, grevler, telekomünikasyon ve internet şebekesi arızaları, kamusal kısıtlamalar, enerji kesintileri ile sert hava muhalefeti gibi İŞLETMECİ’nin iradesi haricinde vuku bulan ve makul önlemlerle engellenemeyen vakalar bu kapsamdadır.
+
+5. MEVZUATA UYGUNLUK VE ABONE SORUMLULUĞU
+ABONE; servisi cari ulusal ve beynelmilel yasalara, genel ahlaka, kamu nizamına ve internet etiğine riayet ederek kullanacağını beyan eder. 5651 Sayılı İnternet Ortamında Yapılan Yayınların Düzenlenmesi ve Bu Yayınlar Yoluyla İşlenen Suçlarla Mücadele Edilmesi Hakkında Kanun, BTK düzenlemeleri ve ilgili idari mevzuat uyarınca sinyal tespiti, trafik kaydı ve izleme süreçlerine dair hukuki mesuliyetin kendisinde olduğunu kabul ve taahhüt eder. Ağın kanuna aykırı, hileli, gayrimeşru maksatlarla kullanımı, bu fiillere ortak olunması veya üçüncü taraflara olanak sağlanması yasaktır; bahse konu hallerde İŞLETMECİ sözleşmeyi tek taraflı feshedebilir.
+
+ABONE, sisteme bağlanmak adına uyumlu bilgisayar ve mobil aygıtları bizzat temin etmekle mükelleftir. Tahsis edilen kimlik bilgileri ve parolaların muhafazasından tek başına sorumludur. Bilgilerin zayi olması veya yetkisiz ellere geçmesi durumunda derhal İŞLETMECİ’ye ihbarda bulunmalıdır; aksine durumlarda doğacak adli, cezai ve mali mesuliyet ABONE’ye aittir. Sisteme tanımlanan rumuz ve adların üçüncü kişilerin unvan, tescilli marka veya telif haklarına tecavüz etmemesi zorunludur; ihlal halinde İŞLETMECİ üyeliği askıya alabilir veya iptal edebilir, doğacak tüm tazminatları ABONE rücuen karşılar. Soru ve destek gereksinimleri için www.wificorrect.com adresi incelenebilir veya 0216 565 39 86 numaralı wificorrect Danışma/Destek Hattı aranabilir.
+
+6. BAĞLANTI İMKÂNLARI VE ERİŞİM SÜREKLİLİĞİ
+ABONE; DSL, ISDN veya benzeri alternatif teknik metotlarla ve uygun şahsi cihazlarıyla sisteme erişir. İŞLETMECİ arayüz veya donanım uyumsuzluklarından mesul tutulamaz.
+
+Sistemin kesintisiz devrede kalması amacıyla azami teknik gayret sarf edilir; mamafih planlı altyapı bakımları, şebeke onarımları, arızalar ve harici operatör aksaklıkları sebebiyle erişim kesintileri yaşanabilir. Bu durumlardan dolayı İŞLETMECİ’den hiçbir maddi veya manevi talepte bulunulamaz. İŞLETMECİ; siber güvenlik ve altyapı bütünlüğünü korumak adına bağlantıyı gerekli gördüğünde sınırlandırma salahiyetine sahiptir.
+
+7. TAZMİN VE RÜCU ŞARTLARI
+Ağ üzerinden dinlenen veya izlenen ses, video ve her türlü dijital içeriğin lisans ve telif izinlerinin mevcudiyetini denetlemek ve bunları temin etmek ABONE’nin uhdesindedir.
+
+Sözleşme hükümlerine aykırı davranılması halinde ortaya çıkacak tüm zararlar, üçüncü şahıs iddiaları ve davalarından münferiden ABONE sorumludur. İŞLETMECİ bu ihtilaflarda taraf addedilemez. ABONE’nin ihlali nedeniyle İŞLETMECİ üçüncü taraflara herhangi bir tazminat, harç veya ceza ödemek durumunda kalırsa, bu tutarları ve ferilerini ABONE’ye rücu hakkını haizdir; ABONE bahse konu meblağları nakden ve defaten ödeyeceğini gayrikabili rücu kabul eder.
+
+8. KİŞİSEL VERİLERİN İŞLENMESİ VE KORUNMASI
+wificorrect, 6698 sayılı Kişisel Verilerin Korunması Kanunu ve 5809 sayılı Elektronik Haberleşme Kanunu başta olmak üzere mevzuat kararlarına tam uyum göstermeyi taahhüt eder. Sözleşmenin icrası esnasında elde edilen veriler yasal çerçeveye ve Kurul prensiplerine uygun işlenir ve kanuni müddetlerce depolanır.
+
+ABONE; hizmet kalitesinin artırılması, istatistiki ve muhasebesel süreçler, pazarlama araştırmaları, özel teklif, duyuru, promosyon ve analiz faaliyetleri doğrultusunda kişisel verilerinin işlenmesine, kaydedilmesine ve değerlendirilmesine muvafakat eder. Bu süreçler portaldaki Aydınlatma Metni çerçevesinde yönetilir.
+
+9. İŞLETMECİ’NİN YETKİ VE İMKÂNLARI
+İŞLETMECİ, servis altyapısında gerekli gördüğü teknolojileri belirleme, yenileme ve işletim/bakım işlerini alt yüklenicilere ve iş ortaklarına tevdi etme serbestisine sahiptir.
+
+Sistem üzerinden yönlendirilen üçüncü taraf web portalları veya veri kaynaklarına dair bağlantılar yalnızca kolaylık gayesiyle sunulmuş olup İŞLETMECİ bu sitelerin güvenilirliğine veya içeriğine dair kefalet vermez; buralardan doğacak zararlardan mesul değildir.
+
+Mevzuat ve adli kararlar tahtında verilerin dinlenmesi, incelenmesi, tespiti ve muhafazası gerekirse ABONE bu durumdan dolayı İŞLETMECİ’den hiçbir hak ve tazminat isteyemez.
+
+Taraflar hukuken tamamen bağımsız olup aralarında istihdam, temsil yahut ortaklık bağı mevcut değildir.
+
+10. ŞARTLARIN GÜNCELLENMESİ
+İŞLETMECİ, işbu metin hükümlerini dilediği vakit tek yanlı iradesiyle revize edebilir. Yenilenen koşullar, portala veya web sayfasına yüklendiği andan itibaren bağlayıcılık kazanır. ABONE’nin siteyi kullanmaya devam etmesi tadilatı benimsediği manasına gelir. ABONE tek taraflı irade beyanıyla metin maddelerini değiştiremez.
+
+11. YÜRÜRLÜK, SÜRE VE FESİH KOŞULLARI
+ABONE’nin dijital onay butonunu tıklamasıyla metin süresiz olarak yürürlüğe girer. ABONE, şartlara riayetsizlik sebebiyle meydana gelecek her türlü zararı derhal tazmin etmekle mükelleftir.
+
+Hizmetten yararlanma salahiyeti; ABONE’nin üyeliği sonlandırması, sözleşme ihlalleri veya temel aboneliğin nihayete ermesi durumlarında kendiliğinden düşer. İŞLETMECİ, bildirime lüzum görmeksizin sözleşmeyi ve kullanım hakkını her an sona erdirme selahiyetini saklı tutar.
+
+12. UYUŞMAZLIKLARIN HALLİ VE MÜTEFERRİK HÜKÜMLER
+Sözleşmenin tatbikinde Türkiye Cumhuriyeti Kanunları geçerlidir. İhtilafların giderilmesinde İstanbul Merkez Adliyesi Mahkemeleri ve İcra Daireleri münhasıran yetkilidir. Bir maddenin geçersizleşmesi metnin kalan kısımlarının bağlayıcılığını ortadan kaldırmaz.
+
+İŞLETMECİ, uhdesindeki hak ve mükellefiyetleri üçüncü şahıslara temlik etme veya devretme hakkına sahiptir. Bir haktan yazılı feragat edilmedikçe vazgeçilmiş sayılmaz; bir ihlale göz yumulması sonraki ihlallerden de feragat edildiği şeklinde yorumlanamaz.
+
+Uyuşmazlıklarda HMK m. 193 çerçevesinde İŞLETMECİ’nin ticari defterleri, log ve veri tabanı kayıtları, elektronik postaları, fatura ve ses kayıtları münhasır ve kesin delil niteliğindedir.
