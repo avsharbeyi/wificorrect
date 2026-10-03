@@ -1,4 +1,4 @@
-//! Panel: giriş sayfasındaki Aydınlatma, Açık rıza ve İnternet Kullanım Sözleşmesi metinleri (iki rol de yazar).
+//! Panel: giriş sayfasındaki Aydınlatma, Açık rıza ve İnternet Kullanıcı Sözleşmesi metinleri (iki rol de yazar).
 //! Düz metin; boş satır paragraf ayırır. Kaydedince portal yeniden başlar (bağlı müşteriler düşmez).
 
 use super::*;
@@ -7,7 +7,7 @@ const EN_FAZLA: usize = 20_000;
 const METINLER: &[(&str, &str, &str)] = &[
     ("aydinlatma", "KVKK Aydınlatma Metni", "Giriş sayfasında \"KVKK Aydınlatma Metni\" bağlantısıyla açılır; onay kutusu yoktur. \"* \" ile başlayan satırlar madde listesi olur."),
     ("acik_riza", "Açık Rıza Metni", "Giriş sayfasında onay kutusunun yanında yazar; işaretlemek zorunludur. [vergi levhası unvanı] yerine Ayarlar'daki işletme unvanı yazılır."),
-    ("sozlesme", "İnternet Kullanım Sözleşmesi", "Müşteri \"okudum, kabul ediyorum\" kutusunu işaretlemeden devam edemez."),
+    ("sozlesme", "İnternet Kullanıcı Sözleşmesi", "Müşteri \"okudum, kabul ediyorum\" kutusunu işaretlemeden devam edemez."),
 ];
 
 fn field<'a>(cfg: &'a Config, key: &str) -> &'a str {

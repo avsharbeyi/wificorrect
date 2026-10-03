@@ -447,7 +447,7 @@ impl Portal {
             errors.push(("hata_telefon", msg.to_string()));
         }
         if get("sozlesme") != "1" {
-            errors.push(("hata_sozlesme", "Devam etmek için İnternet Kullanım Sözleşmesi'ni kabul edin.".to_string()));
+            errors.push(("hata_sozlesme", "Devam etmek için İnternet Kullanıcı Sözleşmesi'ni kabul edin.".to_string()));
         }
         if get("riza") != "1" {
             errors.push(("hata_riza", "Devam etmek için açık rıza onayını işaretleyin.".to_string()));
