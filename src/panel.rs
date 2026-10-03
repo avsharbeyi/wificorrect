@@ -1,13 +1,13 @@
 //! Yönetim paneli — 8a çekirdek (eski panel.py; RUST_YENIDEN_YAZIM.md A10, A14).
 //! https://<cihaz>:8443, yalnızca dükkân ağından (güvenlik duvarı + burada müşteri ağı reddi).
-//! İki rol: hizmet sağlayıcı (her şey) ve kafe sahibi (SMS API bilgileri ve deneme modu hariç bütün ayarlar).
+//! İki rol (2026-10-03 kullanıcı kararı): kafe sahibi her şeyi görür ve yönetir (kayıtlar dahil);
+//! admin (hizmet sağlayıcı) ondan yalnızca "API ayarları" sayfasıyla ayrılır (SMS sağlayıcısı bilgileri, deneme modu).
 //! 8b (kayıtlar, resmi talep) ve 8c (portlar, Wi-Fi) sonraki adımlar.
 
 use crate::ayar::{Config, Device};
 use crate::hesap::{self, Hesaplar, LoginGuard, Oturum, Oturumlar, Rol};
 use crate::ortak::{self, Row, Runner};
 use crate::portal::{html_escape as h, parse_query, substitute, Form};
-use crate::ulkeler;
 use std::collections::{BTreeSet, HashMap};
 use std::io::Read;
 use std::process::ExitCode;
@@ -110,8 +110,8 @@ struct Alan {
     label: &'static str,
     tur: Tur,
     grup: &'static str,
-    /// true: yalnızca hizmet sağlayıcı görür ve değiştirir (SMS API bilgileri, deneme modu)
-    hizmet: bool,
+    /// true: "API ayarları" sayfasında, yalnızca admin görür ve değiştirir (SMS sağlayıcısı, deneme modu)
+    api: bool,
 }
 
 fn chars_ok(s: &str, max: usize, allowed: fn(char) -> bool) -> bool {
@@ -138,29 +138,29 @@ fn backup_target_ok(s: &str) -> bool {
 }
 
 const ALANLAR: &[Alan] = &[
-    Alan { key: "main.site_name", label: "Kafe adı", tur: Tur::Metin(|s| !s.trim().is_empty() && chars_ok(s, 40, |c| c.is_alphanumeric() || " .-'&".contains(c))), grup: "İşletme", hizmet: false },
-    Alan { key: "main.session_minutes", label: "Oturum süresi (dakika; 43200 = 30 gün)", tur: Tur::Sayi(30, 64800), grup: "İşletme", hizmet: false },
-    Alan { key: "main.max_devices_per_phone", label: "Bir telefona en fazla cihaz", tur: Tur::Sayi(1, 10), grup: "İşletme", hizmet: false },
-    Alan { key: "limits.sms_per_phone_15min", label: "Numara başına SMS / 15 dk", tur: Tur::Sayi(1, 20), grup: "SMS sınırları", hizmet: false },
-    Alan { key: "limits.sms_per_phone_day", label: "Numara başına SMS / gün", tur: Tur::Sayi(1, 50), grup: "SMS sınırları", hizmet: false },
-    Alan { key: "limits.sms_per_mac_hour", label: "Cihaz başına SMS / saat", tur: Tur::Sayi(1, 50), grup: "SMS sınırları", hizmet: false },
-    Alan { key: "limits.sms_global_day", label: "Günlük toplam SMS tavanı", tur: Tur::Sayi(1, 100_000), grup: "SMS sınırları", hizmet: false },
-    Alan { key: "sms.mock", label: "Deneme modu (SMS gerçekten gönderilmez)", tur: Tur::Evet, grup: "SMS sağlayıcısı", hizmet: true },
-    Alan { key: "sms.provider", label: "Türk numaraları için sağlayıcı", tur: Tur::Secim(&[("netgsm", "NetGSM"), ("twilio", "Twilio")]), grup: "SMS sağlayıcısı", hizmet: true },
-    Alan { key: "netgsm.usercode", label: "Kullanıcı kodu (abone no)", tur: Tur::Metin(|s| chars_ok(s, 32, |c| c.is_ascii_alphanumeric())), grup: "NetGSM", hizmet: true },
-    Alan { key: "netgsm.msgheader", label: "Mesaj başlığı", tur: Tur::Metin(|s| chars_ok(s, 11, |c| c.is_ascii_alphanumeric() || " .-".contains(c))), grup: "NetGSM", hizmet: true },
-    Alan { key: "netgsm.appkey", label: "Uygulama anahtarı (opsiyonel)", tur: Tur::Metin(|s| chars_ok(s, 64, |c| c.is_ascii_alphanumeric() || c == '-')), grup: "NetGSM", hizmet: true },
-    Alan { key: "netgsm.password", label: "API şifresi", tur: Tur::Gizli(|s| (1..=64).contains(&s.len()) && s.bytes().all(|b| (0x21..=0x7e).contains(&b))), grup: "NetGSM", hizmet: true },
-    Alan { key: "twilio.enabled", label: "Yabancı numaralara Twilio ile gönder", tur: Tur::Evet, grup: "Twilio", hizmet: true },
-    Alan { key: "twilio.account_sid", label: "Account SID (AC…)", tur: Tur::Metin(|s| prefixed_hex(s, "AC")), grup: "Twilio", hizmet: true },
-    Alan { key: "twilio.verify_sid", label: "Verify Service SID (VA…)", tur: Tur::Metin(|s| prefixed_hex(s, "VA")), grup: "Twilio", hizmet: true },
-    Alan { key: "twilio.auth_token", label: "Auth Token", tur: Tur::Gizli(|s| s.len() == 32 && s.bytes().all(|b| b.is_ascii_hexdigit())), grup: "Twilio", hizmet: true },
-    Alan { key: "twilio.api_key_sid", label: "API Key SID (SK…, opsiyonel)", tur: Tur::Metin(|s| prefixed_hex(s, "SK")), grup: "Twilio", hizmet: true },
-    Alan { key: "twilio.api_key_secret", label: "API Key Secret (opsiyonel)", tur: Tur::Gizli(|s| s.len() == 32 && s.bytes().all(|b| b.is_ascii_alphanumeric())), grup: "Twilio", hizmet: true },
-    Alan { key: "main.retention_days", label: "Kayıtlar cihazda kaç gün saklansın (730 = 2 yıl)", tur: Tur::Sayi(30, 3650), grup: "Kayıt ve yedek", hizmet: false },
-    Alan { key: "backup.enabled", label: "Uzak yedek açık", tur: Tur::Evet, grup: "Kayıt ve yedek", hizmet: false },
-    Alan { key: "backup.target", label: "Yedek hedefi (kullanici@sunucu:)", tur: Tur::Metin(backup_target_ok), grup: "Kayıt ve yedek", hizmet: false },
-    Alan { key: "backup.ssh", label: "SSH komutu", tur: Tur::Metin(|s| s.starts_with("ssh") && chars_ok(s, 120, |c| c.is_ascii_alphanumeric() || " ./_=-".contains(c))), grup: "Kayıt ve yedek", hizmet: false },
+    Alan { key: "main.site_name", label: "Kafe adı", tur: Tur::Metin(|s| !s.trim().is_empty() && chars_ok(s, 40, |c| c.is_alphanumeric() || " .-'&".contains(c))), grup: "İşletme", api: false },
+    Alan { key: "main.session_minutes", label: "Oturum süresi (dakika; 43200 = 30 gün)", tur: Tur::Sayi(30, 64800), grup: "İşletme", api: false },
+    Alan { key: "main.max_devices_per_phone", label: "Bir telefona en fazla cihaz", tur: Tur::Sayi(1, 10), grup: "İşletme", api: false },
+    Alan { key: "limits.sms_per_phone_15min", label: "Numara başına SMS / 15 dk", tur: Tur::Sayi(1, 20), grup: "SMS sınırları", api: false },
+    Alan { key: "limits.sms_per_phone_day", label: "Numara başına SMS / gün", tur: Tur::Sayi(1, 50), grup: "SMS sınırları", api: false },
+    Alan { key: "limits.sms_per_mac_hour", label: "Cihaz başına SMS / saat", tur: Tur::Sayi(1, 50), grup: "SMS sınırları", api: false },
+    Alan { key: "limits.sms_global_day", label: "Günlük toplam SMS tavanı", tur: Tur::Sayi(1, 100_000), grup: "SMS sınırları", api: false },
+    Alan { key: "sms.mock", label: "Deneme modu (SMS gerçekten gönderilmez)", tur: Tur::Evet, grup: "SMS sağlayıcısı", api: true },
+    Alan { key: "sms.provider", label: "Türk numaraları için sağlayıcı", tur: Tur::Secim(&[("netgsm", "NetGSM"), ("twilio", "Twilio")]), grup: "SMS sağlayıcısı", api: true },
+    Alan { key: "netgsm.usercode", label: "Kullanıcı kodu (abone no)", tur: Tur::Metin(|s| chars_ok(s, 32, |c| c.is_ascii_alphanumeric())), grup: "NetGSM", api: true },
+    Alan { key: "netgsm.msgheader", label: "Mesaj başlığı", tur: Tur::Metin(|s| chars_ok(s, 11, |c| c.is_ascii_alphanumeric() || " .-".contains(c))), grup: "NetGSM", api: true },
+    Alan { key: "netgsm.appkey", label: "Uygulama anahtarı (opsiyonel)", tur: Tur::Metin(|s| chars_ok(s, 64, |c| c.is_ascii_alphanumeric() || c == '-')), grup: "NetGSM", api: true },
+    Alan { key: "netgsm.password", label: "API şifresi", tur: Tur::Gizli(|s| (1..=64).contains(&s.len()) && s.bytes().all(|b| (0x21..=0x7e).contains(&b))), grup: "NetGSM", api: true },
+    Alan { key: "twilio.enabled", label: "Yabancı numaralara Twilio ile gönder", tur: Tur::Evet, grup: "Twilio", api: true },
+    Alan { key: "twilio.account_sid", label: "Account SID (AC…)", tur: Tur::Metin(|s| prefixed_hex(s, "AC")), grup: "Twilio", api: true },
+    Alan { key: "twilio.verify_sid", label: "Verify Service SID (VA…)", tur: Tur::Metin(|s| prefixed_hex(s, "VA")), grup: "Twilio", api: true },
+    Alan { key: "twilio.auth_token", label: "Auth Token", tur: Tur::Gizli(|s| s.len() == 32 && s.bytes().all(|b| b.is_ascii_hexdigit())), grup: "Twilio", api: true },
+    Alan { key: "twilio.api_key_sid", label: "API Key SID (SK…, opsiyonel)", tur: Tur::Metin(|s| prefixed_hex(s, "SK")), grup: "Twilio", api: true },
+    Alan { key: "twilio.api_key_secret", label: "API Key Secret (opsiyonel)", tur: Tur::Gizli(|s| s.len() == 32 && s.bytes().all(|b| b.is_ascii_alphanumeric())), grup: "Twilio", api: true },
+    Alan { key: "main.retention_days", label: "Kayıtlar cihazda kaç gün saklansın (730 = 2 yıl)", tur: Tur::Sayi(30, 3650), grup: "Kayıt ve yedek", api: false },
+    Alan { key: "backup.enabled", label: "Uzak yedek açık", tur: Tur::Evet, grup: "Kayıt ve yedek", api: false },
+    Alan { key: "backup.target", label: "Yedek hedefi (kullanici@sunucu:)", tur: Tur::Metin(backup_target_ok), grup: "Kayıt ve yedek", api: false },
+    Alan { key: "backup.ssh", label: "SSH komutu", tur: Tur::Metin(|s| s.starts_with("ssh") && chars_ok(s, 120, |c| c.is_ascii_alphanumeric() || " ./_=-".contains(c))), grup: "Kayıt ve yedek", api: false },
 ];
 
 fn b(v: bool) -> String {
@@ -226,15 +226,16 @@ fn set_field(c: &mut Config, key: &str, v: &str) {
     }
 }
 
-fn visible(rol: Rol) -> impl Iterator<Item = &'static Alan> {
-    ALANLAR.iter().filter(move |a| rol == Rol::Hizmet || !a.hizmet)
+/// Ayarlar sayfasının (api=false) ya da API ayarları sayfasının (api=true) alanları.
+fn fields(api: bool) -> impl Iterator<Item = &'static Alan> {
+    ALANLAR.iter().filter(move |a| a.api == api)
 }
 
-/// Formdan değişiklikler: (anahtar, eski, yeni). Rolün göremediği alanlar yok sayılır; boş gizli alan = değişmez.
-fn validate(rol: Rol, form: &Form, cfg: &Config) -> Result<Vec<(&'static str, String, String)>, HashMap<&'static str, String>> {
+/// Formdan değişiklikler: (anahtar, eski, yeni). Sayfada olmayan alanlar yok sayılır; boş gizli alan = değişmez.
+fn validate(api: bool, form: &Form, cfg: &Config) -> Result<Vec<(&'static str, String, String)>, HashMap<&'static str, String>> {
     let mut changes = vec![];
     let mut errors = HashMap::new();
-    for a in visible(rol) {
+    for a in fields(api) {
         let old = get_field(cfg, a.key);
         let raw = form.get(a.key).map(|s| s.trim().to_string());
         let new = match a.tur {
@@ -309,8 +310,9 @@ const MENU: &[(&str, &str, bool)] = &[
     ("/yasak", "Yasaklı cihazlar", false),
     ("/izinli", "İzinli cihazlar", false),
     ("/ayarlar", "Ayarlar", false),
+    ("/api", "API ayarları", true),
     ("/sistem", "Sistem", false),
-    ("/hesaplar", "Hesaplar", true),
+    ("/hesaplar", "Hesaplar", false),
     ("/sifre", "Şifremi değiştir", false),
 ];
 
@@ -412,8 +414,11 @@ impl Panel {
             ("POST", "/izinli/ekle") => self.liste_ekle(cfg, req, &o, false, now),
             ("POST", "/yasak/kaldir") => self.liste_kaldir(cfg, req, &o, true),
             ("POST", "/izinli/kaldir") => self.liste_kaldir(cfg, req, &o, false),
-            ("GET", "/ayarlar") => self.ayarlar(&cfg, req, &o, &HashMap::new()),
-            ("POST", "/ayarlar") => self.ayarlar_post(cfg, req, &o),
+            ("GET", "/ayarlar") => self.ayarlar(&cfg, req, &o, &HashMap::new(), false),
+            ("POST", "/ayarlar") => self.ayarlar_post(cfg, req, &o, false),
+            ("GET", "/api") if hizmet => self.ayarlar(&cfg, req, &o, &HashMap::new(), true),
+            ("POST", "/api") if hizmet => self.ayarlar_post(cfg, req, &o, true),
+            ("GET" | "POST", "/api") => text(403, "Bu sayfa yalnızca admin'e açık."),
             ("GET", "/sistem") => self.sistem(&cfg, req, &o, ""),
             ("POST", "/sistem/gun-kapat") => {
                 let out = crate::muhur::gun_kapat(&cfg, None, now, false);
@@ -432,11 +437,10 @@ impl Panel {
             }
             ("GET", "/sifre") => self.sifre(&cfg, req, &o, ""),
             ("POST", "/sifre") => self.sifre_post(&cfg, req, &o),
-            ("GET", "/hesaplar") if hizmet => self.hesaplar_sayfa(&cfg, req, &o),
-            ("POST", "/hesaplar/ekle") if hizmet => self.hesap_ekle(&cfg, req, &o),
-            ("POST", "/hesaplar/sil") if hizmet => self.hesap_sil(&cfg, req, &o),
-            ("POST", "/hesaplar/sifirla") if hizmet => self.hesap_sifirla(&cfg, req, &o),
-            ("GET" | "POST", "/hesaplar" | "/hesaplar/ekle" | "/hesaplar/sil" | "/hesaplar/sifirla") => text(403, "Bu sayfa yalnızca hizmet sağlayıcıya açık."),
+            ("GET", "/hesaplar") => self.hesaplar_sayfa(&cfg, req, &o),
+            ("POST", "/hesaplar/ekle") => self.hesap_ekle(&cfg, req, &o),
+            ("POST", "/hesaplar/sil") => self.hesap_sil(&cfg, req, &o),
+            ("POST", "/hesaplar/sifirla") => self.hesap_sifirla(&cfg, req, &o),
             _ => text(404, "Sayfa bulunamadı"),
         }
     }
@@ -570,19 +574,12 @@ impl Panel {
     }
 
     fn oturumlar_sayfa(&self, cfg: &Config, req: &Req, o: &Oturum, now: f64) -> Resp {
-        let hizmet = o.rol == Rol::Hizmet;
         let mut list: Vec<_> = ortak::load_sessions(&cfg.main.state_root).into_iter().collect();
         list.sort_by(|a, b| a.1.start_epoch.total_cmp(&b.1.start_epoch));
         let rows: Vec<Vec<String>> = list
             .iter()
             .map(|(mac, s)| {
-                // Kafe sahibi kişisel veriyi açık görmez (KVKK): numara ve ad maskeli
-                let (tel, ad) = if hizmet {
-                    (format!("+{}", s.phone), format!("{} {}", s.ad, s.soyad))
-                } else {
-                    let ilk = |x: &str| x.chars().next().map_or(String::new(), |c| format!("{c}***"));
-                    (ulkeler::mask_phone(&s.phone), format!("{} {}", ilk(&s.ad), ilk(&s.soyad)))
-                };
+                let (tel, ad) = (format!("+{}", s.phone), format!("{} {}", s.ad, s.soyad));
                 let left = ((s.expires_epoch - now).max(0.0) as u64) / 60;
                 vec![
                     h(&tel),
@@ -688,10 +685,10 @@ impl Panel {
     }
 
     // --- ayarlar
-    fn ayarlar(&self, cfg: &Config, req: &Req, o: &Oturum, errors: &HashMap<&str, String>) -> Resp {
+    fn ayarlar(&self, cfg: &Config, req: &Req, o: &Oturum, errors: &HashMap<&str, String>, api: bool) -> Resp {
         let form = if errors.is_empty() { None } else { Some(&req.form) };
         let mut groups: Vec<(&str, String)> = vec![];
-        for a in visible(o.rol) {
+        for a in fields(api) {
             let cur = form.and_then(|f| f.get(a.key).cloned()).unwrap_or_else(|| get_field(cfg, a.key));
             let id = a.key.replace('.', "-");
             let err = errors.get(a.key).map_or(String::new(), |e| format!("<div class=\"hata\">{}</div>", h(e)));
@@ -723,11 +720,11 @@ impl Panel {
                 None => groups.push((a.grup, html)),
             }
         }
-        let mut body = format!("<form method=\"post\" action=\"/ayarlar\">{}", csrf_input(o));
+        let mut body = format!("<form method=\"post\" action=\"{}\">{}", if api { "/api" } else { "/ayarlar" }, csrf_input(o));
         for (g, inner) in &groups {
             body.push_str(&format!("<section class=\"kart grup\"><h2>{}</h2><div>{inner}</div></section>", h(g)));
         }
-        if o.rol == Rol::Sahip {
+        if !api {
             let st = |missing: bool| if missing { "eksik" } else { "tanımlı" };
             let twilio_missing = !cfg.twilio_missing().is_empty();
             body.push_str(&format!(
@@ -740,31 +737,32 @@ impl Panel {
             ));
         }
         body.push_str("<div class=\"kaydet\"><button>Kaydet</button><p class=\"not\">Kaydedince giriş sayfası yeni ayarlarla yeniden başlatılır; bağlı müşteriler düşmez.</p></div></form>");
-        self.page(cfg, req, Some(o), "Ayarlar", &body)
+        self.page(cfg, req, Some(o), if api { "API ayarları" } else { "Ayarlar" }, &body)
     }
 
-    fn ayarlar_post(&self, mut cfg: Config, req: &Req, o: &Oturum) -> Resp {
-        let changes = match validate(o.rol, &req.form, &cfg) {
+    fn ayarlar_post(&self, mut cfg: Config, req: &Req, o: &Oturum, api: bool) -> Resp {
+        let back = if api { "/api" } else { "/ayarlar" };
+        let changes = match validate(api, &req.form, &cfg) {
             Ok(c) => c,
             Err(errors) => {
                 let req2 = Req { query: [("m".to_string(), "Geçersiz değerler var, düzeltip tekrar kaydedin.".to_string()), ("e".to_string(), "1".to_string())].into(), ..clone_req(req) };
-                return self.ayarlar(&cfg, &req2, o, &errors);
+                return self.ayarlar(&cfg, &req2, o, &errors, api);
             }
         };
         if changes.is_empty() {
-            return redirect("/ayarlar", Some(("Değişiklik yok.", false)));
+            return redirect(back, Some(("Değişiklik yok.", false)));
         }
         for (k, _, new) in &changes {
             set_field(&mut cfg, k, new);
         }
         if let Err(e) = cfg.save(&self.cfg_path) {
-            return redirect("/ayarlar", Some((&e, true)));
+            return redirect(back, Some((&e, true)));
         }
         for (k, old, new) in &changes {
             self.audit(&cfg, req, Some(o), "PANEL_AYAR", &describe(k, old, new));
         }
         let ok = (self.runner)(&cmd(&["systemctl", "restart", "wificorrect-portal"]));
-        redirect("/ayarlar", Some(if ok { ("Ayarlar kaydedildi. Giriş sayfası yeniden başlatıldı.", false) } else { ("Ayarlar kaydedildi ama giriş sayfası yeniden başlatılamadı!", true) }))
+        redirect(back, Some(if ok { ("Ayarlar kaydedildi. Giriş sayfası yeniden başlatıldı.", false) } else { ("Ayarlar kaydedildi ama giriş sayfası yeniden başlatılamadı!", true) }))
     }
 
     // --- sistem
@@ -830,35 +828,54 @@ impl Panel {
         let rows: Vec<Vec<String>> = list
             .iter()
             .map(|(u, a)| {
-                vec![
-                    h(u),
-                    h(a.rol.ad()),
+                let actions = if *u == o.user || self.may_manage(o, u).is_err() {
+                    String::new()
+                } else {
                     format!(
                         "<form class=\"ic\" method=\"post\" action=\"/hesaplar/sifirla\">{}<input type=\"hidden\" name=\"kullanici\" value=\"{}\">\
                          <input class=\"kisa\" type=\"password\" name=\"parola\" placeholder=\"yeni parola\" autocomplete=\"new-password\" required>\
                          <button class=\"ikincil\">Parolayı sıfırla</button></form> {}",
                         csrf_input(o),
                         h(u),
-                        if u == hesap::ADMIN { String::new() } else { post_button(o, "/hesaplar/sil", "Sil", &[("kullanici", u)], "tehlike") }
-                    ),
-                ]
+                        post_button(o, "/hesaplar/sil", "Sil", &[("kullanici", u)], "tehlike")
+                    )
+                };
+                vec![h(u), h(a.rol.ad()), actions]
             })
             .collect();
         let body = format!(
             "<form class=\"satir kart\" method=\"post\" action=\"/hesaplar/ekle\">{}\
              <div><label for=\"k\">Kullanıcı adı</label><input type=\"text\" id=\"k\" name=\"kullanici\" required></div>\
-             <div><label for=\"r\">Rol</label><select id=\"r\" name=\"rol\"><option value=\"sahip\">Kafe sahibi</option><option value=\"hizmet\">Hizmet sağlayıcı</option></select></div>\
-             <div><label for=\"p\">Parola</label><input type=\"password\" id=\"p\" name=\"parola\" autocomplete=\"new-password\" required></div><button>Hesap ekle</button></form>{}",
+             {}<div><label for=\"p\">Parola</label><input type=\"password\" id=\"p\" name=\"parola\" autocomplete=\"new-password\" required></div><button>Hesap ekle</button></form>{}",
             csrf_input(o),
+            // API yetkili hesabı yalnızca admin açabilir
+            if o.rol == Rol::Hizmet {
+                "<div><label for=\"r\">Rol</label><select id=\"r\" name=\"rol\"><option value=\"sahip\">Kafe sahibi</option><option value=\"hizmet\">Hizmet sağlayıcı</option></select></div>"
+            } else {
+                ""
+            },
             table(&["Kullanıcı", "Rol", ""], &rows, "Hesap yok")
         );
         self.page(cfg, req, Some(o), "Hesaplar", &body)
     }
 
+    /// admin'e panelden kimse dokunamaz (parolası konsoldan ya da kendi "Şifremi değiştir"inden);
+    /// kafe sahibi API yetkili (hizmet sağlayıcı) hesapları yönetemez.
+    fn may_manage(&self, o: &Oturum, user: &str) -> Result<(), &'static str> {
+        if user == hesap::ADMIN {
+            return Err("admin hesabı panelden değiştirilemez.");
+        }
+        let target = self.hesaplar.load().ok().and_then(|m| m.get(user).map(|h| h.rol));
+        if o.rol == Rol::Sahip && target == Some(Rol::Hizmet) {
+            return Err("Bu hesabı yalnızca admin yönetebilir.");
+        }
+        Ok(())
+    }
+
     fn hesap_ekle(&self, cfg: &Config, req: &Req, o: &Oturum) -> Resp {
         let user = req.form.get("kullanici").map_or("", String::as_str).trim().to_lowercase();
         let pw = req.form.get("parola").cloned().unwrap_or_default();
-        let rol = if req.form.get("rol").is_some_and(|r| r == "hizmet") { Rol::Hizmet } else { Rol::Sahip };
+        let rol = if o.rol == Rol::Hizmet && req.form.get("rol").is_some_and(|r| r == "hizmet") { Rol::Hizmet } else { Rol::Sahip };
         if let Some(e) = hesap::username_problem(&user).or_else(|| hesap::password_problem(&pw)) {
             return redirect("/hesaplar", Some((e, true)));
         }
@@ -876,6 +893,9 @@ impl Panel {
         if user == o.user {
             return redirect("/hesaplar", Some(("Kendi hesabınızı silemezsiniz.", true)));
         }
+        if let Err(e) = self.may_manage(o, &user) {
+            return redirect("/hesaplar", Some((e, true)));
+        }
         match self.hesaplar.remove(&user) {
             Ok(()) => {
                 self.oturumlar.remove_user(&user, None);
@@ -889,7 +909,7 @@ impl Panel {
     fn hesap_sifirla(&self, cfg: &Config, req: &Req, o: &Oturum) -> Resp {
         let user = req.form.get("kullanici").cloned().unwrap_or_default();
         let pw = req.form.get("parola").cloned().unwrap_or_default();
-        if let Some(e) = hesap::password_problem(&pw) {
+        if let Some(e) = hesap::password_problem(&pw).or_else(|| self.may_manage(o, &user).err()) {
             return redirect("/hesaplar", Some((e, true)));
         }
         match self.hesaplar.set_password(&user, &pw) {
@@ -1129,10 +1149,19 @@ mod tests {
         let e = env();
         let (tok, csrf) = setup_and_login(&e, "mudur", "sahip-parola-12");
         assert_eq!(e.p.handle(&req("POST", "/ayarlar", &[("main.site_name", "X")], Some(&tok))).status, 403); // CSRF yok
-        assert_eq!(e.p.handle(&req("GET", "/hesaplar", &[], Some(&tok))).status, 403); // sahip hesapları göremez
+        assert_eq!(e.p.handle(&req("GET", "/api", &[], Some(&tok))).status, 403); // API ayarları yalnızca admin
+        assert_eq!(e.p.handle(&req("POST", "/api", &[("csrf", &csrf), ("sms.mock", "0")], Some(&tok))).status, 403);
+        let page = e.p.handle(&req("GET", "/", &[], Some(&tok))).body;
+        assert!(!page.contains("href=\"/api\"") && page.contains("href=\"/hesaplar\""));
+        let page = e.p.handle(&req("GET", "/hesaplar", &[], Some(&tok))).body;
+        assert!(page.contains(">admin<") && !page.contains("name=\"rol\"") && page.matches(">Sil<").count() == 0);
+        let r = e.p.handle(&req("POST", "/hesaplar/sifirla", &[("csrf", &csrf), ("kullanici", "admin"), ("parola", "ele-gecirme-1")], Some(&tok)));
+        assert!(loc(&r).contains("e=1") && e.p.hesaplar.verify("admin", "ele-gecirme-1").is_none()); // admin'e dokunulamaz
+        e.p.handle(&req("POST", "/hesaplar/ekle", &[("csrf", &csrf), ("kullanici", "garson"), ("rol", "hizmet"), ("parola", "garson-parola-1")], Some(&tok)));
+        assert_eq!(e.p.hesaplar.verify("garson", "garson-parola-1"), Some(Rol::Sahip)); // sahip API yetkisi veremez
         let page = e.p.handle(&req("GET", "/ayarlar", &[], Some(&tok))).body;
         assert!(!page.contains("netgsm.password") && !page.contains("sms.mock") && page.contains("NetGSM bilgileri"));
-        // sahip API alanlarını elle gönderse de yok sayılır
+        // API alanları Ayarlar formundan elle gönderilse de yok sayılır
         let r = e.p.handle(&req("POST", "/ayarlar", &[("csrf", &csrf), ("main.session_minutes", "1440"), ("netgsm.password", "kotu-sifre"), ("sms.mock", "0")], Some(&tok)));
         assert_eq!(r.status, 303);
         let c = Config::load(&e.p.cfg_path).unwrap();
@@ -1147,24 +1176,24 @@ mod tests {
         let page = e.p.handle(&req("GET", "/hesaplar", &[], Some(&tok))).body;
         assert!(page.contains(">admin<") && page.matches(">Sil<").count() == 1); // admin silinemez, sahip silinebilir
         assert!(e.p.handle(&req("POST", "/hesaplar/sil", &[("csrf", &csrf), ("kullanici", "admin")], Some(&tok))).headers.iter().any(|(_, v)| v.contains("e=1")));
-        let page = e.p.handle(&req("GET", "/ayarlar", &[], Some(&tok))).body;
-        assert!(page.contains("name=\"netgsm.password\"") && page.contains("sms.mock"));
-        let r = e.p.handle(&req("POST", "/ayarlar", &[("csrf", &csrf), ("netgsm.password", "gizli-sifre-1"), ("netgsm.usercode", "8503027084"), ("sms.mock", "1"), ("main.max_devices_per_phone", "99")], Some(&tok)));
-        assert!(r.status == 200 && r.body.contains("1 ile 10 arasında")); // geçersiz → hiçbir şey kaydedilmez
+        let page = e.p.handle(&req("GET", "/api", &[], Some(&tok))).body;
+        assert!(page.contains("name=\"netgsm.password\"") && page.contains("sms.mock") && !page.contains("main.session_minutes"));
+        let r = e.p.handle(&req("POST", "/api", &[("csrf", &csrf), ("netgsm.password", "gizli-sifre-1"), ("netgsm.usercode", "8503027084"), ("sms.mock", "1"), ("netgsm.msgheader", "COK-UZUN-BASLIK-OLMAZ")], Some(&tok)));
+        assert!(r.status == 200 && r.body.contains("Geçersiz değer")); // geçersiz → hiçbir şey kaydedilmez
         assert_eq!(Config::load(&e.p.cfg_path).unwrap().netgsm.password, "");
-        e.p.handle(&req("POST", "/ayarlar", &[("csrf", &csrf), ("netgsm.password", "gizli-sifre-1"), ("netgsm.usercode", "8503027084"), ("sms.mock", "1")], Some(&tok)));
+        e.p.handle(&req("POST", "/api", &[("csrf", &csrf), ("netgsm.password", "gizli-sifre-1"), ("netgsm.usercode", "8503027084"), ("sms.mock", "1")], Some(&tok)));
         let c = Config::load(&e.p.cfg_path).unwrap();
         assert_eq!((c.netgsm.password.as_str(), c.netgsm.usercode.as_str()), ("gizli-sifre-1", "8503027084"));
-        let page = e.p.handle(&req("GET", "/ayarlar", &[], Some(&tok))).body;
+        let page = e.p.handle(&req("GET", "/api", &[], Some(&tok))).body;
         assert!(!page.contains("gizli-sifre-1") && page.contains("(tanımlı)")); // şifre geri gösterilmez
-        e.p.handle(&req("POST", "/ayarlar", &[("csrf", &csrf), ("netgsm.password", ""), ("sms.mock", "1")], Some(&tok))); // boş = aynı
+        e.p.handle(&req("POST", "/api", &[("csrf", &csrf), ("netgsm.password", ""), ("sms.mock", "1")], Some(&tok))); // boş = aynı
         assert_eq!(Config::load(&e.p.cfg_path).unwrap().netgsm.password, "gizli-sifre-1");
         let audit = std::fs::read_to_string(e.root.join("5651/gunluk/2026-09-29/denetim.csv")).unwrap();
         assert!(audit.contains("netgsm.password: *** → ***") && !audit.contains("gizli-sifre-1"));
     }
 
     #[test]
-    fn ban_closes_session_and_masking() {
+    fn ban_closes_session_and_owner_sees_people() {
         let e = env();
         let (tok, csrf) = setup_and_login(&e, "mudur", "sahip-parola-12");
         let state = Config::load(&e.p.cfg_path).unwrap().main.state_root;
@@ -1175,7 +1204,7 @@ mod tests {
         });
         ortak::save_sessions(&state, &ses).unwrap();
         let page = e.p.handle(&req("GET", "/oturumlar", &[], Some(&tok))).body;
-        assert!(page.contains("+90 5XX XXX XX 32") && page.contains("A*** Y***") && !page.contains("Ayşe"));
+        assert!(page.contains("+905334553132") && page.contains("Ayşe Yılmaz")); // kafe sahibi de açık görür
         let r = e.p.handle(&req("POST", "/yasak/ekle", &[("csrf", &csrf), ("mac", "AA-BB-CC-DD-EE-01"), ("ad", "sorunlu")], Some(&tok)));
         assert_eq!(r.status, 303);
         assert_eq!(Config::load(&e.p.cfg_path).unwrap().ban[0].mac, "aa:bb:cc:dd:ee:01");

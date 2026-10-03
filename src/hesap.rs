@@ -18,9 +18,9 @@ const DUMMY_SALT: &str = "00000000000000000000000000000000";
 #[derive(Serialize, Deserialize, Clone, Copy, PartialEq, Debug)]
 #[serde(rename_all = "lowercase")]
 pub enum Rol {
-    /// Hizmet sağlayıcı (Göztepe): her şey, SMS API bilgileri, kayıtlar
+    /// Hizmet sağlayıcı (admin): kafe sahibinin her şeyi + API ayarları (SMS sağlayıcısı, deneme modu)
     Hizmet,
-    /// Kafe sahibi: SMS API bilgileri ve deneme modu hariç bütün ayarlar; kişisel kayıtları görmez
+    /// Kafe sahibi: API ayarları hariç her şey (kayıtlar dahil)
     Sahip,
 }
 
