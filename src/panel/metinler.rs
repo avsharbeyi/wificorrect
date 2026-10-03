@@ -6,7 +6,7 @@ use super::*;
 const EN_FAZLA: usize = 20_000;
 const METINLER: &[(&str, &str, &str)] = &[
     ("aydinlatma", "KVKK Aydınlatma Metni", "Giriş sayfasında \"KVKK Aydınlatma Metni\" bağlantısıyla açılır; onay kutusu yoktur. \"* \" ile başlayan satırlar madde listesi olur."),
-    ("acik_riza", "Açık Rıza Metni", "Müşteri onay kutusunu işaretler. KVKK gereği hizmet açık rızaya bağlanamaz; aşağıdaki kutuyla zorunlu yapılabilir (hukukçunuza danışın)."),
+    ("acik_riza", "Açık Rıza Metni", "Giriş sayfasında onay kutusunun yanında yazar; işaretlemek zorunludur. [vergi levhası unvanı] yerine Ayarlar'daki işletme unvanı yazılır."),
     ("sozlesme", "İnternet Kullanım Sözleşmesi", "Müşteri \"okudum, kabul ediyorum\" kutusunu işaretlemeden devam edemez."),
 ];
 
@@ -21,7 +21,7 @@ fn field<'a>(cfg: &'a Config, key: &str) -> &'a str {
 impl Panel {
     pub(super) fn metinler(&self, cfg: &Config, req: &Req, o: &Oturum) -> Resp {
         let mut body = format!(
-            "<p class=\"not\">Metinlerde geçen <b>İŞLETMECİ</b> kelimesi giriş sayfasında kafe adıyla (şu an: <b>{}</b>) değişir; ekleri ada göre ayarlanır (İŞLETMECİ’nin → {}’nin gibi).</p><form method=\"post\" action=\"/portal-metinleri\">{}",
+            "<p class=\"not\">Metinlerde geçen <b>İŞLETMECİ</b> kelimesi giriş sayfasında işletme adıyla (şu an: <b>{}</b>) değişir; ekleri ada göre ayarlanır (İŞLETMECİ’nin → {}’nin gibi).</p><form method=\"post\" action=\"/portal-metinleri\">{}",
             h(&cfg.main.site_name),
             h(&cfg.main.site_name),
             csrf_input(o)
@@ -35,12 +35,10 @@ impl Panel {
                 h(field(cfg, key))
             ));
         }
-        body.push_str(&format!(
-            "<label class=\"secim\"><input type=\"checkbox\" name=\"acik_riza_zorunlu\" value=\"1\"{}> Açık rıza zorunlu olsun</label>\
-             <div class=\"kaydet\" style=\"padding-left:0\"><button>Kaydet</button><p class=\"not\">Boş bırakılan metin giriş sayfasında \
-             \"Metin henüz eklenmedi\" olarak görünür. Kaydedince giriş sayfası yeniden başlatılır; bağlı müşteriler düşmez.</p></div></form>",
-            if cfg.portal.acik_riza_zorunlu { " checked" } else { "" }
-        ));
+        body.push_str(
+            "<div class=\"kaydet\" style=\"padding-left:0\"><button>Kaydet</button><p class=\"not\">Kaydedince giriş sayfası yeniden başlatılır; \
+             bağlı müşteriler düşmez.</p></div></form>",
+        );
         self.page(cfg, req, Some(o), "Portal metinleri", &body)
     }
 
@@ -59,11 +57,6 @@ impl Panel {
                     _ => cfg.portal.sozlesme = v,
                 }
             }
-        }
-        let zorunlu = req.form.get("acik_riza_zorunlu").is_some_and(|v| v == "1");
-        if zorunlu != cfg.portal.acik_riza_zorunlu {
-            changed.push(format!("acik_riza_zorunlu={zorunlu}"));
-            cfg.portal.acik_riza_zorunlu = zorunlu;
         }
         if changed.is_empty() {
             return redirect("/portal-metinleri", Some(("Değişiklik yok.", false)));

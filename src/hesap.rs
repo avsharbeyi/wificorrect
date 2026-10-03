@@ -1,7 +1,7 @@
 //! Panel hesapları, giriş kilidi ve oturumlar (eski panel_auth.py; RUST_YENIDEN_YAZIM.md A10, A14).
 //! Hesap dosyası `/etc/wificorrect/hesaplar.json` (600). Parola özeti PBKDF2-HMAC-SHA256, kullanıcı başına tuz.
 //! Hizmet sağlayıcı hesabı sabit `admin` (root gibi; parolasını yalnızca hizmet sağlayıcı bilir, `wificorrect ctl admin-parola`).
-//! Kafe sahibi hesabı ilk açılıştaki kurulum ekranında oluşturulur; varsayılan sahip hesabı yok.
+//! İşletme sahibi hesabı ilk açılıştaki kurulum ekranında oluşturulur; varsayılan sahip hesabı yok.
 
 use crate::ortak;
 use serde::{Deserialize, Serialize};
@@ -20,7 +20,7 @@ const DUMMY_SALT: &str = "00000000000000000000000000000000";
 pub enum Rol {
     /// Hizmet sağlayıcı (admin): kafe sahibinin her şeyi + API ayarları (SMS sağlayıcısı, deneme modu)
     Hizmet,
-    /// Kafe sahibi: API ayarları hariç her şey (kayıtlar dahil)
+    /// İşletme sahibi: API ayarları hariç her şey (kayıtlar dahil)
     Sahip,
 }
 
@@ -28,7 +28,7 @@ impl Rol {
     pub fn ad(self) -> &'static str {
         match self {
             Rol::Hizmet => "Hizmet sağlayıcı",
-            Rol::Sahip => "Kafe sahibi",
+            Rol::Sahip => "İşletme sahibi",
         }
     }
 }

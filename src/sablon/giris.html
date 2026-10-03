@@ -13,8 +13,7 @@
 <div class="tel"><select name="ulke" aria-label="Ülke kodu">$ulke_secenekleri_html</select><input type="tel" id="telefon" name="telefon" value="$telefon" inputmode="tel" autocomplete="tel-national" placeholder="5XX XXX XX XX" maxlength="20" required></div>
 <p class="hata">$hata_telefon</p>
 <div class="madde">
-<label class="onay"><input type="checkbox" name="riza" value="1" $riza_checked $riza_required><span>Açık Rıza Metni'ni okudum, kişisel verilerimin bu metinde belirtilen şekilde işlenmesine açık rıza veriyorum.$riza_not</span></label>
-<details><summary>Açık Rıza Metni</summary><div class="metin">$acik_riza_html</div></details>
+<label class="onay"><input type="checkbox" name="riza" value="1" $riza_checked required><span>$riza_metni_html</span></label>
 <p class="hata">$hata_riza</p>
 </div>
 <div class="madde">

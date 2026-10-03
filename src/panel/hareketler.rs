@@ -96,7 +96,7 @@ impl Panel {
                 vec![
                     format!("<a href=\"/panel-hareketleri?kim={}&amp;gun={gun}&amp;kisisel=1\">{}</a>", pct(u), h(u)),
                     h(match rol.as_str() {
-                        "sahip" => "Kafe sahibi",
+                        "sahip" => "İşletme sahibi",
                         "hizmet" => "Hizmet sağlayıcı",
                         _ => "?",
                     }),

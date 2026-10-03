@@ -131,6 +131,12 @@ fn prefixed_hex(s: &str, prefix: &str) -> bool {
     s.is_empty() || (s.len() == prefix.len() + 32 && s.starts_with(prefix) && s[prefix.len()..].bytes().all(|b| b.is_ascii_hexdigit()))
 }
 
+/// Vergi levhası unvanı: 2-200 karakter; harf, rakam, boşluk ve . , - ' & ( ) / "
+fn unvan_ok(s: &str) -> bool {
+    let n = s.trim().chars().count();
+    (2..=200).contains(&n) && s.chars().all(|c| c.is_alphanumeric() || " .,-'&()/\"".contains(c))
+}
+
 fn backup_target_ok(s: &str) -> bool {
     if s.is_empty() {
         return true;
@@ -147,7 +153,8 @@ fn backup_target_ok(s: &str) -> bool {
 }
 
 const ALANLAR: &[Alan] = &[
-    Alan { key: "main.site_name", label: "Kafe adı", tur: Tur::Metin(|s| !s.trim().is_empty() && chars_ok(s, 40, |c| c.is_alphanumeric() || " .-'&".contains(c))), grup: "İşletme", api: false },
+    Alan { key: "main.unvan", label: "İşletme unvanı (vergi levhasındaki unvan yazılmalıdır)", tur: Tur::Metin(unvan_ok), grup: "İşletme", api: false },
+    Alan { key: "main.site_name", label: "İşletme adı", tur: Tur::Metin(|s| !s.trim().is_empty() && chars_ok(s, 40, |c| c.is_alphanumeric() || " .-'&".contains(c))), grup: "İşletme", api: false },
     Alan { key: "main.session_minutes", label: "Oturum süresi (dakika; 43200 = 30 gün)", tur: Tur::Sayi(30, 64800), grup: "İşletme", api: false },
     Alan { key: "main.max_devices_per_phone", label: "Bir telefona en fazla cihaz", tur: Tur::Sayi(1, 10), grup: "İşletme", api: false },
     Alan { key: "limits.sms_per_phone_15min", label: "Numara başına SMS / 15 dk", tur: Tur::Sayi(1, 20), grup: "SMS sınırları", api: false },
@@ -179,6 +186,7 @@ fn b(v: bool) -> String {
 fn get_field(c: &Config, key: &str) -> String {
     match key {
         "main.site_name" => c.main.site_name.clone(),
+        "main.unvan" => c.main.unvan.clone(),
         "main.session_minutes" => c.main.session_minutes.to_string(),
         "main.max_devices_per_phone" => c.main.max_devices_per_phone.to_string(),
         "main.retention_days" => c.main.retention_days.to_string(),
@@ -209,6 +217,7 @@ fn set_field(c: &mut Config, key: &str, v: &str) {
     let n = || v.parse::<u64>().unwrap_or(0);
     match key {
         "main.site_name" => c.main.site_name = v.trim().into(),
+        "main.unvan" => c.main.unvan = v.split_whitespace().collect::<Vec<_>>().join(" "),
         "main.session_minutes" => c.main.session_minutes = n(),
         "main.max_devices_per_phone" => c.main.max_devices_per_phone = n() as usize,
         "main.retention_days" => c.main.retention_days = n(),
@@ -508,9 +517,10 @@ impl Panel {
             format!("<label for=\"{k}\">{}</label><input type=\"{kind}\" id=\"{k}\" name=\"{k}\" value=\"{val}\" autocomplete=\"off\" required>{}", h(label), err(k))
         };
         let body = format!(
-            "<div class=\"kart dar\"><p class=\"not\">Cihaz ilk kez açıldı. Kafe adını yazın ve yönetim hesabınızı oluşturun (parola en az 10 karakter).</p>{}<form method=\"post\" action=\"/kurulum\">{}{}{}{}<div style=\"margin-top:24px\"><button>Kurulumu tamamla</button></div></form></div>",
+            "<div class=\"kart dar\"><p class=\"not\">Cihaz ilk kez açıldı. İşletme bilgilerini yazın ve yönetim hesabınızı oluşturun (parola en az 10 karakter).</p>{}<form method=\"post\" action=\"/kurulum\">{}{}<p class=\"not\" style=\"margin:4px 0 0\">Vergi levhasındaki unvan yazılmalıdır. Müşterilerin açık rıza onayında bu unvan geçer.</p>{}{}{}<div style=\"margin-top:24px\"><button>Kurulumu tamamla</button></div></form></div>",
             err("genel"),
-            field("site_name", "Kafe adı", "text"),
+            field("site_name", "İşletme adı", "text"),
+            field("unvan", "İşletme unvanı", "text"),
             field("kullanici", "Kullanıcı adı", "text"),
             field("parola", "Parola", "password"),
             field("parola2", "Parola (tekrar)", "password"),
@@ -521,10 +531,13 @@ impl Panel {
     fn kurulum_post(&self, mut cfg: Config, req: &Req) -> Resp {
         let g = |k: &str| req.form.get(k).map_or("", String::as_str).trim().to_string();
         let mut errors: HashMap<&str, String> = HashMap::new();
-        let (site, user) = (g("site_name"), g("kullanici"));
+        let (site, unvan, user) = (g("site_name"), g("unvan"), g("kullanici"));
         let pw = req.form.get("parola").cloned().unwrap_or_default();
         if !ALANLAR[0].tur_ok(&site) {
-            errors.insert("site_name", "Kafe adı 1-40 karakter olmalı (harf, rakam, boşluk, . - ' &).".into());
+            errors.insert("site_name", "İşletme adı 1-40 karakter olmalı (harf, rakam, boşluk, . - ' &).".into());
+        }
+        if !unvan_ok(&unvan) {
+            errors.insert("unvan", "Unvan 2-200 karakter olmalı (vergi levhasındaki gibi).".into());
         }
         if let Some(e) = hesap::username_problem(&user) {
             errors.insert("kullanici", e.into());
@@ -538,6 +551,7 @@ impl Panel {
             match self.hesaplar.setup(&user, &pw) {
                 Ok(()) => {
                     cfg.main.site_name = site;
+                    cfg.main.unvan = unvan.split_whitespace().collect::<Vec<_>>().join(" ");
                     if let Err(e) = cfg.save(&self.cfg_path) {
                         eprintln!("panel: {e}");
                     }
@@ -906,7 +920,7 @@ impl Panel {
             csrf_input(o),
             // API yetkili hesabı yalnızca admin açabilir
             if o.rol == Rol::Hizmet {
-                "<div><label for=\"r\">Rol</label><select id=\"r\" name=\"rol\"><option value=\"sahip\">Kafe sahibi</option><option value=\"hizmet\">Hizmet sağlayıcı</option></select></div>"
+                "<div><label for=\"r\">Rol</label><select id=\"r\" name=\"rol\"><option value=\"sahip\">İşletme sahibi</option><option value=\"hizmet\">Hizmet sağlayıcı</option></select></div>"
             } else {
                 ""
             },
@@ -1161,7 +1175,7 @@ mod tests {
         if e.p.hesaplar.needs_setup() {
             e.p.hesaplar.set_admin("hizmet-parola-1").unwrap();
             let r = e.p.handle(&req("POST", "/kurulum", &[
-                ("site_name", "Bocafe Göztepe"), ("kullanici", "mudur"), ("parola", "sahip-parola-12"), ("parola2", "sahip-parola-12"),
+                ("site_name", "Bocafe Göztepe"), ("unvan", "Boca Gıda Tic. Ltd. Şti."), ("kullanici", "mudur"), ("parola", "sahip-parola-12"), ("parola2", "sahip-parola-12"),
             ], None));
             assert_eq!((r.status, loc(&r).starts_with("/giris")), (303, true));
         }
@@ -1193,7 +1207,8 @@ mod tests {
         let (tok, _) = setup_and_login_admin_only(&e); // admin kurulumdan önce de girebilir
         assert_eq!(e.p.handle(&req("GET", "/", &[], Some(&tok))).status, 200);
         setup_and_login(&e, "admin", "hizmet-parola-1");
-        assert_eq!(Config::load(&e.p.cfg_path).unwrap().main.site_name, "Bocafe Göztepe");
+        let c = Config::load(&e.p.cfg_path).unwrap();
+        assert_eq!((c.main.site_name.as_str(), c.main.unvan.as_str()), ("Bocafe Göztepe", "Boca Gıda Tic. Ltd. Şti."));
         assert_eq!(loc(&e.p.handle(&req("GET", "/kurulum", &[], None))), "/giris"); // kurulum bir kez
         for _ in 0..5 {
             assert!(e.p.handle(&req("POST", "/giris", &[("kullanici", "mudur"), ("parola", "yanlis-parola")], None)).body.contains("hatalı"));
@@ -1456,7 +1471,7 @@ mod tests {
         assert!(page.contains("Bağlı cihazlara baktı") && page.contains("Kullanıcı listesine baktı") && page.contains("ara=ayşe"));
         assert!(!page.contains(">Giriş<")); // yalnızca kişisel veri filtresi
         let page = e.p.handle(&get("/panel-hareketleri", &[], &atok)).body;
-        assert!(page.contains("Kafe sahibi") && page.contains(">4<") && page.contains("Çıkış")); // mudur: 4 kişisel veri bakışı (bağlı cihazlar + 2 liste + arama)
+        assert!(page.contains("İşletme sahibi") && page.contains(">4<") && page.contains("Çıkış")); // mudur: 4 kişisel veri bakışı (bağlı cihazlar + 2 liste + arama)
         let audit = std::fs::read_to_string(e.root.join("5651/gunluk/2026-09-29/denetim.csv")).unwrap();
         assert!(audit.contains("kullanici=mudur rol=sahip ip="));
     }
@@ -1500,13 +1515,13 @@ mod tests {
         let (tok, csrf) = setup_and_login(&e, "mudur", "sahip-parola-12");
         let page = e.p.handle(&get("/portal-metinleri", &[], &tok)).body;
         assert!(page.contains("KVKK Aydınlatma Metni") && page.contains("Açık Rıza Metni") && page.contains("İnternet Kullanım Sözleşmesi"));
-        let r = e.p.handle(&req("POST", "/portal-metinleri", &[("csrf", &csrf), ("aydinlatma", "Veri sorumlusu: <Bocafe>\r\n\r\nİkinci paragraf"), ("sozlesme", "Kurallar"), ("acik_riza_zorunlu", "1")], Some(&tok)));
+        let r = e.p.handle(&req("POST", "/portal-metinleri", &[("csrf", &csrf), ("aydinlatma", "Veri sorumlusu: <Bocafe>\r\n\r\nİkinci paragraf"), ("sozlesme", "Kurallar"), ("acik_riza", "Onay metni")], Some(&tok)));
         assert!(!loc(&r).contains("e=1"));
         let c = Config::load(&e.p.cfg_path).unwrap();
-        assert_eq!((c.portal.aydinlatma.as_str(), c.portal.sozlesme.as_str(), c.portal.acik_riza.as_str(), c.portal.acik_riza_zorunlu), ("Veri sorumlusu: <Bocafe>\n\nİkinci paragraf", "Kurallar", "", true));
+        assert_eq!((c.portal.aydinlatma.as_str(), c.portal.sozlesme.as_str(), c.portal.acik_riza.as_str()), ("Veri sorumlusu: <Bocafe>\n\nİkinci paragraf", "Kurallar", "Onay metni"));
         assert!(e.p.handle(&get("/portal-metinleri", &[], &tok)).body.contains("Veri sorumlusu: &lt;Bocafe&gt;")); // kaçışlı
         assert!(e.calls.lock().unwrap().iter().any(|c| c.join(" ") == "systemctl restart wificorrect-portal"));
         let audit = std::fs::read_to_string(e.root.join("5651/gunluk/2026-09-29/denetim.csv")).unwrap();
-        assert!(audit.contains("PANEL_PORTAL_METIN") && audit.contains("aydinlatma(41 karakter)") && audit.contains("acik_riza_zorunlu=true"));
+        assert!(audit.contains("PANEL_PORTAL_METIN") && audit.contains("aydinlatma(41 karakter)") && audit.contains("acik_riza(10 karakter)"));
     }
 }

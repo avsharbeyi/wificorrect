@@ -8,7 +8,10 @@ pub const PATH: &str = "/etc/wificorrect/ayarlar.toml";
 #[derive(Serialize, Deserialize, Clone, Debug)]
 #[serde(default)]
 pub struct Main {
+    /// İşletme adı (giriş sayfası, sözleşmedeki İŞLETMECİ)
     pub site_name: String,
+    /// Vergi levhasındaki unvan (açık rıza metnindeki [vergi levhası unvanı]); kurulumda girilir
+    pub unvan: String,
     pub iface: String,
     pub router_ip: String,
     pub subnet: String,
@@ -25,7 +28,8 @@ pub struct Main {
 impl Default for Main {
     fn default() -> Self {
         Main {
-            site_name: "Kafe".into(),
+            site_name: "İşletme".into(),
+            unvan: String::new(),
             iface: "br-hotspot".into(),
             router_ip: "10.50.0.1".into(),
             subnet: "10.50.0.0/24".into(),
@@ -153,24 +157,22 @@ impl Default for Backup {
 
 /// Giriş sayfasındaki metinler (panel → Portal metinleri). Boş başlar; kafe sahibi ya da admin yazar.
 /// Düz metin: boş satır paragraf ayırır; "İŞLETMECİ" giriş sayfasında kafe adıyla değişir (ekleri uyumlu).
-/// Açık rıza KVKK gereği varsayılan olarak isteğe bağlı (hizmet rızaya bağlanamaz).
-/// Sözleşme ve KVKK aydınlatma varsayılanları ürünle gelir (2026-10-03, kullanıcı metinleri); açık rıza boş başlar.
+/// Açık rıza metni onay kutusunun yanında yazar ve işaretlemek her zaman zorunludur (2026-10-03, kullanıcı kararı);
+/// içindeki [vergi levhası unvanı] kurulumda girilen unvanla değişir. Üç metin de ürünle gelir (kullanıcı metinleri).
 #[derive(Serialize, Deserialize, Clone, Debug)]
 #[serde(default)]
 pub struct PortalMetin {
     pub aydinlatma: String,
     pub acik_riza: String,
     pub sozlesme: String,
-    pub acik_riza_zorunlu: bool,
 }
 
 impl Default for PortalMetin {
     fn default() -> Self {
         PortalMetin {
             aydinlatma: include_str!("sablon/aydinlatma.txt").trim().to_string(),
-            acik_riza: String::new(),
+            acik_riza: include_str!("sablon/acik_riza.txt").trim().to_string(),
             sozlesme: include_str!("sablon/sozlesme.txt").trim().to_string(),
-            acik_riza_zorunlu: false,
         }
     }
 }

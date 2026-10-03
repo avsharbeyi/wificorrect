@@ -316,11 +316,10 @@ impl Portal {
             ("telefon", f("telefon")),
             ("sozlesme_checked", if f("sozlesme") == "1" { "checked".into() } else { String::new() }),
             ("riza_checked", if f("riza") == "1" { "checked".into() } else { String::new() }),
-            ("riza_required", if self.cfg.portal.acik_riza_zorunlu { "required".into() } else { String::new() }),
-            ("riza_not", if self.cfg.portal.acik_riza_zorunlu { String::new() } else { " (İsteğe bağlı)".into() }),
-            ("acik_riza_html", metin_html(&isletme_yerlestir(&self.cfg.portal.acik_riza, &self.cfg.main.site_name))),
-            ("sozlesme_html", metin_html(&isletme_yerlestir(&self.cfg.portal.sozlesme, &self.cfg.main.site_name))),
-            ("aydinlatma_html", metin_html(&isletme_yerlestir(&self.cfg.portal.aydinlatma, &self.cfg.main.site_name))),
+            // açık rıza metni onay kutusunun yanında (kısa metin; satır sonları korunur)
+            ("riza_metni_html", html_escape(&self.yerlestir(&self.cfg.portal.acik_riza)).replace('\n', "<br>")),
+            ("sozlesme_html", metin_html(&self.yerlestir(&self.cfg.portal.sozlesme))),
+            ("aydinlatma_html", metin_html(&self.yerlestir(&self.cfg.portal.aydinlatma))),
             ("dst", dst.to_string()),
             ("ulke_secenekleri_html", ulkeler::options_html(form.get("ulke").map_or("TR", String::as_str))),
         ];
@@ -329,6 +328,13 @@ impl Portal {
             ctx.push((k, v));
         }
         Page::new("giris", ctx)
+    }
+
+    /// Metinlerdeki İŞLETMECİ → işletme adı, [vergi levhası unvanı] → unvan (girilmemişse yer tutucu kalır).
+    fn yerlestir(&self, text: &str) -> String {
+        let t = isletme_yerlestir(text, &self.cfg.main.site_name);
+        let unvan = self.cfg.main.unvan.trim();
+        if unvan.is_empty() { t } else { t.replace("[vergi levhası unvanı]", unvan) }
     }
 
     fn code_page(&self, p: &Pending, note: &str, error: &str) -> Page {
@@ -441,8 +447,8 @@ impl Portal {
         if get("sozlesme") != "1" {
             errors.push(("hata_sozlesme", "Devam etmek için İnternet Kullanım Sözleşmesi'ni kabul edin.".to_string()));
         }
-        if self.cfg.portal.acik_riza_zorunlu && get("riza") != "1" {
-            errors.push(("hata_riza", "Devam etmek için Açık Rıza Metni'ni onaylayın.".to_string()));
+        if get("riza") != "1" {
+            errors.push(("hata_riza", "Devam etmek için açık rıza onayını işaretleyin.".to_string()));
         }
         let (Some(ad), Some(soyad), Some(phone), true) = (ad, soyad, phone, errors.is_empty()) else {
             return self.form_page(form, errors, &dst);
@@ -876,7 +882,7 @@ mod tests {
     }
 
     fn good(phone: &str) -> Form {
-        form(&[("ad", "Ayşe"), ("soyad", "Yılmaz"), ("telefon", phone), ("sozlesme", "1"), ("dst", "http://neverssl.com/")])
+        form(&[("ad", "Ayşe"), ("soyad", "Yılmaz"), ("telefon", phone), ("sozlesme", "1"), ("riza", "1"), ("dst", "http://neverssl.com/")])
     }
 
     #[test]
@@ -1055,7 +1061,7 @@ mod tests {
     fn foreign_numbers_and_twilio() {
         // Twilio kapalı: yabancı numaraya SMS yok
         let t = setup(|_| {});
-        let f = form(&[("ad", "John"), ("soyad", "Smith"), ("ulke", "DE"), ("telefon", "0151 2345 6789"), ("sozlesme", "1")]);
+        let f = form(&[("ad", "John"), ("soyad", "Smith"), ("ulke", "DE"), ("telefon", "0151 2345 6789"), ("sozlesme", "1"), ("riza", "1")]);
         let pg = t.p.send_code(IP, Some(MAC), &f);
         assert_eq!(pg.get("hata_genel"), sms::YABANCI_YOK);
         assert!(t.p.render(&pg).contains("<option value=\"DE\" selected>")); // seçim korunur
@@ -1094,29 +1100,29 @@ mod tests {
         assert_eq!(metin_html(""), "<p class=\"not\">Metin henüz eklenmedi.</p>");
         assert_eq!(metin_html("Birinci <b>\r\nsatır\r\n\r\nİkinci"), "<p>Birinci &lt;b&gt;<br>satır</p><p>İkinci</p>");
         assert_eq!(metin_html("BAŞLIK\ngiriş:\n* bir\n* <iki>\nson"), "<p><strong>BAŞLIK</strong><br>giriş:</p><ul><li>bir</li><li>&lt;iki&gt;</li></ul><p>son</p>");
-        let t = setup(|_| {});
+        let t = setup(|c| c.main.unvan = "Boca Gıda Tic. Ltd. Şti.".into());
         let page = t.p.render(&t.p.form_page(&Form::new(), vec![], ""));
-        assert!(page.contains("Açık Rıza Metni") && page.contains("İnternet Kullanım Sözleşmesi") && page.contains("Aydınlatma Metni"));
-        assert!(page.contains("(İsteğe bağlı)") && page.matches("Metin henüz eklenmedi").count() == 1); // sözleşme ve aydınlatma ürünle gelir
+        // açık rıza metni onay kutusunun yanında, unvan yerleşmiş, kutu zorunlu
+        assert!(page.contains("name=\"riza\" value=\"1\"  required><span>Şirketinizin Wi-Fi internet hizmetini"));
+        assert!(page.contains("ile paylaştığım kişisel verilerimin (ad, soyad, cep telefonu numarası) Boca Gıda Tic. Ltd. Şti. ile paylaşılmasına onay veriyorum."));
+        assert!(!page.contains("İsteğe bağlı") && !page.contains("Metin henüz eklenmedi") && !page.contains("[vergi levhası unvanı]"));
         assert!(page.contains("<summary>KVKK Aydınlatma Metni</summary>") && page.contains("<li>Haberleşme ve İletişim Bilgileri: Telefon numarası</li>"));
         assert!(page.contains("<strong>SON KULLANICI LİSANS SÖZLEŞMESİ</strong>") && page.contains("Bocafe’nin uhdesindeki") && !page.contains("İŞLETMECİ"));
         assert!(page.contains("<strong>9. BOCAFE’NİN YETKİ VE İMKÂNLARI</strong>"));
-        // rıza işaretlenmeden de girilir, kayda riza=0 yazılır
+        // unvan girilmemişse yer tutucu görünür (kurulum yapılmamış)
+        let t0 = setup(|_| {});
+        assert!(t0.p.render(&t0.p.form_page(&Form::new(), vec![], "")).contains("[vergi levhası unvanı]"));
+        // rıza ya da sözleşme işaretlenmeden kod gönderilmez
         let pg = t.p.send_code(IP, Some(MAC), &form(&[("ad", "Ayşe"), ("soyad", "Yılmaz"), ("telefon", "05334553132"), ("sozlesme", "1")]));
+        assert!(!pg.get("hata_riza").is_empty() && t.sms_count() == 0);
+        let pg = t.p.send_code(IP, Some(MAC), &form(&[("ad", "Ayşe"), ("soyad", "Yılmaz"), ("telefon", "05334553132"), ("riza", "1")]));
+        assert!(!pg.get("hata_sozlesme").is_empty() && t.sms_count() == 0);
+        // ikisi de işaretli: giriş, kayda yazılır
+        let pg = t.p.send_code(IP, Some(MAC), &good("05334553132"));
         assert_eq!(pg.tpl, "kod");
         let code = t.last_code();
         t.p.verify(IP, Some(MAC), &form(&[("kod", &code)]));
-        assert!(t.read("5651/gunluk/2026-09-29/oturum.csv").contains("sozlesme=1 riza=0"));
-        // sözleşme kabul edilmeden kod gönderilmez
-        let pg = t.p.send_code(IP, Some(MAC), &form(&[("ad", "Ayşe"), ("soyad", "Yılmaz"), ("telefon", "05334553132")]));
-        assert!(!pg.get("hata_sozlesme").is_empty());
-        // panelden zorunlu yapılırsa rıza olmadan kod gönderilmez
-        let t = setup(|c| c.portal.acik_riza_zorunlu = true);
-        let pg = t.p.send_code(IP, Some(MAC), &good("05334553132"));
-        assert!(!pg.get("hata_riza").is_empty() && t.sms_count() == 0);
-        assert!(t.p.render(&pg).contains("name=\"riza\" value=\"1\"  required"));
-        let pg = t.p.send_code(IP, Some(MAC), &form(&[("ad", "Ayşe"), ("soyad", "Yılmaz"), ("telefon", "05334553132"), ("sozlesme", "1"), ("riza", "1")]));
-        assert_eq!(pg.tpl, "kod");
+        assert!(t.read("5651/gunluk/2026-09-29/oturum.csv").contains("sozlesme=1 riza=1"));
     }
 
     #[test]
