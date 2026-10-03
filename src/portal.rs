@@ -927,7 +927,7 @@ mod tests {
         let html = t.p.render(&pg);
         assert!(html.contains("&lt;script&gt;"));
         assert!(!html.contains("<script>x"));
-        assert!(html.contains("Bocafe'ye hoş geldiniz"));
+        assert!(html.contains("Bocafe Wi-Fi'ye hoş geldiniz")); // ad hangi harfle biterse bitsin ek doğru
         assert!(html.contains("name=\"dst\" value=\"\""));
         assert_eq!(safe_dst("https://a.com/x"), "https://a.com/x");
         assert_eq!(safe_dst(&format!("http://{}", "a".repeat(2050))), "");

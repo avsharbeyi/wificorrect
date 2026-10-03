@@ -112,3 +112,9 @@ Son ürün, aynı donanımlı boş bir cihaza yüklenen bir ISO olacak; ilk aç�
 - Paket: `iptables` kuruldu (Debian 13, 1.8.11, nf_tables). Açılışta `wificorrect-guvenlik` → `ctl filtre-uygula` (kurallar kalıcı değil, her açılışta yeniden).
 - Panelde "Bu adres engelli mi?" denemesi; değişiklik hemen geçerli (site listesi değişince dnsmasq yeniden başlar, kelimede yalnızca zincir). Denetim: `PANEL_FILTRE_EKLE`, `PANEL_FILTRE_KALDIR`.
 - Cihazda sahte istemciyle doğrulandı (sorgu 8.8.8.8'e gönderilse de): site → NXDOMAIN, `bet` kelimesi → `superbet.com.tr`, `m.bet365.com` reddedildi, `alphabet` istisnası açık, `google.com` açık. Test sonrası listeler boşaltıldı.
+
+## AP (erişim noktası) — 2026-10-03
+- Kuralı (kullanıcı): her kafede AP farklı olabilir; hepsi önceden hazırlanmış gelir. Sistem AP'ye özel hiçbir şey bilmez/gerektirmez: AP sol porta (müşteri köprüsü) takılır, müşteriler IP'yi cihazdan alır.
+- AP hazırlık listesi: çalışma modu Access Point · **DHCP sunucusu kapalı** (Smart IP / otomatik DHCP gibi "gerekirse kendin dağıt" modları da kapalı; yönetim IP'si sabit, ör. 10.50.0.2/24, ağ geçidi 10.50.0.1 — DHCP havuzu .20–.249 dışında) · ağ adı önceden belirlenmiş · şifresiz · **istemci yalıtımı (AP isolation) açık** · **yönetim parolası fabrika ayarında bırakılmamalı** (ağ şifresiz; müşteri AP'nin kendi sayfasına ulaşabilir).
+- İlk denenen: TP-Link TL-WA901ND (70:4f:57:dd:7a:e8), 100 Mb/s; `GoztepeBilgisayar_Misafir`, şifresiz, DHCP kapalı, AP isolation açık, sabit 10.50.0.2. Telefon AP üzerinden 10.50.0.x aldı, portal açıldı. AP yönetimine bilgisayardan: `ssh -L 8091:10.50.0.2:80 wificorrect` → http://127.0.0.1:8091 (TP-Link girişten sonra kendi IP'sine yönlendirir; aynı yolu tünel adresiyle açmak gerekir).
+- Portal başlığı kafe adını kurulum ekranından alır (`main.site_name`); ek kafe adının son harfine göre değişmesin diye "<ad> Wi-Fi'ye hoş geldiniz".
