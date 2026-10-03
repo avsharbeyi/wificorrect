@@ -129,3 +129,10 @@ Son ürün, aynı donanımlı boş bir cihaza yüklenen bir ISO olacak; ilk aç�
 - `cargo test --release` (LTO, tek codegen birimi) sırasında cihaz tamamen dondu (ARP bile yok); fişten kapatıp açmak gerekti. Önceki açılışın günlüğü derleme başında kesiliyor (bellek tükenmesi olası, günlük diske yazılamadı).
 - Önlem: testler `scripts/test.sh` ile optimizasyonsuz, `-j 2`, `systemd-run --scope -p MemoryMax=1200M` içinde; `scripts/gelistir.sh` release derlemesi de aynı sınırla ve derleme başarısızsa eski programı kurmaz. Ürün kalıbında derleyici yok (GitHub Actions'ta derlenecek).
 - **Gerekçe zorunluluğu** (2026-10-03, kullanıcı kararı): kafe sahibi Kayıtlar (gün dosyaları, görüntüleme, indirme), Kullanıcılar (liste, arama, kişi) ve Resmi talep (arama, paket) sayfalarını açmadan önce gerekçe yazar (10-200 karakter; öneriler: emniyet/savcılık talebi, müşteri şikâyeti, müşterinin kendi talebi, teknik sorun). Gerekçe 30 dk geçerli (panel oturumunda, bellekte); `PANEL_GEREKCE` olarak ve o süredeki her bakışın satırına `gerekce=…` olarak yazılır. Bağlı cihazlar ve boş talep formu gerekçesiz; admin muaf. Dönüş adresi yalnızca panel içi yol.
+
+## Giriş sayfası: üç metin ve açık tasarım (2026-10-03, kullanıcı isteği; örnek Starbucks portalı)
+- Üç metin: **Açık Rıza Metni** (onay kutusu, varsayılan isteğe bağlı — KVKK'da hizmet rızaya bağlanamaz; panelden zorunlu yapılabilir), **İnternet Kullanım Sözleşmesi** (onay kutusu, zorunlu), **Aydınlatma Metni** (yalnızca açılır metin). Eski "KVKK okudum" kutusu ve `/kvkk` sayfası kaldırıldı.
+- Metinler `<details>` ile formun içinde açılır (JS yok; ayrı sayfaya gidip dönünce telefonların giriş penceresinde yazılanlar silinmesin).
+- Metinler boş başlar; panel → **Portal metinleri** (iki rol) — `ayarlar.toml` `[portal]` (`aydinlatma`, `acik_riza`, `sozlesme`, `acik_riza_zorunlu`). Düz metin, boş satır paragraf; kaçışlanır. Kaydedince portal yeniden başlar; denetim `PANEL_PORTAL_METIN` (değişen metin ve uzunluğu).
+- Oturum kaydına onaylar yazılır: `OTURUM_BASLA` ek `… sozlesme=1 riza=0|1`.
+- Tasarım: açık zemin, üstte gökyüzü bandı, üstüne binen beyaz kart, yeşil düğme, mavi metin bağlantıları.

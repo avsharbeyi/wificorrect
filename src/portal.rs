@@ -82,6 +82,8 @@ struct Pending {
     attempts: u32,
     sent_at: f64,
     provider: Saglayici,
+    /// Açık rıza kutusu işaretli miydi (oturum kaydına yazılır)
+    riza: bool,
     /// Uzaktan doğrulama sürerken kod yenilendiyse sonuç eski koda uygulanmasın
     nonce: u64,
 }
@@ -107,7 +109,6 @@ fn template(name: &str) -> &'static str {
         "kod" => include_str!("sablon/kod.html"),
         "basarili" => include_str!("sablon/basarili.html"),
         "hata" => include_str!("sablon/hata.html"),
-        "kvkk" => include_str!("sablon/kvkk.html"),
         _ => "",
     }
 }
@@ -141,6 +142,18 @@ pub fn substitute(tpl: &str, values: &HashMap<&str, String>) -> String {
     }
     out.push_str(rest);
     out
+}
+
+/// Panelden yazılan düz metin → güvenli HTML: boş satır paragraf, tek satır sonu <br>. Boşsa bilgi notu.
+pub fn metin_html(text: &str) -> String {
+    let text = text.replace("\r\n", "\n");
+    let paras: Vec<String> = text
+        .split("\n\n")
+        .map(str::trim)
+        .filter(|p| !p.is_empty())
+        .map(|p| format!("<p>{}</p>", html_escape(p).replace('\n', "<br>")))
+        .collect();
+    if paras.is_empty() { "<p class=\"not\">Metin henüz eklenmedi.</p>".into() } else { paras.concat() }
 }
 
 /// Sabit sürede karşılaştırma (zamanlama ile kod tahminini önler).
@@ -180,7 +193,8 @@ impl Portal {
 
     /// Bekleyen koddan formu yeniden doldurmak için (numara `+` ile, ülke seçimi yok sayılır).
     fn prefill(p: &Pending) -> Form {
-        [("ad", p.ad.clone()), ("soyad", p.soyad.clone()), ("telefon", format!("+{}", p.phone)), ("kvkk", "1".into()), ("dst", p.dst.clone())]
+        let riza = if p.riza { "1" } else { "" };
+        [("ad", p.ad.clone()), ("soyad", p.soyad.clone()), ("telefon", format!("+{}", p.phone)), ("sozlesme", "1".into()), ("riza", riza.into()), ("dst", p.dst.clone())]
             .into_iter()
             .map(|(k, v)| (k.to_string(), v))
             .collect()
@@ -210,11 +224,17 @@ impl Portal {
             ("ad", f("ad")),
             ("soyad", f("soyad")),
             ("telefon", f("telefon")),
-            ("kvkk_checked", if f("kvkk") == "1" { "checked".into() } else { String::new() }),
+            ("sozlesme_checked", if f("sozlesme") == "1" { "checked".into() } else { String::new() }),
+            ("riza_checked", if f("riza") == "1" { "checked".into() } else { String::new() }),
+            ("riza_required", if self.cfg.portal.acik_riza_zorunlu { "required".into() } else { String::new() }),
+            ("riza_not", if self.cfg.portal.acik_riza_zorunlu { String::new() } else { " (İsteğe bağlı)".into() }),
+            ("acik_riza_html", metin_html(&self.cfg.portal.acik_riza)),
+            ("sozlesme_html", metin_html(&self.cfg.portal.sozlesme)),
+            ("aydinlatma_html", metin_html(&self.cfg.portal.aydinlatma)),
             ("dst", dst.to_string()),
             ("ulke_secenekleri_html", ulkeler::options_html(form.get("ulke").map_or("TR", String::as_str))),
         ];
-        for k in ["hata_genel", "hata_ad", "hata_soyad", "hata_telefon", "hata_kvkk"] {
+        for k in ["hata_genel", "hata_ad", "hata_soyad", "hata_telefon", "hata_riza", "hata_sozlesme"] {
             let v = errors.iter().find(|(e, _)| *e == k).map(|(_, v)| v.clone()).unwrap_or_default();
             ctx.push((k, v));
         }
@@ -328,8 +348,11 @@ impl Portal {
             };
             errors.push(("hata_telefon", msg.to_string()));
         }
-        if get("kvkk") != "1" {
-            errors.push(("hata_kvkk", "Devam etmek için aydınlatma metnini onaylayın.".to_string()));
+        if get("sozlesme") != "1" {
+            errors.push(("hata_sozlesme", "Devam etmek için İnternet Kullanım Sözleşmesi'ni kabul edin.".to_string()));
+        }
+        if self.cfg.portal.acik_riza_zorunlu && get("riza") != "1" {
+            errors.push(("hata_riza", "Devam etmek için Açık Rıza Metni'ni onaylayın.".to_string()));
         }
         let (Some(ad), Some(soyad), Some(phone), true) = (ad, soyad, phone, errors.is_empty()) else {
             return self.form_page(form, errors, &dst);
@@ -378,6 +401,7 @@ impl Portal {
             attempts: 0,
             sent_at: now,
             provider,
+            riza: get("riza") == "1",
             nonce: self.nonce.fetch_add(1, Ordering::Relaxed),
         };
         let page = self.code_page(&p, "", "");
@@ -503,7 +527,7 @@ impl Portal {
             .set("mac", mac)
             .set("ic_ip", ip)
             .set("oturum_id", &s.session_id)
-            .set("ek", format!("bitis={}", ortak::now_iso(now + secs)));
+            .set("ek", format!("bitis={} sozlesme=1 riza={}", ortak::now_iso(now + secs), u8::from(p.riza)));
         let day = ortak::day_of(&zaman).to_string();
         let written = ortak::append_user_rows(&m.log_root, &s, mac, &[basla.clone()])
             .and_then(|_| ortak::append_rows(&ortak::day_file(&m.log_root, &day, "oturum.csv"), &[basla]))
@@ -610,7 +634,6 @@ fn handle(p: &Portal, per_ip: &RateLimiter, mut req: tiny_http::Request) {
     let page = match method {
         tiny_http::Method::Get | tiny_http::Method::Head => match path {
             "/" => p.home(&ip, mac, &safe_dst(parse_query(query).get("dst").map(String::as_str).unwrap_or(""))),
-            "/kvkk" => Page::new("kvkk", vec![]),
             _ => return respond(req, 302, String::new(), "text/html; charset=utf-8", Some(format!("{base}/")), &base),
         },
         tiny_http::Method::Post => {
@@ -763,7 +786,7 @@ mod tests {
     }
 
     fn good(phone: &str) -> Form {
-        form(&[("ad", "Ayşe"), ("soyad", "Yılmaz"), ("telefon", phone), ("kvkk", "1"), ("dst", "http://neverssl.com/")])
+        form(&[("ad", "Ayşe"), ("soyad", "Yılmaz"), ("telefon", phone), ("sozlesme", "1"), ("dst", "http://neverssl.com/")])
     }
 
     #[test]
@@ -771,7 +794,7 @@ mod tests {
         let t = setup(|_| {});
         let pg = t.p.send_code(IP, Some(MAC), &form(&[("ad", "A"), ("soyad", "Ali1"), ("telefon", "212 455 31 32")]));
         assert_eq!(pg.tpl, "giris");
-        for k in ["hata_ad", "hata_soyad", "hata_telefon", "hata_kvkk"] {
+        for k in ["hata_ad", "hata_soyad", "hata_telefon", "hata_sozlesme"] {
             assert!(!pg.get(k).is_empty(), "{k}");
         }
         assert_eq!(pg.get("telefon"), "212 455 31 32"); // girilen değer korunur
@@ -942,7 +965,7 @@ mod tests {
     fn foreign_numbers_and_twilio() {
         // Twilio kapalı: yabancı numaraya SMS yok
         let t = setup(|_| {});
-        let f = form(&[("ad", "John"), ("soyad", "Smith"), ("ulke", "DE"), ("telefon", "0151 2345 6789"), ("kvkk", "1")]);
+        let f = form(&[("ad", "John"), ("soyad", "Smith"), ("ulke", "DE"), ("telefon", "0151 2345 6789"), ("sozlesme", "1")]);
         let pg = t.p.send_code(IP, Some(MAC), &f);
         assert_eq!(pg.get("hata_genel"), sms::YABANCI_YOK);
         assert!(t.p.render(&pg).contains("<option value=\"DE\" selected>")); // seçim korunur
@@ -974,5 +997,31 @@ mod tests {
         let pg = t.p.verify(IP, Some(MAC), &form(&[("kod", "111111")]));
         assert_eq!(pg.get("hata"), "Kod hatalı. Kalan deneme hakkı: 4");
         assert_eq!(t.p.verify(IP, Some(MAC), &form(&[("kod", "424242")])).tpl, "basarili");
+    }
+
+    #[test]
+    fn consent_texts_and_recording() {
+        assert_eq!(metin_html(""), "<p class=\"not\">Metin henüz eklenmedi.</p>");
+        assert_eq!(metin_html("Birinci <b>\r\nsatır\r\n\r\nİkinci"), "<p>Birinci &lt;b&gt;<br>satır</p><p>İkinci</p>");
+        let t = setup(|_| {});
+        let page = t.p.render(&t.p.form_page(&Form::new(), vec![], ""));
+        assert!(page.contains("Açık Rıza Metni") && page.contains("İnternet Kullanım Sözleşmesi") && page.contains("Aydınlatma Metni"));
+        assert!(page.contains("(İsteğe bağlı)") && page.matches("Metin henüz eklenmedi").count() == 3);
+        // rıza işaretlenmeden de girilir, kayda riza=0 yazılır
+        let pg = t.p.send_code(IP, Some(MAC), &form(&[("ad", "Ayşe"), ("soyad", "Yılmaz"), ("telefon", "05334553132"), ("sozlesme", "1")]));
+        assert_eq!(pg.tpl, "kod");
+        let code = t.last_code();
+        t.p.verify(IP, Some(MAC), &form(&[("kod", &code)]));
+        assert!(t.read("5651/gunluk/2026-09-29/oturum.csv").contains("sozlesme=1 riza=0"));
+        // sözleşme kabul edilmeden kod gönderilmez
+        let pg = t.p.send_code(IP, Some(MAC), &form(&[("ad", "Ayşe"), ("soyad", "Yılmaz"), ("telefon", "05334553132")]));
+        assert!(!pg.get("hata_sozlesme").is_empty());
+        // panelden zorunlu yapılırsa rıza olmadan kod gönderilmez
+        let t = setup(|c| c.portal.acik_riza_zorunlu = true);
+        let pg = t.p.send_code(IP, Some(MAC), &good("05334553132"));
+        assert!(!pg.get("hata_riza").is_empty() && t.sms_count() == 0);
+        assert!(t.p.render(&pg).contains("name=\"riza\" value=\"1\"  required"));
+        let pg = t.p.send_code(IP, Some(MAC), &form(&[("ad", "Ayşe"), ("soyad", "Yılmaz"), ("telefon", "05334553132"), ("sozlesme", "1"), ("riza", "1")]));
+        assert_eq!(pg.tpl, "kod");
     }
 }

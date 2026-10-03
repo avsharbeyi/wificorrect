@@ -30,6 +30,7 @@ pub(super) fn olay_adi(olay: &str) -> &str {
         "PANEL_AT" => "Bağlantı kesti",
         "PANEL_AYAR" => "Ayar değiştirdi",
         "PANEL_PORT" => "Port değiştirdi",
+        "PANEL_PORTAL_METIN" => "Portal metnini değiştirdi",
         o => o.strip_prefix("PANEL_").unwrap_or(o),
     }
 }

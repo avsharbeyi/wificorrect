@@ -151,6 +151,17 @@ impl Default for Backup {
     }
 }
 
+/// Giriş sayfasındaki metinler (panel → Portal metinleri). Boş başlar; kafe sahibi ya da admin yazar.
+/// Düz metin: boş satır paragraf ayırır. Açık rıza KVKK gereği varsayılan olarak isteğe bağlı (hizmet rızaya bağlanamaz).
+#[derive(Serialize, Deserialize, Clone, Debug, Default)]
+#[serde(default)]
+pub struct PortalMetin {
+    pub aydinlatma: String,
+    pub acik_riza: String,
+    pub sozlesme: String,
+    pub acik_riza_zorunlu: bool,
+}
+
 /// Yasaklı siteler / kelimeler (src/filtre.rs). Boş başlar; kafe sahibi panelden yazar.
 #[derive(Serialize, Deserialize, Clone, Debug, Default)]
 #[serde(default)]
@@ -178,6 +189,7 @@ pub struct Config {
     pub limits: Limits,
     pub backup: Backup,
     pub filtre: Filtre,
+    pub portal: PortalMetin,
     pub allow: Vec<Device>,
     pub ban: Vec<Device>,
 }

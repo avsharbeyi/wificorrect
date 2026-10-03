@@ -12,7 +12,19 @@
 <label for="telefon">Cep telefonu</label>
 <div class="tel"><select name="ulke" aria-label="Ülke kodu">$ulke_secenekleri_html</select><input type="tel" id="telefon" name="telefon" value="$telefon" inputmode="tel" autocomplete="tel-national" placeholder="5XX XXX XX XX" maxlength="20" required></div>
 <p class="hata">$hata_telefon</p>
-<label class="onay"><input type="checkbox" name="kvkk" value="1" $kvkk_checked required><span><a href="$portal/kvkk">KVKK Aydınlatma Metni</a>'ni okudum.</span></label>
-<p class="hata">$hata_kvkk</p>
+<div class="madde">
+<label class="onay"><input type="checkbox" name="riza" value="1" $riza_checked $riza_required><span>Açık Rıza Metni'ni okudum, kişisel verilerimin bu metinde belirtilen şekilde işlenmesine açık rıza veriyorum.$riza_not</span></label>
+<details><summary>Açık Rıza Metni</summary><div class="metin">$acik_riza_html</div></details>
+<p class="hata">$hata_riza</p>
+</div>
+<div class="madde">
+<label class="onay"><input type="checkbox" name="sozlesme" value="1" $sozlesme_checked required><span>İnternet Kullanım Sözleşmesi'ni okudum, kabul ediyorum.</span></label>
+<details><summary>İnternet Kullanım Sözleşmesi</summary><div class="metin">$sozlesme_html</div></details>
+<p class="hata">$hata_sozlesme</p>
+</div>
+<div class="madde">
+<details><summary>Aydınlatma Metni</summary><div class="metin">$aydinlatma_html</div></details>
+<p class="not kucuk">Kişisel verilerinizin nasıl işlendiğini öğrenmek için Aydınlatma Metni'ne dokunun.</p>
+</div>
 <button type="submit">Kod Gönder</button>
 </form>

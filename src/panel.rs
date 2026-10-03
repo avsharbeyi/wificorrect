@@ -17,6 +17,7 @@ mod filtre_sayfasi;
 mod gerekce;
 mod hareketler;
 mod kayit_sayfalari;
+mod metinler;
 mod portlar;
 
 pub type Clock = dyn Fn() -> f64 + Send + Sync;
@@ -327,6 +328,7 @@ const MENU: &[(&str, &str, bool)] = &[
     ("/kullanicilar", "Kullanıcılar", false),
     ("/talep", "Resmi talep", false),
     ("/ayarlar", "Ayarlar", false),
+    ("/portal-metinleri", "Portal metinleri", false),
     ("/portlar", "Portlar", false),
     ("/api", "API ayarları", true),
     ("/sistem", "Sistem", false),
@@ -460,6 +462,8 @@ impl Panel {
             ("GET", "/yasakli-siteler") => self.filtre_sayfa(&cfg, req, &o),
             ("POST", "/yasakli-siteler/ekle") => self.filtre_degistir(cfg, req, &o, true),
             ("POST", "/yasakli-siteler/kaldir") => self.filtre_degistir(cfg, req, &o, false),
+            ("GET", "/portal-metinleri") => self.metinler(&cfg, req, &o),
+            ("POST", "/portal-metinleri") => self.metinler_kaydet(cfg, req, &o),
             ("GET", "/portlar") => self.portlar(&cfg, req, &o, now),
             ("POST", "/portlar") => self.portlar_uygula(&cfg, req, &o),
             ("POST", "/portlar/onayla") => self.portlar_onayla(&cfg, req, &o),
@@ -1488,5 +1492,21 @@ mod tests {
         // admin muaf
         let (atok, _) = setup_and_login(&e, "admin", "hizmet-parola-1");
         assert!(!e.p.handle(&get("/kullanicilar", &[], &atok)).body.contains("Gerekçe gerekli"));
+    }
+
+    #[test]
+    fn owner_edits_portal_texts() {
+        let e = env();
+        let (tok, csrf) = setup_and_login(&e, "mudur", "sahip-parola-12");
+        let page = e.p.handle(&get("/portal-metinleri", &[], &tok)).body;
+        assert!(page.contains("Aydınlatma Metni (KVKK)") && page.contains("Açık Rıza Metni") && page.contains("İnternet Kullanım Sözleşmesi"));
+        let r = e.p.handle(&req("POST", "/portal-metinleri", &[("csrf", &csrf), ("aydinlatma", "Veri sorumlusu: <Bocafe>\r\n\r\nİkinci paragraf"), ("sozlesme", "Kurallar"), ("acik_riza_zorunlu", "1")], Some(&tok)));
+        assert!(!loc(&r).contains("e=1"));
+        let c = Config::load(&e.p.cfg_path).unwrap();
+        assert_eq!((c.portal.aydinlatma.as_str(), c.portal.sozlesme.as_str(), c.portal.acik_riza.as_str(), c.portal.acik_riza_zorunlu), ("Veri sorumlusu: <Bocafe>\n\nİkinci paragraf", "Kurallar", "", true));
+        assert!(e.p.handle(&get("/portal-metinleri", &[], &tok)).body.contains("Veri sorumlusu: &lt;Bocafe&gt;")); // kaçışlı
+        assert!(e.calls.lock().unwrap().iter().any(|c| c.join(" ") == "systemctl restart wificorrect-portal"));
+        let audit = std::fs::read_to_string(e.root.join("5651/gunluk/2026-09-29/denetim.csv")).unwrap();
+        assert!(audit.contains("PANEL_PORTAL_METIN") && audit.contains("aydinlatma(41 karakter)") && audit.contains("acik_riza_zorunlu=true"));
     }
 }
