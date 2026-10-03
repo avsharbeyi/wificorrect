@@ -1,7 +1,8 @@
 //! Yönetim paneli — 8a çekirdek (eski panel.py; RUST_YENIDEN_YAZIM.md A10, A14).
 //! https://<cihaz>:8443, yalnızca dükkân ağından (güvenlik duvarı + burada müşteri ağı reddi).
-//! İki rol (2026-10-03 kullanıcı kararı): kafe sahibi her şeyi görür ve yönetir (kayıtlar dahil);
-//! admin (hizmet sağlayıcı) ondan yalnızca "API ayarları" sayfasıyla ayrılır (SMS sağlayıcısı bilgileri, deneme modu).
+//! İki rol (2026-10-03 kullanıcı kararı): işletme sahibi kayıtlar dahil işletmeyle ilgili her şeyi görür ve yönetir;
+//! admin (hizmet sağlayıcı) ondan "Admin ayarları" sayfasıyla ayrılır: SMS sağlayıcıları ve sınırları, deneme modu,
+//! kayıt saklama ve uzak yedek (sunucu), fabrika ayarları. İşletme sahibi sağlayıcı ve sunucu adlarını hiçbir yerde görmez.
 //! 8b kayıtlar / kullanıcılar / resmi talep: panel/kayit_sayfalari.rs. 8c portlar ve Wi-Fi: panel/portlar.rs.
 
 use crate::ayar::{Config, Device};
@@ -119,8 +120,8 @@ struct Alan {
     label: &'static str,
     tur: Tur,
     grup: &'static str,
-    /// true: "API ayarları" sayfasında, yalnızca admin görür ve değiştirir (SMS sağlayıcısı, deneme modu)
-    api: bool,
+    /// true: "Admin ayarları" sayfasında, yalnızca admin görür ve değiştirir (SMS sağlayıcısı, deneme modu)
+    admin: bool,
 }
 
 fn chars_ok(s: &str, max: usize, allowed: fn(char) -> bool) -> bool {
@@ -153,30 +154,30 @@ fn backup_target_ok(s: &str) -> bool {
 }
 
 const ALANLAR: &[Alan] = &[
-    Alan { key: "main.unvan", label: "İşletme unvanı (vergi levhasındaki unvan yazılmalıdır)", tur: Tur::Metin(unvan_ok), grup: "İşletme", api: false },
-    Alan { key: "main.site_name", label: "İşletme adı", tur: Tur::Metin(|s| !s.trim().is_empty() && chars_ok(s, 40, |c| c.is_alphanumeric() || " .-'&".contains(c))), grup: "İşletme", api: false },
-    Alan { key: "main.session_minutes", label: "Oturum süresi (dakika; 43200 = 30 gün)", tur: Tur::Sayi(30, 64800), grup: "İşletme", api: false },
-    Alan { key: "main.max_devices_per_phone", label: "Bir telefona en fazla cihaz", tur: Tur::Sayi(1, 10), grup: "İşletme", api: false },
-    Alan { key: "limits.sms_per_phone_15min", label: "Numara başına SMS / 15 dk", tur: Tur::Sayi(1, 20), grup: "SMS sınırları", api: false },
-    Alan { key: "limits.sms_per_phone_day", label: "Numara başına SMS / gün", tur: Tur::Sayi(1, 50), grup: "SMS sınırları", api: false },
-    Alan { key: "limits.sms_per_mac_hour", label: "Cihaz başına SMS / saat", tur: Tur::Sayi(1, 50), grup: "SMS sınırları", api: false },
-    Alan { key: "limits.sms_global_day", label: "Günlük toplam SMS tavanı", tur: Tur::Sayi(1, 100_000), grup: "SMS sınırları", api: false },
-    Alan { key: "sms.mock", label: "Deneme modu (SMS gerçekten gönderilmez)", tur: Tur::Evet, grup: "SMS sağlayıcısı", api: true },
-    Alan { key: "sms.provider", label: "Türk numaraları için sağlayıcı", tur: Tur::Secim(&[("netgsm", "NetGSM"), ("twilio", "Twilio")]), grup: "SMS sağlayıcısı", api: true },
-    Alan { key: "netgsm.usercode", label: "Kullanıcı kodu (abone no)", tur: Tur::Metin(|s| chars_ok(s, 32, |c| c.is_ascii_alphanumeric())), grup: "NetGSM", api: true },
-    Alan { key: "netgsm.msgheader", label: "Mesaj başlığı", tur: Tur::Metin(|s| chars_ok(s, 11, |c| c.is_ascii_alphanumeric() || " .-".contains(c))), grup: "NetGSM", api: true },
-    Alan { key: "netgsm.appkey", label: "Uygulama anahtarı (opsiyonel)", tur: Tur::Metin(|s| chars_ok(s, 64, |c| c.is_ascii_alphanumeric() || c == '-')), grup: "NetGSM", api: true },
-    Alan { key: "netgsm.password", label: "API şifresi", tur: Tur::Gizli(|s| (1..=64).contains(&s.len()) && s.bytes().all(|b| (0x21..=0x7e).contains(&b))), grup: "NetGSM", api: true },
-    Alan { key: "twilio.enabled", label: "Yabancı numaralara Twilio ile gönder", tur: Tur::Evet, grup: "Twilio", api: true },
-    Alan { key: "twilio.account_sid", label: "Account SID (AC…)", tur: Tur::Metin(|s| prefixed_hex(s, "AC")), grup: "Twilio", api: true },
-    Alan { key: "twilio.verify_sid", label: "Verify Service SID (VA…)", tur: Tur::Metin(|s| prefixed_hex(s, "VA")), grup: "Twilio", api: true },
-    Alan { key: "twilio.auth_token", label: "Auth Token", tur: Tur::Gizli(|s| s.len() == 32 && s.bytes().all(|b| b.is_ascii_hexdigit())), grup: "Twilio", api: true },
-    Alan { key: "twilio.api_key_sid", label: "API Key SID (SK…, opsiyonel)", tur: Tur::Metin(|s| prefixed_hex(s, "SK")), grup: "Twilio", api: true },
-    Alan { key: "twilio.api_key_secret", label: "API Key Secret (opsiyonel)", tur: Tur::Gizli(|s| s.len() == 32 && s.bytes().all(|b| b.is_ascii_alphanumeric())), grup: "Twilio", api: true },
-    Alan { key: "main.retention_days", label: "Kayıtlar cihazda kaç gün saklansın (730 = 2 yıl)", tur: Tur::Sayi(30, 3650), grup: "Kayıt ve yedek", api: false },
-    Alan { key: "backup.enabled", label: "Uzak yedek açık", tur: Tur::Evet, grup: "Kayıt ve yedek", api: false },
-    Alan { key: "backup.target", label: "Yedek hedefi (kullanici@sunucu:)", tur: Tur::Metin(backup_target_ok), grup: "Kayıt ve yedek", api: false },
-    Alan { key: "backup.ssh", label: "SSH komutu", tur: Tur::Metin(|s| s.starts_with("ssh") && chars_ok(s, 120, |c| c.is_ascii_alphanumeric() || " ./_=-".contains(c))), grup: "Kayıt ve yedek", api: false },
+    Alan { key: "main.unvan", label: "İşletme unvanı (vergi levhasındaki unvan yazılmalıdır)", tur: Tur::Metin(unvan_ok), grup: "İşletme", admin: false },
+    Alan { key: "main.site_name", label: "İşletme adı", tur: Tur::Metin(|s| !s.trim().is_empty() && chars_ok(s, 40, |c| c.is_alphanumeric() || " .-'&".contains(c))), grup: "İşletme", admin: false },
+    Alan { key: "main.session_minutes", label: "Oturum süresi (dakika; 43200 = 30 gün)", tur: Tur::Sayi(30, 64800), grup: "İşletme", admin: false },
+    Alan { key: "main.max_devices_per_phone", label: "Bir telefona en fazla cihaz", tur: Tur::Sayi(1, 10), grup: "İşletme", admin: false },
+    Alan { key: "limits.sms_per_phone_15min", label: "Numara başına SMS / 15 dk", tur: Tur::Sayi(1, 20), grup: "SMS sınırları", admin: true },
+    Alan { key: "limits.sms_per_phone_day", label: "Numara başına SMS / gün", tur: Tur::Sayi(1, 50), grup: "SMS sınırları", admin: true },
+    Alan { key: "limits.sms_per_mac_hour", label: "Cihaz başına SMS / saat", tur: Tur::Sayi(1, 50), grup: "SMS sınırları", admin: true },
+    Alan { key: "limits.sms_global_day", label: "Günlük toplam SMS tavanı", tur: Tur::Sayi(1, 100_000), grup: "SMS sınırları", admin: true },
+    Alan { key: "sms.mock", label: "Deneme modu (SMS gerçekten gönderilmez)", tur: Tur::Evet, grup: "SMS sağlayıcısı", admin: true },
+    Alan { key: "sms.provider", label: "Türk numaraları için sağlayıcı", tur: Tur::Secim(&[("netgsm", "NetGSM"), ("twilio", "Twilio")]), grup: "SMS sağlayıcısı", admin: true },
+    Alan { key: "netgsm.usercode", label: "Kullanıcı kodu (abone no)", tur: Tur::Metin(|s| chars_ok(s, 32, |c| c.is_ascii_alphanumeric())), grup: "NetGSM", admin: true },
+    Alan { key: "netgsm.msgheader", label: "Mesaj başlığı", tur: Tur::Metin(|s| chars_ok(s, 11, |c| c.is_ascii_alphanumeric() || " .-".contains(c))), grup: "NetGSM", admin: true },
+    Alan { key: "netgsm.appkey", label: "Uygulama anahtarı (opsiyonel)", tur: Tur::Metin(|s| chars_ok(s, 64, |c| c.is_ascii_alphanumeric() || c == '-')), grup: "NetGSM", admin: true },
+    Alan { key: "netgsm.password", label: "API şifresi", tur: Tur::Gizli(|s| (1..=64).contains(&s.len()) && s.bytes().all(|b| (0x21..=0x7e).contains(&b))), grup: "NetGSM", admin: true },
+    Alan { key: "twilio.enabled", label: "Yabancı numaralara Twilio ile gönder", tur: Tur::Evet, grup: "Twilio", admin: true },
+    Alan { key: "twilio.account_sid", label: "Account SID (AC…)", tur: Tur::Metin(|s| prefixed_hex(s, "AC")), grup: "Twilio", admin: true },
+    Alan { key: "twilio.verify_sid", label: "Verify Service SID (VA…)", tur: Tur::Metin(|s| prefixed_hex(s, "VA")), grup: "Twilio", admin: true },
+    Alan { key: "twilio.auth_token", label: "Auth Token", tur: Tur::Gizli(|s| s.len() == 32 && s.bytes().all(|b| b.is_ascii_hexdigit())), grup: "Twilio", admin: true },
+    Alan { key: "twilio.api_key_sid", label: "API Key SID (SK…, opsiyonel)", tur: Tur::Metin(|s| prefixed_hex(s, "SK")), grup: "Twilio", admin: true },
+    Alan { key: "twilio.api_key_secret", label: "API Key Secret (opsiyonel)", tur: Tur::Gizli(|s| s.len() == 32 && s.bytes().all(|b| b.is_ascii_alphanumeric())), grup: "Twilio", admin: true },
+    Alan { key: "main.retention_days", label: "Kayıtlar cihazda kaç gün saklansın (730 = 2 yıl)", tur: Tur::Sayi(30, 3650), grup: "Kayıt ve yedek", admin: true },
+    Alan { key: "backup.enabled", label: "Uzak yedek açık", tur: Tur::Evet, grup: "Kayıt ve yedek", admin: true },
+    Alan { key: "backup.target", label: "Yedek hedefi (kullanici@sunucu:)", tur: Tur::Metin(backup_target_ok), grup: "Kayıt ve yedek", admin: true },
+    Alan { key: "backup.ssh", label: "SSH komutu", tur: Tur::Metin(|s| s.starts_with("ssh") && chars_ok(s, 120, |c| c.is_ascii_alphanumeric() || " ./_=-".contains(c))), grup: "Kayıt ve yedek", admin: true },
 ];
 
 fn b(v: bool) -> String {
@@ -244,16 +245,16 @@ fn set_field(c: &mut Config, key: &str, v: &str) {
     }
 }
 
-/// Ayarlar sayfasının (api=false) ya da API ayarları sayfasının (api=true) alanları.
-fn fields(api: bool) -> impl Iterator<Item = &'static Alan> {
-    ALANLAR.iter().filter(move |a| a.api == api)
+/// Ayarlar sayfasının (admin=false) ya da Admin ayarları sayfasının (admin=true) alanları.
+fn fields(admin: bool) -> impl Iterator<Item = &'static Alan> {
+    ALANLAR.iter().filter(move |a| a.admin == admin)
 }
 
 /// Formdan değişiklikler: (anahtar, eski, yeni). Sayfada olmayan alanlar yok sayılır; boş gizli alan = değişmez.
-fn validate(api: bool, form: &Form, cfg: &Config) -> Result<Vec<(&'static str, String, String)>, HashMap<&'static str, String>> {
+fn validate(admin: bool, form: &Form, cfg: &Config) -> Result<Vec<(&'static str, String, String)>, HashMap<&'static str, String>> {
     let mut changes = vec![];
     let mut errors = HashMap::new();
-    for a in fields(api) {
+    for a in fields(admin) {
         let old = get_field(cfg, a.key);
         let raw = form.get(a.key).map(|s| s.trim().to_string());
         let new = match a.tur {
@@ -339,7 +340,7 @@ const MENU: &[(&str, &str, bool)] = &[
     ("/ayarlar", "Ayarlar", false),
     ("/portal-metinleri", "Portal metinleri", false),
     ("/portlar", "Portlar", false),
-    ("/api", "API ayarları", true),
+    ("/admin-ayarlari", "Admin ayarları", true),
     ("/sistem", "Sistem", false),
     ("/hesaplar", "Hesaplar", false),
     ("/panel-hareketleri", "Panel hareketleri", true),
@@ -480,9 +481,10 @@ impl Panel {
             ("POST", "/portlar/etiket") => self.portlar_etiket(&cfg, req, &o),
             ("GET", "/ayarlar") => self.ayarlar(&cfg, req, &o, &HashMap::new(), false),
             ("POST", "/ayarlar") => self.ayarlar_post(cfg, req, &o, false),
-            ("GET", "/api") if hizmet => self.ayarlar(&cfg, req, &o, &HashMap::new(), true),
-            ("POST", "/api") if hizmet => self.ayarlar_post(cfg, req, &o, true),
-            ("GET" | "POST", "/api") => text(403, "Bu sayfa yalnızca admin'e açık."),
+            ("GET", "/admin-ayarlari") if hizmet => self.ayarlar(&cfg, req, &o, &HashMap::new(), true),
+            ("POST", "/admin-ayarlari") if hizmet => self.ayarlar_post(cfg, req, &o, true),
+            ("POST", "/admin-ayarlari/fabrika") if hizmet => self.fabrika(&cfg, req, &o),
+            ("GET" | "POST", "/admin-ayarlari" | "/admin-ayarlari/fabrika") => text(403, "Bu sayfa yalnızca admin'e açık."),
             ("GET", "/sistem") => self.sistem(&cfg, req, &o, ""),
             ("POST", "/sistem/gun-kapat") => {
                 let out = crate::muhur::gun_kapat(&cfg, None, now, false);
@@ -616,13 +618,19 @@ impl Panel {
         let sms = ortak::sms_count(&m.state_root, &today);
         let disk = disk_percent(&m.log_root).map_or("?".into(), |p| format!("%{p}"));
         let mut uyarilar = vec![];
-        if cfg.sms.mock {
-            uyarilar.push("SMS deneme modunda: müşterilere gerçek SMS gitmiyor.".to_string());
-        } else if !cfg.sms_missing().is_empty() {
-            uyarilar.push("SMS sağlayıcı bilgileri eksik: müşteriler kod alamaz.".to_string());
-        }
-        if !cfg.backup.enabled {
-            uyarilar.push("Uzak yedek kapalı: kayıtlar yalnızca bu cihazda.".to_string());
+        let sms_down = cfg.sms.mock || !cfg.sms_missing().is_empty();
+        if o.rol == Rol::Hizmet {
+            if cfg.sms.mock {
+                uyarilar.push("SMS deneme modunda: müşterilere gerçek SMS gitmiyor.".to_string());
+            } else if !cfg.sms_missing().is_empty() {
+                uyarilar.push("SMS sağlayıcı bilgileri eksik: müşteriler kod alamaz.".to_string());
+            }
+            if !cfg.backup.enabled {
+                uyarilar.push("Uzak yedek kapalı: kayıtlar yalnızca bu cihazda.".to_string());
+            }
+        } else if sms_down {
+            // işletme sahibi sağlayıcı adını / ayrıntıyı görmez
+            uyarilar.push("Müşterilere doğrulama SMS'i şu an gönderilmiyor; hizmet sağlayıcınıza başvurun.".to_string());
         }
         if sms as f64 >= cfg.limits.sms_global_day as f64 * 0.8 {
             uyarilar.push(format!("Günlük SMS tavanına yaklaşıldı ({sms} / {}).", cfg.limits.sms_global_day));
@@ -755,10 +763,10 @@ impl Panel {
     }
 
     // --- ayarlar
-    fn ayarlar(&self, cfg: &Config, req: &Req, o: &Oturum, errors: &HashMap<&str, String>, api: bool) -> Resp {
+    fn ayarlar(&self, cfg: &Config, req: &Req, o: &Oturum, errors: &HashMap<&str, String>, admin: bool) -> Resp {
         let form = if errors.is_empty() { None } else { Some(&req.form) };
         let mut groups: Vec<(&str, String)> = vec![];
-        for a in fields(api) {
+        for a in fields(admin) {
             let cur = form.and_then(|f| f.get(a.key).cloned()).unwrap_or_else(|| get_field(cfg, a.key));
             let id = a.key.replace('.', "-");
             let err = errors.get(a.key).map_or(String::new(), |e| format!("<div class=\"hata\">{}</div>", h(e)));
@@ -790,15 +798,15 @@ impl Panel {
                 None => groups.push((a.grup, html)),
             }
         }
-        let mut body = format!("<form method=\"post\" action=\"{}\">{}", if api { "/api" } else { "/ayarlar" }, csrf_input(o));
+        let mut body = format!("<form method=\"post\" action=\"{}\">{}", if admin { "/admin-ayarlari" } else { "/ayarlar" }, csrf_input(o));
         for (g, inner) in &groups {
             body.push_str(&format!("<section class=\"kart grup\"><h2>{}</h2><div>{inner}</div></section>", h(g)));
         }
-        if !api {
+        if admin {
             let st = |missing: bool| if missing { "eksik" } else { "tanımlı" };
             let twilio_missing = !cfg.twilio_missing().is_empty();
             body.push_str(&format!(
-                "<section class=\"kart grup\"><h2>SMS sağlayıcısı</h2><div>{}</div></section>",
+                "<section class=\"kart grup\"><h2>Durum</h2><div>{}</div></section>",
                 facts(&[
                     ("Mod", if cfg.sms.mock { "Deneme (SMS gönderilmiyor)".into() } else { "Gerçek SMS".into() }),
                     ("NetGSM bilgileri", st(cfg.netgsm.password.is_empty() || cfg.netgsm.usercode.is_empty()).into()),
@@ -807,16 +815,46 @@ impl Panel {
             ));
         }
         body.push_str("<div class=\"kaydet\"><button>Kaydet</button><p class=\"not\">Kaydedince giriş sayfası yeni ayarlarla yeniden başlatılır; bağlı müşteriler düşmez.</p></div></form>");
-        self.page(cfg, req, Some(o), if api { "API ayarları" } else { "Ayarlar" }, &body)
+        if admin {
+            body.push_str(&format!(
+                "<section class=\"kart\" style=\"margin-top:48px\"><h2>Fabrika ayarları</h2><p class=\"not\">Cihazı ISO'dan kurulduktan hemen \
+                 sonraki haline döndürür: bütün ayarlar (işletme adı ve unvanı, SMS bilgileri, yedek, metinler, yasaklı listeler) ürün \
+                 varsayılanına döner, admin dışındaki hesaplar silinir ve açılışta kurulum ekranı gelir, portlar varsayılana döner \
+                 (Ethernet 1 internet alır, Ethernet 2 verir, Wi-Fi kapalı), bağlı müşterilerin oturumları kapanır. 5651 kayıtları \
+                 silinmez. Geri alınamaz.</p><form class=\"satir\" method=\"post\" action=\"/admin-ayarlari/fabrika\">{}\
+                 <div><label for=\"fp\">Admin parolası</label><input type=\"password\" id=\"fp\" name=\"parola\" autocomplete=\"current-password\" required></div>\
+                 <label class=\"secim\"><input type=\"checkbox\" name=\"onay\" value=\"1\" required> Bütün ayarların silineceğini anladım</label>\
+                 <button class=\"tehlike\">Fabrika ayarlarına döndür</button></form></section>",
+                csrf_input(o)
+            ));
+        }
+        self.page(cfg, req, Some(o), if admin { "Admin ayarları" } else { "Ayarlar" }, &body)
     }
 
-    fn ayarlar_post(&self, mut cfg: Config, req: &Req, o: &Oturum, api: bool) -> Resp {
-        let back = if api { "/api" } else { "/ayarlar" };
-        let changes = match validate(api, &req.form, &cfg) {
+    fn fabrika(&self, cfg: &Config, req: &Req, o: &Oturum) -> Resp {
+        let pw = req.form.get("parola").map_or("", String::as_str);
+        if req.form.get("onay").is_none_or(|v| v != "1") || self.hesaplar.verify(&o.user, pw) != Some(Rol::Hizmet) {
+            self.audit(cfg, req, Some(o), "PANEL_FABRIKA_RED", "");
+            return redirect("/admin-ayarlari", Some(("Parola hatalı ya da onay işaretlenmedi; hiçbir şey değişmedi.", true)));
+        }
+        self.audit(cfg, req, Some(o), "PANEL_FABRIKA", "");
+        // yanıt tarayıcıya ulaşsın diye 2 sn sonra, panelden bağımsız işte (panel ve ağ yeniden başlar)
+        let unit = format!("wfc-fabrika-{}", ortak::random_hex(4));
+        if !(self.runner)(&cmd(&["systemd-run", "--unit", &unit, "--on-active", "2s", "/usr/local/bin/wificorrect", "ctl", "fabrika"])) {
+            return redirect("/admin-ayarlari", Some(("Fabrika ayarları başlatılamadı.", true)));
+        }
+        let body = "<div class=\"kart\"><p>Cihaz fabrika ayarlarına dönüyor. Ağ ve panel yeniden başlıyor; yaklaşık bir dakika sonra \
+                    bu adresi yenileyin, kurulum ekranı açılacak. İnternet kablosu Ethernet 1'de (sağ) değilse oraya takın.</p></div>";
+        self.page(cfg, req, None, "Fabrika ayarları", body)
+    }
+
+    fn ayarlar_post(&self, mut cfg: Config, req: &Req, o: &Oturum, admin: bool) -> Resp {
+        let back = if admin { "/admin-ayarlari" } else { "/ayarlar" };
+        let changes = match validate(admin, &req.form, &cfg) {
             Ok(c) => c,
             Err(errors) => {
                 let req2 = Req { query: [("m".to_string(), "Geçersiz değerler var, düzeltip tekrar kaydedin.".to_string()), ("e".to_string(), "1".to_string())].into(), ..clone_req(req) };
-                return self.ayarlar(&cfg, &req2, o, &errors, api);
+                return self.ayarlar(&cfg, &req2, o, &errors, admin);
             }
         };
         if changes.is_empty() {
@@ -838,16 +876,18 @@ impl Panel {
     // --- sistem
     fn sistem(&self, cfg: &Config, req: &Req, o: &Oturum, verify_out: &str) -> Resp {
         let chain = crate::muhur::chain_lines(&cfg.main.log_root);
-        let rows: Vec<(&str, String)> = vec![
+        let mut rows: Vec<(&str, String)> = vec![
             ("Güvenlik duvarı", service_state("wificorrect-guvenlik")),
             ("DHCP / DNS", service_state("dnsmasq")),
             ("Giriş sayfası", service_state("wificorrect-portal")),
             ("Kaydedici", service_state("wificorrect-kaydedici")),
             ("Son mühürlenen gün", h(&chain.last().map_or("henüz yok".to_string(), |l| l[0].clone()))),
-            ("Uzak yedek", if cfg.backup.enabled { h(&cfg.backup.target) } else { "kapalı".into() }),
             ("Saat", h(&ortak::now_iso((self.clock)()))),
             ("Sürüm", h(&format!("wificorrect {}", env!("CARGO_PKG_VERSION")))),
         ];
+        if o.rol == Rol::Hizmet {
+            rows.insert(5, ("Uzak yedek", if cfg.backup.enabled { h(&cfg.backup.target) } else { "kapalı".into() }));
+        }
         let verify = if verify_out.is_empty() { String::new() } else { format!("<div class=\"kart\"><h2>Bütünlük doğrulaması</h2><pre>{}</pre></div>", h(verify_out)) };
         let body = format!(
             "<div class=\"kart\">{}</div>{verify}<div class=\"kart\"><h2>İşlemler</h2><div class=\"eylemler\">{}{}{}</div>\
@@ -1226,10 +1266,10 @@ mod tests {
         let e = env();
         let (tok, csrf) = setup_and_login(&e, "mudur", "sahip-parola-12");
         assert_eq!(e.p.handle(&req("POST", "/ayarlar", &[("main.site_name", "X")], Some(&tok))).status, 403); // CSRF yok
-        assert_eq!(e.p.handle(&req("GET", "/api", &[], Some(&tok))).status, 403); // API ayarları yalnızca admin
-        assert_eq!(e.p.handle(&req("POST", "/api", &[("csrf", &csrf), ("sms.mock", "0")], Some(&tok))).status, 403);
+        assert_eq!(e.p.handle(&req("GET", "/admin-ayarlari", &[], Some(&tok))).status, 403); // Admin ayarları yalnızca admin
+        assert_eq!(e.p.handle(&req("POST", "/admin-ayarlari", &[("csrf", &csrf), ("sms.mock", "0")], Some(&tok))).status, 403);
         let page = e.p.handle(&req("GET", "/", &[], Some(&tok))).body;
-        assert!(!page.contains("href=\"/api\"") && page.contains("href=\"/hesaplar\""));
+        assert!(!page.contains("href=\"/admin-ayarlari\"") && page.contains("href=\"/hesaplar\""));
         let page = e.p.handle(&req("GET", "/hesaplar", &[], Some(&tok))).body;
         assert!(page.contains(">admin<") && !page.contains("name=\"rol\"") && page.matches(">Sil<").count() == 0);
         let r = e.p.handle(&req("POST", "/hesaplar/sifirla", &[("csrf", &csrf), ("kullanici", "admin"), ("parola", "ele-gecirme-1")], Some(&tok)));
@@ -1237,7 +1277,10 @@ mod tests {
         e.p.handle(&req("POST", "/hesaplar/ekle", &[("csrf", &csrf), ("kullanici", "garson"), ("rol", "hizmet"), ("parola", "garson-parola-1")], Some(&tok)));
         assert_eq!(e.p.hesaplar.verify("garson", "garson-parola-1"), Some(Rol::Sahip)); // sahip API yetkisi veremez
         let page = e.p.handle(&req("GET", "/ayarlar", &[], Some(&tok))).body;
-        assert!(!page.contains("netgsm.password") && !page.contains("sms.mock") && page.contains("NetGSM bilgileri"));
+        for gizli in ["netgsm", "NetGSM", "Twilio", "twilio", "sms.mock", "backup.target", "Yedek", "sms_global_day", "Fabrika"] {
+            assert!(!page.contains(gizli), "{gizli}"); // işletme sahibi sağlayıcı / sunucu / sınır görmez
+        }
+        assert!(page.contains("main.unvan") && page.contains("main.session_minutes"));
         // API alanları Ayarlar formundan elle gönderilse de yok sayılır
         let r = e.p.handle(&req("POST", "/ayarlar", &[("csrf", &csrf), ("main.session_minutes", "1440"), ("netgsm.password", "kotu-sifre"), ("sms.mock", "0")], Some(&tok)));
         assert_eq!(r.status, 303);
@@ -1253,17 +1296,17 @@ mod tests {
         let page = e.p.handle(&req("GET", "/hesaplar", &[], Some(&tok))).body;
         assert!(page.contains(">admin<") && page.matches(">Sil<").count() == 1); // admin silinemez, sahip silinebilir
         assert!(e.p.handle(&req("POST", "/hesaplar/sil", &[("csrf", &csrf), ("kullanici", "admin")], Some(&tok))).headers.iter().any(|(_, v)| v.contains("e=1")));
-        let page = e.p.handle(&req("GET", "/api", &[], Some(&tok))).body;
+        let page = e.p.handle(&req("GET", "/admin-ayarlari", &[], Some(&tok))).body;
         assert!(page.contains("name=\"netgsm.password\"") && page.contains("sms.mock") && !page.contains("main.session_minutes"));
-        let r = e.p.handle(&req("POST", "/api", &[("csrf", &csrf), ("netgsm.password", "gizli-sifre-1"), ("netgsm.usercode", "8503027084"), ("sms.mock", "1"), ("netgsm.msgheader", "COK-UZUN-BASLIK-OLMAZ")], Some(&tok)));
+        let r = e.p.handle(&req("POST", "/admin-ayarlari", &[("csrf", &csrf), ("netgsm.password", "gizli-sifre-1"), ("netgsm.usercode", "8503027084"), ("sms.mock", "1"), ("netgsm.msgheader", "COK-UZUN-BASLIK-OLMAZ")], Some(&tok)));
         assert!(r.status == 200 && r.body.contains("Geçersiz değer")); // geçersiz → hiçbir şey kaydedilmez
         assert_eq!(Config::load(&e.p.cfg_path).unwrap().netgsm.password, "");
-        e.p.handle(&req("POST", "/api", &[("csrf", &csrf), ("netgsm.password", "gizli-sifre-1"), ("netgsm.usercode", "8503027084"), ("sms.mock", "1")], Some(&tok)));
+        e.p.handle(&req("POST", "/admin-ayarlari", &[("csrf", &csrf), ("netgsm.password", "gizli-sifre-1"), ("netgsm.usercode", "8503027084"), ("sms.mock", "1")], Some(&tok)));
         let c = Config::load(&e.p.cfg_path).unwrap();
         assert_eq!((c.netgsm.password.as_str(), c.netgsm.usercode.as_str()), ("gizli-sifre-1", "8503027084"));
-        let page = e.p.handle(&req("GET", "/api", &[], Some(&tok))).body;
+        let page = e.p.handle(&req("GET", "/admin-ayarlari", &[], Some(&tok))).body;
         assert!(!page.contains("gizli-sifre-1") && page.contains("(tanımlı)")); // şifre geri gösterilmez
-        e.p.handle(&req("POST", "/api", &[("csrf", &csrf), ("netgsm.password", ""), ("sms.mock", "1")], Some(&tok))); // boş = aynı
+        e.p.handle(&req("POST", "/admin-ayarlari", &[("csrf", &csrf), ("netgsm.password", ""), ("sms.mock", "1")], Some(&tok))); // boş = aynı
         assert_eq!(Config::load(&e.p.cfg_path).unwrap().netgsm.password, "gizli-sifre-1");
         let audit = std::fs::read_to_string(e.root.join("5651/gunluk/2026-09-29/denetim.csv")).unwrap();
         assert!(audit.contains("netgsm.password: *** → ***") && !audit.contains("gizli-sifre-1"));
@@ -1523,5 +1566,30 @@ mod tests {
         assert!(e.calls.lock().unwrap().iter().any(|c| c.join(" ") == "systemctl restart wificorrect-portal"));
         let audit = std::fs::read_to_string(e.root.join("5651/gunluk/2026-09-29/denetim.csv")).unwrap();
         assert!(audit.contains("PANEL_PORTAL_METIN") && audit.contains("aydinlatma(41 karakter)") && audit.contains("acik_riza(10 karakter)"));
+    }
+
+    #[test]
+    fn admin_settings_page_and_factory_reset() {
+        let e = env();
+        let (otok, ocsrf) = setup_and_login(&e, "mudur", "sahip-parola-12");
+        let ozet = e.p.handle(&get("/", &[], &otok)).body; // varsayılan: SMS deneme modu
+        assert!(ozet.contains("hizmet sağlayıcınıza başvurun") && !ozet.contains("deneme modu") && !ozet.contains("Uzak yedek"));
+        assert!(!e.p.handle(&get("/sistem", &[], &otok)).body.contains("Uzak yedek"));
+        assert_eq!(e.p.handle(&req("POST", "/admin-ayarlari/fabrika", &[("csrf", &ocsrf), ("parola", "sahip-parola-12"), ("onay", "1")], Some(&otok))).status, 403);
+        let (tok, csrf) = setup_and_login(&e, "admin", "hizmet-parola-1");
+        let page = e.p.handle(&get("/admin-ayarlari", &[], &tok)).body;
+        for gorunur in ["backup.target", "main.retention_days", "limits.sms_global_day", "netgsm.usercode", "twilio.enabled", "Fabrika ayarları"] {
+            assert!(page.contains(gorunur), "{gorunur}");
+        }
+        assert!(!page.contains("main.unvan")); // işletme ayarları Ayarlar sayfasında
+        assert!(e.p.handle(&get("/sistem", &[], &tok)).body.contains("Uzak yedek"));
+        let fab = |pw: &str, onay: &str| e.p.handle(&req("POST", "/admin-ayarlari/fabrika", &[("csrf", &csrf), ("parola", pw), ("onay", onay)], Some(&tok)));
+        assert!(loc(&fab("yanlis-parola", "1")).contains("e=1"));
+        assert!(loc(&fab("hizmet-parola-1", "")).contains("e=1"));
+        assert!(!e.calls.lock().unwrap().iter().any(|c| c.join(" ").contains("ctl fabrika")));
+        assert!(fab("hizmet-parola-1", "1").body.contains("fabrika ayarlarına dönüyor"));
+        assert!(e.calls.lock().unwrap().iter().any(|c| c.join(" ").ends_with("wificorrect ctl fabrika")));
+        let audit = std::fs::read_to_string(e.root.join("5651/gunluk/2026-09-29/denetim.csv")).unwrap();
+        assert!(audit.contains("PANEL_FABRIKA_RED") && audit.contains("PANEL_FABRIKA;") || audit.contains(";PANEL_FABRIKA;"));
     }
 }

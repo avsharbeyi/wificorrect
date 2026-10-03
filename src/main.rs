@@ -3,6 +3,7 @@
 mod ag;
 mod ayar;
 mod ctl;
+mod fabrika;
 mod filtre;
 mod hesap;
 mod kayit;

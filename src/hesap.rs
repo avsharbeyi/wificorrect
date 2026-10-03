@@ -149,6 +149,14 @@ impl Hesaplar {
         self.save(&m)
     }
 
+    /// Fabrika ayarı: admin dışındaki bütün hesaplar silinir (kurulum ekranı yeniden açılır).
+    pub fn keep_only_admin(&self) -> Result<(), String> {
+        let _g = self.lock.lock().unwrap_or_else(|e| e.into_inner());
+        let mut m = self.load()?;
+        m.retain(|u, _| u == ADMIN);
+        self.save(&m)
+    }
+
     /// `admin` silinemez (cihaz yönetilemez kalır).
     pub fn remove(&self, user: &str) -> Result<(), String> {
         let _g = self.lock.lock().unwrap_or_else(|e| e.into_inner());

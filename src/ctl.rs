@@ -176,6 +176,18 @@ pub fn run(cfg: Config, args: &[String]) -> ExitCode {
             ExitCode::SUCCESS
         }
         Some("admin-parola") => admin_parola(crate::hesap::PATH),
+        // Panel → Admin ayarları → Fabrika ayarları (ayrı systemd işinde; ağ yeniden kurulur)
+        Some("fabrika") => {
+            let path = std::env::var("WFC_AYAR").unwrap_or_else(|_| crate::ayar::PATH.to_string());
+            let errs = crate::fabrika::fabrika(&cfg, &path, crate::hesap::PATH, std::path::Path::new(crate::filtre::DNSMASQ_CONF), &crate::ag::Yollar::sistem(), now, &runner);
+            if errs.is_empty() {
+                println!("Fabrika ayarlarına dönüldü.");
+                ExitCode::SUCCESS
+            } else {
+                eprintln!("{}", errs.join("; "));
+                ExitCode::from(1)
+            }
+        }
         // Açılışta (wificorrect-guvenlik) ve panelden: yasaklı site / kelime listelerini uygula
         Some("filtre-uygula") => match crate::filtre::uygula(&cfg, std::path::Path::new(crate::filtre::DNSMASQ_CONF), &runner) {
             Ok(()) => ExitCode::SUCCESS,
