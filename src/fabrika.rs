@@ -34,10 +34,7 @@ fn kayitlari_teslim_et(cfg: &Config, now: f64, runner: &Runner) -> Result<(), St
             crate::muhur::close_day(cfg, &day, now, true).map_err(|e| format!("{day} mühürlenemedi: {e}"))?;
         }
     }
-    let msg = crate::muhur::backup(cfg, now, runner);
-    if msg.contains("HATA") || msg.contains("kapalı") || msg.contains("boş") || msg.contains("yok") && !msg.contains("yeni gün yok") {
-        return Err(msg);
-    }
+    crate::muhur::backup(cfg, now, runner)?;
     let unsent: Vec<String> = crate::muhur::days(root).into_iter().filter(|d| !g.join(d).join(".yedeklendi").exists()).collect();
     if !unsent.is_empty() {
         return Err(format!("gönderilmemiş gün: {}", unsent.join(", ")));

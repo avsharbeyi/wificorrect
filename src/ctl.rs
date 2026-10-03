@@ -268,9 +268,18 @@ pub fn run(cfg: Config, args: &[String]) -> ExitCode {
         }
         Some("yedekle") => {
             // ponytail: bir gün 1 saatte gitmezse YEDEK_HATA; ertesi gece kaldığı yerden devam eder
-            let msg = crate::muhur::backup(&cfg, now, &|c: &[String]| ortak::run_timeout(c, 3600));
-            println!("{msg}");
-            if msg.contains("HATA") { ExitCode::from(1) } else { ExitCode::SUCCESS }
+            // sonuç denetime: panel → Admin ayarları "Son yedek" bunu gösterir
+            let r = crate::muhur::backup(&cfg, now, &|c: &[String]| ortak::run_timeout(c, 3600));
+            let (ek, code) = match &r {
+                Ok(m) => (format!("sonuc={m}"), ExitCode::SUCCESS),
+                Err(m) => (format!("hata={m}"), ExitCode::from(1)),
+            };
+            ortak::audit(&cfg.main.log_root, Row::new("YEDEK_SONUC", &ortak::now_iso(now)).set("ek", ek));
+            match r {
+                Ok(m) => println!("{m}"),
+                Err(m) => eprintln!("YEDEK HATASI: {m}"),
+            }
+            code
         }
         _ => {
             eprintln!(

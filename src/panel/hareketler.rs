@@ -31,6 +31,9 @@ pub(super) fn olay_adi(olay: &str) -> &str {
         "PANEL_AYAR" => "Ayar değiştirdi",
         "PANEL_PORT" => "Port değiştirdi",
         "PANEL_PORTAL_METIN" => "Portal metnini değiştirdi",
+        "PANEL_YEDEKLE" => "Yedeklemeyi başlattı",
+        "PANEL_FABRIKA" => "Fabrika ayarlarını başlattı",
+        "PANEL_FABRIKA_RED" => "Fabrika ayarları reddedildi",
         o => o.strip_prefix("PANEL_").unwrap_or(o),
     }
 }

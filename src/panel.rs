@@ -484,7 +484,8 @@ impl Panel {
             ("GET", "/admin-ayarlari") if hizmet => self.ayarlar(&cfg, req, &o, &HashMap::new(), true),
             ("POST", "/admin-ayarlari") if hizmet => self.ayarlar_post(cfg, req, &o, true),
             ("POST", "/admin-ayarlari/fabrika") if hizmet => self.fabrika(&cfg, req, &o),
-            ("GET" | "POST", "/admin-ayarlari" | "/admin-ayarlari/fabrika") => text(403, "Bu sayfa yalnızca admin'e açık."),
+            ("POST", "/admin-ayarlari/yedekle") if hizmet => self.yedekle(&cfg, req, &o),
+            ("GET" | "POST", "/admin-ayarlari" | "/admin-ayarlari/fabrika" | "/admin-ayarlari/yedekle") => text(403, "Bu sayfa yalnızca admin'e açık."),
             ("GET", "/sistem") => self.sistem(&cfg, req, &o, ""),
             ("POST", "/sistem/gun-kapat") => {
                 let out = crate::muhur::gun_kapat(&cfg, None, now, false);
@@ -803,6 +804,10 @@ impl Panel {
             body.push_str(&format!("<section class=\"kart grup\"><h2>{}</h2><div>{inner}</div></section>", h(g)));
         }
         if admin {
+            let (yedek, fabrika) = self.son_durum(cfg);
+            if let Some(f) = &fabrika {
+                body.insert_str(0, f);
+            }
             let st = |missing: bool| if missing { "eksik" } else { "tanımlı" };
             let twilio_missing = !cfg.twilio_missing().is_empty();
             body.push_str(&format!(
@@ -811,11 +816,18 @@ impl Panel {
                     ("Mod", if cfg.sms.mock { "Deneme (SMS gönderilmiyor)".into() } else { "Gerçek SMS".into() }),
                     ("NetGSM bilgileri", st(cfg.netgsm.password.is_empty() || cfg.netgsm.usercode.is_empty()).into()),
                     ("Twilio (yabancı numaralar)", if cfg.twilio.enabled { st(twilio_missing).into() } else { "kapalı".into() }),
+                    ("Son yedek", yedek),
                 ])
             ));
         }
         body.push_str("<div class=\"kaydet\"><button>Kaydet</button><p class=\"not\">Kaydedince giriş sayfası yeni ayarlarla yeniden başlatılır; bağlı müşteriler düşmez.</p></div></form>");
         if admin {
+            body.push_str(&format!(
+                "<section class=\"kart\" style=\"margin-top:48px\"><h2>Uzak yedek</h2><p class=\"not\">Mühürlenmiş, henüz \
+                 gönderilmemiş günleri ve zincir dosyasını sunucuya şimdi gönderir (gece 02:00'de kendiliğinden de çalışır). Gönderilecek \
+                 yeni gün yoksa da zincir gönderilir; sunucu bağlantısı böylece denenmiş olur. Sonuç yukarıdaki Durum'da görünür.</p>{}</section>",
+                post_button(o, "/admin-ayarlari/yedekle", "Şimdi yedekle", &[], "ikincil")
+            ));
             body.push_str(&format!(
                 "<section class=\"kart\" style=\"margin-top:48px\"><h2>Fabrika ayarları</h2><p class=\"not\">Cihazı ISO'dan kurulduktan hemen \
                  sonraki haline döndürür: bütün ayarlar (işletme adı ve unvanı, SMS bilgileri, yedek, metinler, yasaklı listeler) ürün \
@@ -831,6 +843,49 @@ impl Panel {
             ));
         }
         self.page(cfg, req, Some(o), if admin { "Admin ayarları" } else { "Ayarlar" }, &body)
+    }
+
+    /// Admin ayarları durumu (denetim kaydından): son yedek sonucu ve son fabrika dönüşü (sürüyor / iptal oldu).
+    fn son_durum(&self, cfg: &Config) -> (String, Option<String>) {
+        let root = &cfg.main.log_root;
+        let mut rows: Vec<crate::kayit::Rec> = vec![];
+        for day in crate::kayit::days_desc(root).into_iter().take(3) {
+            rows.extend(crate::kayit::day_rows(root, &day, "denetim.csv"));
+        }
+        rows.sort_by(|a, b| a[0].cmp(&b[0]));
+        let when = |r: &crate::kayit::Rec| r[0].get(..16).unwrap_or("").replace('T', " ");
+        let ek = |r: &crate::kayit::Rec| crate::kayit::col(r, "ek").to_string();
+        let yedek = match rows.iter().rev().find(|r| crate::kayit::col(r, "olay") == "YEDEK_SONUC") {
+            None => "henüz çalışmadı".to_string(),
+            Some(r) => match ek(r).strip_prefix("hata=") {
+                Some(e) => format!("<span class=\"durum kotu\">{} — HATA: {}</span>", h(&when(r)), h(e)),
+                None => format!("<span class=\"durum\">{} — {}</span>", h(&when(r)), h(ek(r).trim_start_matches("sonuc="))),
+            },
+        };
+        let last = rows.iter().rev().find(|r| matches!(crate::kayit::col(r, "olay"), "FABRIKA_IPTAL" | "FABRIKA_AYARI" | "PANEL_FABRIKA"));
+        let fabrika = last.and_then(|r| match crate::kayit::col(r, "olay") {
+            "FABRIKA_IPTAL" => Some(format!(
+                "<div class=\"mesaj hata\">Son fabrika dönüşü <b>iptal oldu</b> ({}): {}. Hiçbir kayıt silinmedi, ayarlar yerinde.</div>",
+                h(&when(r)),
+                h(ek(r).trim_start_matches("neden="))
+            )),
+            "PANEL_FABRIKA" => Some(format!(
+                "<div class=\"mesaj\">Fabrika dönüşü {} tarihinde başlatıldı; kayıtlar sunucuya gönderiliyor. Birkaç dakika sonra sayfayı yenileyin.</div>",
+                h(&when(r))
+            )),
+            _ => None,
+        });
+        (yedek, fabrika)
+    }
+
+    fn yedekle(&self, cfg: &Config, req: &Req, o: &Oturum) -> Resp {
+        if !cfg.backup.enabled || cfg.backup.target.trim().is_empty() {
+            return redirect("/admin-ayarlari", Some(("Uzak yedek kapalı ya da hedef boş; önce yukarıdan açıp kaydedin.", true)));
+        }
+        self.audit(cfg, req, Some(o), "PANEL_YEDEKLE", "");
+        let unit = format!("wfc-yedekle-{}", ortak::random_hex(4));
+        let ok = (self.runner)(&cmd(&["systemd-run", "--unit", &unit, "--on-active", "1s", "/usr/local/bin/wificorrect", "ctl", "yedekle"]));
+        redirect("/admin-ayarlari", Some(if ok { ("Yedekleme başladı; birkaç saniye sonra sayfayı yenileyip Durum'daki \"Son yedek\" satırına bakın.", false) } else { ("Yedekleme başlatılamadı.", true) }))
     }
 
     fn fabrika(&self, cfg: &Config, req: &Req, o: &Oturum) -> Resp {
@@ -1594,6 +1649,16 @@ mod tests {
         assert!(loc(&fab("yanlis-parola", "1")).contains("e=1"));
         assert!(loc(&fab("hizmet-parola-1", "")).contains("e=1"));
         assert!(!e.calls.lock().unwrap().iter().any(|c| c.join(" ").contains("ctl fabrika")));
+        // şimdi yedekle: kapalıyken reddedilir
+        assert!(page.contains("Son yedek") && page.contains("henüz çalışmadı"));
+        assert!(loc(&e.p.handle(&req("POST", "/admin-ayarlari/yedekle", &[("csrf", &csrf)], Some(&tok)))).contains("e=1"));
+        // denetimdeki sonuçlar durumda görünür
+        let cfgd = Config::load(&e.p.cfg_path).unwrap();
+        ortak::audit(&cfgd.main.log_root, Row::new("YEDEK_SONUC", "2026-09-29T02:00:05+03:00").set("ek", "hata=zincir.txt sunucuya gönderilemedi"));
+        ortak::audit(&cfgd.main.log_root, Row::new("FABRIKA_IPTAL", "2026-09-29T03:00:00+03:00").set("ek", "neden=2026-09-28 sunucuya gönderilemedi"));
+        let page = e.p.handle(&get("/admin-ayarlari", &[], &tok)).body;
+        assert!(page.contains("2026-09-29 02:00 — HATA: zincir.txt sunucuya gönderilemedi"));
+        assert!(page.contains("Son fabrika dönüşü <b>iptal oldu</b> (2026-09-29 03:00): 2026-09-28 sunucuya gönderilemedi"));
         // uzak yedek kapalıyken reddedilir (kayıtlar sunucuya gitmeden olmaz)
         let r = fab("hizmet-parola-1", "1");
         assert!(loc(&r).contains("e=1") && !e.calls.lock().unwrap().iter().any(|c| c.join(" ").contains("ctl fabrika")));
@@ -1602,6 +1667,9 @@ mod tests {
         c.backup.target = "kafe-x@sunucu:".into();
         c.save(&e.p.cfg_path).unwrap();
         assert!(fab("hizmet-parola-1", "1").body.contains("fabrika ayarlarına dönüyor"));
+        assert!(e.p.handle(&get("/admin-ayarlari", &[], &tok)).body.contains("kayıtlar sunucuya gönderiliyor")); // sürüyor
+        assert!(!loc(&e.p.handle(&req("POST", "/admin-ayarlari/yedekle", &[("csrf", &csrf)], Some(&tok)))).contains("e=1"));
+        assert!(e.calls.lock().unwrap().iter().any(|c| c.join(" ").ends_with("wificorrect ctl yedekle")));
         assert!(e.calls.lock().unwrap().iter().any(|c| c.join(" ").ends_with("wificorrect ctl fabrika")));
         let audit = std::fs::read_to_string(e.root.join("5651/gunluk/2026-09-29/denetim.csv")).unwrap();
         assert!(audit.contains("PANEL_FABRIKA_RED") && audit.contains("PANEL_FABRIKA;") || audit.contains(";PANEL_FABRIKA;"));

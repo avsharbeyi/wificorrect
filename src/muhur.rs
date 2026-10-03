@@ -265,18 +265,20 @@ pub fn prune(cfg: &Config, now: f64, dry: bool) -> Vec<String> {
 
 /// Mühürlenmiş ama gönderilmemiş her günü sunucuya gönderir; başarılı olana .yedeklendi yazar.
 /// Sunucudaki dosya ezilmez: günler --ignore-existing, zincir/index'in önceki sürümü eski/ altına.
-pub fn backup(cfg: &Config, now: f64, runner: &Runner) -> String {
+/// Mühürlü, gönderilmemiş günleri ve zincir.txt / index.csv'yi gönderir. Gönderilecek gün yoksa da zincir gönderilir
+/// (sunucu bağlantısı her çalıştırmada denenmiş olur). Err: yedek kapalı ya da bir şey gönderilemedi.
+pub fn backup(cfg: &Config, now: f64, runner: &Runner) -> Result<String, String> {
     let b = &cfg.backup;
     if !b.enabled {
-        return "yedekleme kapalı".into();
+        return Err("yedekleme kapalı".into());
     }
     let target = b.target.trim_end_matches('/');
     if target.is_empty() {
-        return "yedek hedefi boş".into();
+        return Err("yedek hedefi boş".into());
     }
     let remote = target.contains(':') && !target.starts_with('/');
     if !remote && !Path::new(target).is_dir() {
-        return "hedef dizin yok".into(); // bağlı olmayan diski kök dosya sistemine doldurmasın
+        return Err("hedef dizin yok".into()); // bağlı olmayan diski kök dosya sistemine doldurmasın
     }
     let mut rsync: Vec<String> = vec!["rsync".into(), "-a".into(), "--timeout=120".into()];
     if remote {
@@ -286,15 +288,12 @@ pub fn backup(cfg: &Config, now: f64, runner: &Runner) -> String {
     let g = Path::new(root).join("gunluk");
     let pending: Vec<String> =
         days(root).into_iter().filter(|d| g.join(d).join("MANIFEST.sha256").exists() && !g.join(d).join(".yedeklendi").exists()).collect();
-    if pending.is_empty() {
-        return "yedeklenecek yeni gün yok".into();
-    }
     for day in &pending {
         let mut cmd = rsync.clone();
         cmd.extend(["--ignore-existing".to_string(), g.join(day).display().to_string(), format!("{target}/gunluk/")]);
         if !runner(&cmd) {
             audit(cfg, "YEDEK_HATA", now, &format!("gun={day}"));
-            return format!("YEDEK HATASI: {day}");
+            return Err(format!("{day} sunucuya gönderilemedi"));
         }
         if let Err(e) = fs::write(g.join(day).join(".yedeklendi"), format!("{}\n", ortak::now_iso(now))) {
             eprintln!("yedekle: işaret yazılamadı: {e}");
@@ -309,15 +308,19 @@ pub fn backup(cfg: &Config, now: f64, runner: &Runner) -> String {
     if !extras.is_empty() {
         let mut cmd = rsync.clone();
         cmd.extend(["--backup".into(), "--backup-dir=eski".into(), format!("--suffix=.{}", ortak::day_of(&ortak::now_iso(now)))]);
-        cmd.extend(extras);
+        cmd.extend(extras.iter().cloned());
         cmd.push(format!("{target}/"));
         if !runner(&cmd) {
             // zincir sunucuya ulaşmadan yerel kopyaya güvenilmesin (fabrika dönüşü bunu bekler)
             audit(cfg, "YEDEK_HATA", now, "dosya=zincir.txt");
-            return "YEDEK HATASI: zincir.txt".into();
+            return Err("zincir.txt sunucuya gönderilemedi (sunucuya ulaşılamıyor olabilir)".into());
         }
     }
-    format!("yedeklendi: {}", pending.join(", "))
+    Ok(match (pending.is_empty(), extras.is_empty()) {
+        (true, true) => "gönderilecek kayıt yok".into(),
+        (true, false) => "yeni gün yok; zincir gönderildi (sunucu bağlantısı sağlam)".into(),
+        _ => format!("{} gün gönderildi: {}", pending.len(), pending.join(", ")),
+    })
 }
 
 #[cfg(test)]
@@ -406,7 +409,7 @@ mod tests {
         write_day(&cfg, "2026-09-28");
         gun_kapat(&cfg, None, NOW, true);
         let runner = |_: &[String]| true;
-        assert_eq!(backup(&cfg, NOW, &runner), "yedekleme kapalı");
+        assert_eq!(backup(&cfg, NOW, &runner), Err("yedekleme kapalı".into()));
         cfg.backup.enabled = true;
         cfg.backup.target = "kafe-x@192.168.1.109:".into();
         let calls = Arc::new(Mutex::new(Vec::<Vec<String>>::new()));
@@ -418,12 +421,15 @@ mod tests {
             *ok2.lock().unwrap()
         };
         *ok.lock().unwrap() = false;
-        assert_eq!(backup(&cfg, NOW, &runner), "YEDEK HATASI: 2026-09-27");
+        assert_eq!(backup(&cfg, NOW, &runner), Err("2026-09-27 sunucuya gönderilemedi".into()));
         assert!(!root.join("5651/gunluk/2026-09-27/.yedeklendi").exists());
         *ok.lock().unwrap() = true;
-        assert_eq!(backup(&cfg, NOW, &runner), "yedeklendi: 2026-09-27, 2026-09-28");
+        assert_eq!(backup(&cfg, NOW, &runner), Ok("2 gün gönderildi: 2026-09-27, 2026-09-28".into()));
         assert!(root.join("5651/gunluk/2026-09-28/.yedeklendi").exists());
-        assert_eq!(backup(&cfg, NOW, &runner), "yedeklenecek yeni gün yok");
+        assert_eq!(backup(&cfg, NOW, &runner), Ok("yeni gün yok; zincir gönderildi (sunucu bağlantısı sağlam)".into()));
+        *ok.lock().unwrap() = false;
+        assert!(backup(&cfg, NOW, &runner).unwrap_err().contains("zincir.txt")); // yeni gün yokken de bağlantı denenir
+        *ok.lock().unwrap() = true;
         let calls = calls.lock().unwrap();
         let day_cmd = &calls[1];
         assert_eq!(&day_cmd[..5], ["rsync", "-a", "--timeout=120", "-e", "ssh -i /root/.ssh/yedek_anahtar"]);
