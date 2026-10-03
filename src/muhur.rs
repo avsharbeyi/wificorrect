@@ -51,7 +51,7 @@ fn gzip_file(path: &Path) -> std::io::Result<()> {
 }
 
 /// Gün klasöründeki (kullanicilar/ dahil) dosyalar: `/` ayraçlı göreli yollar, sıralı, gizliler hariç.
-fn day_files(d: &Path, suffix: &str) -> Vec<String> {
+pub fn day_files(d: &Path, suffix: &str) -> Vec<String> {
     fn walk(base: &Path, dir: &Path, suffix: &str, out: &mut Vec<String>) {
         let Ok(rd) = fs::read_dir(dir) else { return };
         for e in rd.flatten() {
@@ -70,7 +70,7 @@ fn day_files(d: &Path, suffix: &str) -> Vec<String> {
     out
 }
 
-fn days(root: &str) -> Vec<String> {
+pub fn days(root: &str) -> Vec<String> {
     let mut v: Vec<String> = fs::read_dir(Path::new(root).join("gunluk"))
         .map(|rd| rd.flatten().filter(|e| e.path().is_dir()).map(|e| e.file_name().to_string_lossy().to_string()).collect())
         .unwrap_or_default();

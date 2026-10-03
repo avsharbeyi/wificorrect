@@ -2,7 +2,7 @@
 //! https://<cihaz>:8443, yalnızca dükkân ağından (güvenlik duvarı + burada müşteri ağı reddi).
 //! İki rol (2026-10-03 kullanıcı kararı): kafe sahibi her şeyi görür ve yönetir (kayıtlar dahil);
 //! admin (hizmet sağlayıcı) ondan yalnızca "API ayarları" sayfasıyla ayrılır (SMS sağlayıcısı bilgileri, deneme modu).
-//! 8b (kayıtlar, resmi talep) ve 8c (portlar, Wi-Fi) sonraki adımlar.
+//! 8b kayıtlar / kullanıcılar / resmi talep: panel/kayit_sayfalari.rs. 8c (portlar, Wi-Fi) sonraki adım.
 
 use crate::ayar::{Config, Device};
 use crate::hesap::{self, Hesaplar, LoginGuard, Oturum, Oturumlar, Rol};
@@ -12,6 +12,8 @@ use std::collections::{BTreeSet, HashMap};
 use std::io::Read;
 use std::process::ExitCode;
 use std::sync::Arc;
+
+mod kayit_sayfalari;
 
 pub type Clock = dyn Fn() -> f64 + Send + Sync;
 const TPL: &str = include_str!("sablon/panel.html");
@@ -32,6 +34,8 @@ pub struct Resp {
     pub status: u16,
     pub body: String,
     pub headers: Vec<(String, String)>,
+    /// İndirme: gövde yerine dosya akıtılır
+    pub file: Option<std::fs::File>,
 }
 
 fn redirect(loc: &str, msg: Option<(&str, bool)>) -> Resp {
@@ -39,11 +43,11 @@ fn redirect(loc: &str, msg: Option<(&str, bool)>) -> Resp {
         Some((m, err)) => format!("{loc}?m={}{}", pct(m), if err { "&e=1" } else { "" }),
         None => loc.to_string(),
     };
-    Resp { status: 303, body: String::new(), headers: vec![("Location".into(), loc)] }
+    Resp { status: 303, body: String::new(), headers: vec![("Location".into(), loc)], file: None }
 }
 
 fn text(status: u16, msg: &str) -> Resp {
-    Resp { status, body: msg.into(), headers: vec![("Content-Type".into(), "text/plain; charset=utf-8".into())] }
+    Resp { status, body: msg.into(), headers: vec![("Content-Type".into(), "text/plain; charset=utf-8".into())], file: None }
 }
 
 fn pct(s: &str) -> String {
@@ -309,6 +313,9 @@ const MENU: &[(&str, &str, bool)] = &[
     ("/oturumlar", "Bağlı cihazlar", false),
     ("/yasak", "Yasaklı cihazlar", false),
     ("/izinli", "İzinli cihazlar", false),
+    ("/kayitlar", "Kayıtlar", false),
+    ("/kullanicilar", "Kullanıcılar", false),
+    ("/talep", "Resmi talep", false),
     ("/ayarlar", "Ayarlar", false),
     ("/api", "API ayarları", true),
     ("/sistem", "Sistem", false),
@@ -361,7 +368,7 @@ impl Panel {
         v.insert("menu_html", menu);
         v.insert("mesaj_html", msg.unwrap_or_default());
         v.insert("icerik_html", body.into());
-        Resp { status: 200, body: substitute(TPL, &v), headers: vec![("Content-Type".into(), "text/html; charset=utf-8".into())] }
+        Resp { status: 200, body: substitute(TPL, &v), headers: vec![("Content-Type".into(), "text/html; charset=utf-8".into())], file: None }
     }
 
     fn audit(&self, cfg: &Config, req: &Req, o: Option<&Oturum>, olay: &str, ek: &str) {
@@ -414,6 +421,15 @@ impl Panel {
             ("POST", "/izinli/ekle") => self.liste_ekle(cfg, req, &o, false, now),
             ("POST", "/yasak/kaldir") => self.liste_kaldir(cfg, req, &o, true),
             ("POST", "/izinli/kaldir") => self.liste_kaldir(cfg, req, &o, false),
+            ("GET", "/kayitlar") => self.kayitlar(&cfg, req, &o),
+            ("GET", "/kayitlar/gun") => self.kayit_gun(&cfg, req, &o),
+            ("GET", "/kayitlar/dosya") => self.kayit_dosya(&cfg, req, &o),
+            ("GET", "/kayitlar/indir") => self.kayit_indir(&cfg, req, &o),
+            ("GET", "/kayitlar/gun-indir") => self.kayit_gun_indir(&cfg, req, &o),
+            ("GET", "/kullanicilar") => self.kullanicilar(&cfg, req, &o),
+            ("GET", "/kullanici") => self.kullanici(&cfg, req, &o),
+            ("GET", "/talep") => self.talep(&cfg, req, &o, now),
+            ("GET", "/talep/paket") => self.talep_paket(&cfg, req, &o),
             ("GET", "/ayarlar") => self.ayarlar(&cfg, req, &o, &HashMap::new(), false),
             ("POST", "/ayarlar") => self.ayarlar_post(cfg, req, &o, false),
             ("GET", "/api") if hizmet => self.ayarlar(&cfg, req, &o, &HashMap::new(), true),
@@ -960,8 +976,14 @@ fn ensure_cert() -> Result<(Vec<u8>, Vec<u8>), String> {
     Ok((std::fs::read(CERT).map_err(|e| e.to_string())?, std::fs::read(KEY).map_err(|e| e.to_string())?))
 }
 
-fn respond(req: tiny_http::Request, r: Resp) {
-    let mut resp = tiny_http::Response::from_string(r.body).with_status_code(r.status);
+fn respond(req: tiny_http::Request, mut r: Resp) {
+    match r.file.take() {
+        Some(f) => send(req, tiny_http::Response::from_file(f).with_status_code(r.status), r.headers),
+        None => send(req, tiny_http::Response::from_string(r.body).with_status_code(r.status), r.headers),
+    }
+}
+
+fn send<R: Read>(req: tiny_http::Request, mut resp: tiny_http::Response<R>, headers: Vec<(String, String)>) {
     let base = [
         ("Cache-Control", "no-store"),
         ("X-Frame-Options", "DENY"),
@@ -970,7 +992,7 @@ fn respond(req: tiny_http::Request, r: Resp) {
         ("Content-Security-Policy", "default-src 'none'; style-src 'unsafe-inline'; img-src data:; form-action 'self'; frame-ancestors 'none'"),
         ("Server", "wificorrect"),
     ];
-    for (k, v) in base.iter().map(|(k, v)| (k.to_string(), v.to_string())).chain(r.headers) {
+    for (k, v) in base.iter().map(|(k, v)| (k.to_string(), v.to_string())).chain(headers) {
         if let Ok(hd) = tiny_http::Header::from_bytes(k.as_bytes(), v.as_bytes()) {
             resp.add_header(hd);
         }
@@ -1226,5 +1248,69 @@ mod tests {
         assert_eq!(e.p.handle(&req("GET", "/", &[], Some(&t1))).status, 200);
         assert_eq!(loc(&e.p.handle(&req("GET", "/", &[], Some(&t2)))), "/giris");
         assert!(e.p.hesaplar.verify("mudur", "yepyeni-parola").is_some());
+    }
+
+    fn get(path: &str, query: &[(&str, &str)], token: &str) -> Req {
+        let mut r = req("GET", path, &[], Some(token));
+        r.query = query.iter().map(|(k, v)| (k.to_string(), v.to_string())).collect();
+        r
+    }
+
+    #[test]
+    fn owner_reads_records_people_and_official_requests() {
+        let e = env();
+        let (tok, _) = setup_and_login(&e, "mudur", "sahip-parola-12");
+        let cfg = Config::load(&e.p.cfg_path).unwrap();
+        let root = cfg.main.log_root.clone();
+        let ses = |olay: &str, z: &str| {
+            Row::new(olay, z).set("telefon", "905334553132").set("ad", "Ayşe").set("soyad", "Yılmaz").set("mac", "aa:bb:cc:dd:ee:01").set("ic_ip", "10.50.0.23").set("oturum_id", "s1")
+        };
+        let d = "2026-09-27";
+        ortak::append_rows(&ortak::day_file(&root, d, "oturum.csv"), &[ses("OTURUM_BASLA", "2026-09-27T10:00:00+03:00")]).unwrap();
+        ortak::append_rows(&ortak::day_file(&root, d, "dns.csv"), &[
+            Row::new("DNS", "2026-09-27T10:01:00+03:00").set("telefon", "905334553132").set("alan_adi", "www.ornek.com"),
+            Row::new("DNS", "2026-09-27T10:02:00+03:00").set("telefon", "905334553132").set("alan_adi", "haber.example"),
+        ]).unwrap();
+        ortak::append_rows(&ortak::user_file(&root, d, "905334553132"), &[ses("OTURUM_BASLA", "2026-09-27T10:00:00+03:00")]).unwrap();
+        ortak::upsert_index(&root, "905334553132", "Ayşe", "Yılmaz", "2026-09-27T10:00:00+03:00").unwrap();
+        crate::muhur::close_day(&cfg, d, 1_790_550_000.0, true).unwrap(); // mühürlü gün
+        ortak::append_rows(&ortak::day_file(&root, "2026-09-29", "dhcp.csv"), &[Row::new("DHCP_ATAMA", "2026-09-29T09:00:00+03:00").set("ic_ip", "10.50.0.30")]).unwrap();
+
+        let page = e.p.handle(&get("/kayitlar", &[], &tok)).body;
+        assert!(page.contains("2026-09-29") && page.contains("açık") && page.contains("mühürlü"));
+        let page = e.p.handle(&get("/kayitlar/gun", &[("gun", d)], &tok)).body;
+        assert!(page.contains("dns.csv.gz") && page.contains("Ayşe Yılmaz")); // kişi dosyasının sahibi
+        let page = e.p.handle(&get("/kayitlar/dosya", &[("gun", d), ("dosya", "dns.csv.gz"), ("q", "ORNEK")], &tok)).body;
+        assert!(page.contains("www.ornek.com") && !page.contains("haber.example") && page.contains("1 satır"));
+        for bad in ["../../zincir.txt", "../2026-09-29/dhcp.csv", "MANIFEST.sha256"] {
+            assert_eq!(e.p.handle(&get("/kayitlar/indir", &[("gun", d), ("dosya", bad)], &tok)).status, 404, "{bad}");
+        }
+        let r = e.p.handle(&get("/kayitlar/indir", &[("gun", d), ("dosya", "dns.csv.gz")], &tok));
+        assert!(r.body.starts_with("\u{feff}zaman;olay") && r.body.contains("haber.example")); // açılmış, Excel'de açılır
+        assert!(r.headers.iter().any(|(_, v)| v.contains("2026-09-27_dns.csv\"")));
+        let r = e.p.handle(&get("/kayitlar/indir", &[("gun", "2026-09-29"), ("dosya", "dhcp.csv")], &tok));
+        assert!(r.file.is_some() && r.status == 200);
+        let r = e.p.handle(&get("/kayitlar/gun-indir", &[("gun", d)], &tok));
+        assert!(r.file.is_some() && r.headers.iter().any(|(_, v)| v.contains("kayit_2026-09-27.tar")));
+
+        let page = e.p.handle(&get("/kullanicilar", &[("q", "ayşe")], &tok)).body;
+        assert!(page.contains("+905334553132") && page.contains("1 kişi"));
+        let page = e.p.handle(&get("/kullanici", &[("tel", "905334553132")], &tok)).body;
+        assert!(page.contains("OTURUM_BASLA") && page.contains("2026-09-27"));
+        assert_eq!(e.p.handle(&get("/kullanici", &[("tel", "../x")], &tok)).status, 404);
+
+        let page = e.p.handle(&get("/talep", &[("tur", "ic-ip"), ("deger", "10.50.0.23"), ("zaman", "2026-09-27 11:00")], &tok)).body;
+        assert!(page.contains("O anda açık oturum") && page.contains("905334553132"));
+        let page = e.p.handle(&get("/talep", &[("tur", "ic-ip"), ("deger", "10.50.0.23"), ("zaman", "dün")], &tok)).body;
+        assert!(page.contains("Zaman geçersiz"));
+        let r = e.p.handle(&get("/talep/paket", &[("bas", "2026-09-27"), ("bit", "2026-09-29")], &tok));
+        assert!(r.file.is_some());
+        assert!(loc(&e.p.handle(&get("/talep/paket", &[("bas", "x"), ("bit", "y")], &tok))).contains("e=1"));
+        assert_eq!(e.p.handle(&req("GET", "/kayitlar", &[], None)).status, 303); // girişsiz yok
+
+        let audit = std::fs::read_to_string(ortak::day_file(&root, "2026-09-29", "denetim.csv")).unwrap();
+        for olay in ["PANEL_KAYIT_GORUNTULE", "PANEL_KAYIT_INDIR", "PANEL_KULLANICI", "PANEL_TALEP_ARA", "PANEL_TALEP_PAKET"] {
+            assert!(audit.contains(olay), "{olay}");
+        }
     }
 }

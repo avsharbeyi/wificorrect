@@ -3,6 +3,7 @@
 mod ayar;
 mod ctl;
 mod hesap;
+mod kayit;
 mod kaydedici;
 mod muhur;
 mod ortak;

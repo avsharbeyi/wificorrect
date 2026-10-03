@@ -217,27 +217,28 @@ Yeni repoya bu dosyayla birlikte `MASTER_ENGINEERING.md` dosyasını da kopyalay
     - Giriş kilidi IP ve kullanıcı başına uygulanır: 15 dk içinde 5 hata.
     - Oturum çerezi kullanılır, her POST'ta CSRF kontrolü yapılır.
 61. **İki rol var** (yeni sistemde değişti, 2026-10-02 kullanıcı kararı):
-    - **Kafe sahibi:** **SMS sağlayıcısının API kimlik bilgileri hariç bütün ayarlara** erişir. İstisnalar: NetGSM kullanıcı kodu, şifre, mesaj başlığı, appkey ve Twilio'nun bütün SID, token ve anahtarları ve **SMS deneme modu** (gerçek SMS harcamasını başlatır; 2026-10-02 kullanıcı kararı). Bu alanları göremez ve değiştiremez; panelde yalnızca "tanımlı / tanımsız" durumunu görür.
-    - Kafe sahibi kişisel veriyi ve kayıtları (Loglar, Kullanıcılar, Resmi talep) **göremez**; bunlar KVKK gereği hizmet sağlayıcıda kalır.
-    - **Hizmet sağlayıcı** (Göztepe Bilgisayar): her şeyi görür, API kimlik bilgilerini yalnızca o girer.
+    - **Kafe sahibi** (kurulum ekranında kendi kullanıcı adını ve parolasını belirler): **her şeyi görür ve yönetir** — kayıtlar (Kayıtlar, Kullanıcılar, Resmi talep) ve kişisel veriler dahil (2026-10-03 kullanıcı kararı; önceki "kafe sahibi kayıt görmez" kuralı kaldırıldı).
+    - **Hizmet sağlayıcı = sabit `admin` hesabı** (root gibi; parolasını yalnızca hizmet sağlayıcı bilir, `wificorrect ctl admin-parola` ile konsoldan konur, ISO'da kalıba gömülür). Kafe sahibinden tek farkı **API ayarları** sayfası: SMS deneme modu, sağlayıcı seçimi, NetGSM ve Twilio kimlik bilgileri.
+    - Kafe sahibi admin'e ve hizmet sağlayıcı rolündeki hesaplara dokunamaz, API yetkili hesap açamaz.
     - Bugünkü sistemde "işletme yöneticisi" yalnızca bir kısım ayarı görebiliyordu; yeni sistemde bu genişliyor.
 62. **Sayfalar:**
 
     | Sayfa | Görebilen | İçerik |
     |---|---|---|
     | Özet | ikisi | bağlı cihaz, bugün farklı kullanıcı, bugün SMS / tavan, log diski |
-    | Bağlı cihazlar | ikisi | at düğmesi; kafe sahibine maskeli gösterilir |
+    | Bağlı cihazlar | ikisi | at düğmesi; telefon ve ad açık |
     | Yasaklı cihazlar | ikisi | ekle / kaldır |
     | İzinli cihazlar | ikisi | ekle / kaldır |
-    | Ayarlar | ikisi (API kimlik alanları yalnızca hizmet sağlayıcıda) | aşağıda |
+    | Ayarlar | ikisi | aşağıda |
+    | API ayarları | yalnızca admin | SMS deneme modu, sağlayıcı, NetGSM ve Twilio kimlik bilgileri |
     | Portlar | ikisi | A2 #10; aşağıda |
     | Wi-Fi | ikisi | SSID, şifre / şifresiz, kanal |
     | Sistem | ikisi | aşağıda |
     | Şifremi değiştir | ikisi | — |
-    | Loglar | hizmet sağlayıcı | gün listesi, dosya görüntüleme ve indirme, günü indirme |
-    | Kullanıcılar | hizmet sağlayıcı | arama + kişi detayı |
-    | Resmi talep | hizmet sağlayıcı | iç IP, NAT portu, hedef IP, telefon, MAC + zaman ile arama ve talep paketi indirme |
-    | Hesaplar | hizmet sağlayıcı | ekle / sil / şifre sıfırla |
+    | Kayıtlar | ikisi | gün listesi, dosya görüntüleme ve indirme, günü indirme |
+    | Kullanıcılar | ikisi | arama + kişi detayı |
+    | Resmi talep | ikisi | iç IP, NAT portu, hedef IP, telefon, MAC + zaman ile arama ve talep paketi indirme |
+    | Hesaplar | ikisi (admin'e dokunulamaz) | ekle / sil / şifre sıfırla |
 
     - **Ayarlar:** kafe adı, oturum süresi, telefon başına cihaz, SMS sınırları, uzak yedek, saklama günü, zaman damgası, kelime filtresi listesi. NetGSM ve Twilio kimlik alanları ile SMS deneme modu yalnızca hizmet sağlayıcıda.
     - **Portlar:** canlı kablo durumu. Uygula dendiğinde ayar yedeklenir ve **3 dk içinde "Onayla" denmezse eski ayar kendiliğinden geri gelir**. "Hemen geri al" düğmesi ve sağ/sol etiket değiştirme var.
@@ -277,7 +278,7 @@ Sistem tek bir kafeye (Bocafe) özel değildir, birçok farklı kafeye kurulacak
     - Hesaplar kurulumda oluşturulur; varsayılan kullanıcı adı veya parola yoktur. Kullanıcı adı `admin`, `root`, `bocafe` gibi tahmin edilebilir bir değer olmak zorunda değildir.
     - Parola en az 10 karakter olmalıdır.
     - Sihirbaz bir kez çalışır; sonra kapanır ve tekrar açılmaz.
-75. **Hizmet sağlayıcı hesabı:** kurulumda ayrıca hizmet sağlayıcı hesabı oluşturulur (Göztepe teknisyeni). SMS API kimlik bilgilerini, kayıtlara erişimi ve yedek sunucusu hesabını yalnızca bu hesap yönetir.
+75. **Hizmet sağlayıcı hesabı:** her cihazda sabit `admin` (kurulumda sorulmaz; parolası ISO'ya gömülür ya da `wificorrect ctl admin-parola` ile konsoldan konur). Kafe sahibinden tek farkı API ayarları sayfasıdır (2026-10-03).
 76. **İşletim sistemi hesabı:** cihazın Linux kullanıcı adı ve parolası da kurulumda belirlenir, `bocafe` gibi sabit bir ad kullanılmaz. SSH yalnızca anahtarla açılır, parola ile giriş kapalıdır.
 77. **Kafe başına yedek hesabı:** her kafe arşiv sunucusunda kendi salt-yazma hesabına (`kafe-<kısa-ad>`) yedek gönderir. Kurulum sihirbazı cihazın yedek açık anahtarını gösterir; hizmet sağlayıcı bunu sunucuya ekler (`sunucu/hotspot-kafe-ekle`).
 78. **SMS hesabı:** NetGSM veya Twilio hesabı kafeler arasında ortak (hizmet sağlayıcının hesabı) ya da kafeye özel olabilir. Kimlik bilgileri her durumda yalnızca hizmet sağlayıcı tarafından girilir.
@@ -323,8 +324,8 @@ Mimari kararlar:
 
 A14 ZORUNLU: sistem birçok kafeye kurulacak. Kafe adı, SSID, adresler, yedek hesabı ve
 kullanıcı adları/parolaları kodda sabit olmasın; ilk açılıştaki kurulum sihirbazında sorulsun.
-Kafe sahibi SMS API kimlik bilgileri ve SMS deneme modu hariç bütün ayarları yönetir; bunlar ve kayıtlar
-yalnızca hizmet sağlayıcı hesabında. Bu istemdeki Bocafe değerleri (SSID, IP, hesap adları) yalnızca örnektir.
+Kafe sahibi kayıtlar dahil her şeyi görür ve yönetir; yalnızca API ayarları (SMS deneme modu ve SMS
+sağlayıcı kimlik bilgileri) sabit `admin` hesabındadır. Bu istemdeki Bocafe değerleri (SSID, IP, hesap adları) yalnızca örnektir.
 
 Kurallar: A13 maddeleri zorunlu. Fazları MASTER_ENGINEERING.md §20 sırasıyla uygula,
 her fazın sonunda Türkçe kısa rapor ver. Gerçek SMS, disk bölümlendirme, sysupgrade
@@ -398,8 +399,8 @@ Wi-Fi bekçisi için `ubus del_client` yerine `hostapd_cli deauthenticate`.
 
 A14 ZORUNLU: sistem birçok kafeye kurulacak. Kafe adı, SSID, adresler, yedek hesabı ve
 kullanıcı adları/parolaları kodda sabit olmasın; ilk açılıştaki kurulum sihirbazında sorulsun.
-Kafe sahibi SMS API kimlik bilgileri ve SMS deneme modu hariç bütün ayarları yönetir; bunlar ve kayıtlar
-yalnızca hizmet sağlayıcı hesabında. Bu istemdeki Bocafe değerleri (SSID, IP, hesap adları) yalnızca örnektir.
+Kafe sahibi kayıtlar dahil her şeyi görür ve yönetir; yalnızca API ayarları (SMS deneme modu ve SMS
+sağlayıcı kimlik bilgileri) sabit `admin` hesabındadır. Bu istemdeki Bocafe değerleri (SSID, IP, hesap adları) yalnızca örnektir.
 
 Kurallar: A13 zorunlu. MASTER_ENGINEERING.md §20 fazlarını sırayla uygula, her fazın
 sonunda Türkçe rapor ver. Ağ ve güvenlik duvarı değişikliklerinde ölü adam anahtarı kur

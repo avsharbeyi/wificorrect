@@ -176,6 +176,44 @@ pub fn run(cfg: Config, args: &[String]) -> ExitCode {
             ExitCode::SUCCESS
         }
         Some("admin-parola") => admin_parola(crate::hesap::PATH),
+        Some("ara") => {
+            let opt = |name: &str| args.iter().position(|a| a == name).and_then(|i| args.get(i + 1)).map(String::as_str);
+            let Some((tur, deger)) = ["ic-ip", "nat-port", "hedef-ip", "telefon", "mac"].iter().find_map(|t| opt(&format!("--{t}")).map(|v| (*t, v))) else {
+                eprintln!("Kullanım: wificorrect ctl ara (--ic-ip IP | --nat-port PORT | --hedef-ip IP) --zaman \"2026-09-24 14:30\" [--tolerans SN]");
+                eprintln!("          wificorrect ctl ara --telefon NUMARA | --mac MAC [--zaman ...]");
+                return ExitCode::from(2);
+            };
+            let tol = opt("--tolerans").and_then(|v| v.parse().ok()).unwrap_or(120.0);
+            match crate::kayit::ara(&cfg, tur, deger, opt("--zaman").unwrap_or(""), tol, now) {
+                Ok(sections) => {
+                    for (title, rows) in sections {
+                        println!("{title}:\n{}\n", crate::kayit::format_rows(&rows));
+                    }
+                    ExitCode::SUCCESS
+                }
+                Err(e) => {
+                    eprintln!("{e}");
+                    ExitCode::from(2)
+                }
+            }
+        }
+        Some("disa-aktar") => {
+            let opt = |name: &str| args.iter().position(|a| a == name).and_then(|i| args.get(i + 1)).map(String::as_str);
+            let (Some(bas), Some(bit), Some(out)) = (opt("--baslangic"), opt("--bitis"), opt("--cikti")) else {
+                eprintln!("Kullanım: wificorrect ctl disa-aktar --baslangic YYYY-AA-GG --bitis YYYY-AA-GG --cikti /tmp/talep.tar");
+                return ExitCode::from(2);
+            };
+            match crate::kayit::talep_paketi(&cfg, bas, bit, std::path::Path::new(out)) {
+                Ok(n) => {
+                    println!("Paket: {out} ({n} gün)");
+                    ExitCode::SUCCESS
+                }
+                Err(e) => {
+                    eprintln!("{e}");
+                    ExitCode::from(1)
+                }
+            }
+        }
         Some("yedekle") => {
             // ponytail: bir gün 1 saatte gitmezse YEDEK_HATA; ertesi gece kaldığı yerden devam eder
             let msg = crate::muhur::backup(&cfg, now, &|c: &[String]| ortak::run_timeout(c, 3600));
@@ -185,7 +223,7 @@ pub fn run(cfg: Config, args: &[String]) -> ExitCode {
         _ => {
             eprintln!(
                 "Kullanım: wificorrect ctl <komut>\n  dhcp-olay <add|old|del> <mac> <ip> [ad]\n  yukle\n  oturumlar\n  \
-                 gun-kapat [YYYY-AA-GG] [--zorla]\n  dogrula [--son N]\n  temizle [--kuru]\n  yedekle\n  admin-parola"
+                 gun-kapat [YYYY-AA-GG] [--zorla]\n  dogrula [--son N]\n  temizle [--kuru]\n  yedekle\n  ara ...  (ayrıntı: ctl ara)\n  disa-aktar --baslangic G --bitis G --cikti DOSYA\n  admin-parola"
             );
             ExitCode::from(2)
         }
