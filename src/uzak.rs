@@ -10,6 +10,8 @@ use std::path::Path;
 use std::process::{Command, Stdio};
 
 pub const KEY: &str = "/etc/wificorrect/wg.key";
+/// Yedek (rsync/SSH) anahtarı: cihazda üretilir, açık anahtarı sunucudaki yalnızca-yazma hesaba eklenir
+pub const YEDEK_KEY: &str = "/etc/wificorrect/yedek_anahtar";
 pub const CONF: &str = "/etc/wireguard/wfc.conf";
 pub const IFACE: &str = "wfc";
 pub const UNIT: &str = "wg-quick@wfc.service";
@@ -56,6 +58,51 @@ pub fn public_key(private: &str) -> Result<String, String> {
     let out = child.wait_with_output().map_err(|e| e.to_string())?;
     let k = String::from_utf8_lossy(&out.stdout).trim().to_string();
     if key_ok(&k) { Ok(k) } else { Err("açık anahtar hesaplanamadı".into()) }
+}
+
+/// Yedek SSH anahtarı yoksa üretir; dönen: açık anahtar satırı (ssh-ed25519 …).
+pub fn yedek_anahtari(path: &Path) -> Result<String, String> {
+    if !path.exists() {
+        let host = ortak::capture(&["hostname"]).trim().to_string();
+        let ok = Command::new("ssh-keygen")
+            .args(["-q", "-t", "ed25519", "-N", "", "-C", &format!("wificorrect-{host}"), "-f"])
+            .arg(path)
+            .status()
+            .is_ok_and(|s| s.success());
+        if !ok {
+            return Err("yedek anahtarı üretilemedi (ssh-keygen)".into());
+        }
+    }
+    let pub_path = format!("{}.pub", path.display());
+    std::fs::read_to_string(&pub_path).map(|s| s.trim().to_string()).map_err(|e| format!("{pub_path}: {e}"))
+}
+
+/// İşletme adından sunucu kayıt adı: "Bocafe Kadıköy" → "bocafe-kadikoy" (küçük harf, rakam, tire; en çok 31).
+pub fn kayit_adi(site: &str) -> String {
+    let mut out = String::new();
+    for c in site.chars() {
+        let c = match c {
+            'ç' | 'Ç' => 'c',
+            'ğ' | 'Ğ' => 'g',
+            'ı' | 'I' | 'İ' | 'i' => 'i',
+            'ö' | 'Ö' => 'o',
+            'ş' | 'Ş' => 's',
+            'ü' | 'Ü' => 'u',
+            c if c.is_ascii_alphanumeric() => c.to_ascii_lowercase(),
+            _ => '-',
+        };
+        if c != '-' || !out.ends_with('-') && !out.is_empty() {
+            out.push(c);
+        }
+    }
+    let s: String = out.trim_end_matches('-').chars().take(31).collect();
+    let s = s.trim_end_matches('-').to_string();
+    if s.is_empty() { "isletme".into() } else { s }
+}
+
+/// Merkez sunucuda bu cihazı tanıtan komut (panelde kopyalanmak üzere gösterilir).
+pub fn sunucu_komutu(site: &str, wg_pub: &str, ssh_pub: &str) -> String {
+    format!("sudo wificorrect-sunucu cihaz-ekle {} {wg_pub} \"{ssh_pub}\"", kayit_adi(site))
 }
 
 pub fn eksik(cfg: &Config) -> Option<&'static str> {
@@ -153,6 +200,12 @@ mod tests {
         assert!(t.contains("PrivateKey = GIZLI\nAddress = 10.99.0.17/24") && t.contains("AllowedIPs = 10.99.0.0/24") && t.contains("PersistentKeepalive = 25"));
         assert_eq!(last_handshake(&format!("{K}\t1791000000\n{K}\t0\n")), Some(1_791_000_000.0));
         assert_eq!(last_handshake(&format!("{K}\t0\n")), None);
+        assert_eq!(kayit_adi("Bocafe Kadıköy Şubesi"), "bocafe-kadikoy-subesi");
+        assert_eq!(kayit_adi("  Çay & Ötesi!! "), "cay-otesi");
+        assert_eq!(kayit_adi("İşletme"), "isletme");
+        assert_eq!(kayit_adi("???"), "isletme");
+        assert_eq!(kayit_adi(&"a".repeat(40)).len(), 31);
+        assert_eq!(sunucu_komutu("Bocafe", "W=", "ssh-ed25519 AAAA x"), "sudo wificorrect-sunucu cihaz-ekle bocafe W= \"ssh-ed25519 AAAA x\"");
     }
 
     #[test]

@@ -432,7 +432,7 @@ mod tests {
         *ok.lock().unwrap() = true;
         let calls = calls.lock().unwrap();
         let day_cmd = &calls[1];
-        assert_eq!(&day_cmd[..5], ["rsync", "-a", "--timeout=120", "-e", "ssh -i /root/.ssh/yedek_anahtar"]);
+        assert_eq!(&day_cmd[..5], ["rsync", "-a", "--timeout=120", "-e", "ssh -i /etc/wificorrect/yedek_anahtar -o BatchMode=yes -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null"]);
         assert!(day_cmd.contains(&"--ignore-existing".to_string()) && day_cmd.last().unwrap() == "kafe-x@192.168.1.109:/gunluk/");
         assert!(calls.iter().any(|c| c.contains(&"--backup-dir=eski".to_string()) && c.last().unwrap() == "kafe-x@192.168.1.109:/"));
     }

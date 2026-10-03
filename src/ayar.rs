@@ -140,7 +140,9 @@ impl Default for Limits {
     }
 }
 
-/// Uzak yedek (rsync, SSH). Hedef kafe başına salt-yazma hesap: `kafe-<ad>@sunucu:`.
+/// Uzak yedek (rsync, SSH). Hedef: merkez sunucuda cihaza özel, yalnızca-yazma hesap, tünelden: `wfc-<ad>@10.99.0.1:`
+/// (sunucuda `wificorrect-sunucu cihaz-ekle`). Sunucunun kimliğini WireGuard doğrular (10.99.0.1 yalnızca tünelden
+/// erişilir); bu yüzden SSH ana makine anahtarı tutulmaz — sunucu taşınınca yedek kırılmasın.
 #[derive(Serialize, Deserialize, Clone, Debug)]
 #[serde(default)]
 pub struct Backup {
@@ -151,7 +153,7 @@ pub struct Backup {
 
 impl Default for Backup {
     fn default() -> Self {
-        Backup { enabled: false, target: String::new(), ssh: "ssh -i /root/.ssh/yedek_anahtar".into() }
+        Backup { enabled: false, target: String::new(), ssh: "ssh -i /etc/wificorrect/yedek_anahtar -o BatchMode=yes -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null".into() }
     }
 }
 

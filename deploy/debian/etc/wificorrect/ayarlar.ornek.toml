@@ -45,4 +45,4 @@ verify_fail_lock_min = 15
 [backup]                       # uzak yedek: arşiv sunucusu kurulunca açılacak
 enabled = false
 target = ""                    # kafe-<ad>@<sunucu>:
-ssh = "ssh -i /root/.ssh/yedek_anahtar"
+ssh = "ssh -i /etc/wificorrect/yedek_anahtar -o BatchMode=yes -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null"

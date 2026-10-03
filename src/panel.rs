@@ -340,6 +340,8 @@ pub struct Panel {
     filtre_conf: std::path::PathBuf,
     /// WireGuard gizli anahtarı (testte geçici)
     uzak_key: std::path::PathBuf,
+    /// Yedek SSH anahtarı (testte geçici)
+    yedek_key: std::path::PathBuf,
 }
 
 const MENU: &[(&str, &str, bool)] = &[
@@ -374,6 +376,7 @@ impl Panel {
             sys: "/sys/class/net".into(),
             filtre_conf: crate::filtre::DNSMASQ_CONF.into(),
             uzak_key: crate::uzak::KEY.into(),
+            yedek_key: crate::uzak::YEDEK_KEY.into(),
         }
     }
 
@@ -834,10 +837,17 @@ impl Panel {
                     ("Son yedek", yedek),
                     ("Uzak erişim", h(&crate::uzak::durum(cfg, (self.clock)()))),
                     (
-                        "Bu cihazın açık anahtarı",
-                        match crate::uzak::ensure_key(&self.uzak_key).and_then(|k| crate::uzak::public_key(&k)) {
-                            Ok(p) => format!("<code>{}</code> <span class=\"not\">(sunucuya bu eklenir)</span>", h(&p)),
-                            Err(e) => format!("<span class=\"durum kotu\">{}</span>", h(&e)),
+                        "Sunucuya tanıtma komutu",
+                        match (
+                            crate::uzak::ensure_key(&self.uzak_key).and_then(|k| crate::uzak::public_key(&k)),
+                            crate::uzak::yedek_anahtari(&self.yedek_key),
+                        ) {
+                            (Ok(wg), Ok(ssh)) => format!(
+                                "<code style=\"user-select:all;overflow-wrap:anywhere\">{}</code><br><span class=\"not\">Merkez sunucuda bir kez \
+                                 çalıştırın; çıkan değerleri Uzak erişim ve Yedek hedefi alanlarına girin.</span>",
+                                h(&crate::uzak::sunucu_komutu(&cfg.main.site_name, &wg, &ssh))
+                            ),
+                            (Err(e), _) | (_, Err(e)) => format!("<span class=\"durum kotu\">{}</span>", h(&e)),
                         },
                     ),
                 ])
@@ -1289,7 +1299,8 @@ mod tests {
             Box::new(|| 1_790_705_134.0),
         );
         let mut p = p;
-        p.uzak_key = root.join("wg.key"); // testler gerçek anahtara dokunmasın
+        p.uzak_key = root.join("wg.key"); // testler gerçek anahtarlara dokunmasın
+        p.yedek_key = root.join("yedek_anahtar");
         p.filtre_conf = root.join("yasak.conf");
         Env { p, calls, root }
     }
@@ -1718,8 +1729,8 @@ mod tests {
         assert!(!e.p.handle(&get("/ayarlar", &[], &otok)).body.contains("uzak.")); // işletme sahibi görmez
         let (tok, csrf) = setup_and_login(&e, "admin", "hizmet-parola-1");
         let page = e.p.handle(&get("/admin-ayarlari", &[], &tok)).body;
-        assert!(page.contains("uzak.sunucu") && page.contains("Bu cihazın açık anahtarı") && page.contains("sunucuya bu eklenir"));
-        assert!(e.root.join("wg.key").exists()); // anahtar cihazda üretildi
+        assert!(page.contains("uzak.sunucu") && page.contains("sudo wificorrect-sunucu cihaz-ekle bocafe-goztepe ") && page.contains("ssh-ed25519 "));
+        assert!(e.root.join("wg.key").exists() && e.root.join("yedek_anahtar.pub").exists()); // anahtarlar cihazda üretildi
         let post = |f: &[(&str, &str)]| {
             let mut v = vec![("csrf", csrf.as_str())];
             v.extend_from_slice(f);
