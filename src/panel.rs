@@ -820,8 +820,10 @@ impl Panel {
                 "<section class=\"kart\" style=\"margin-top:48px\"><h2>Fabrika ayarları</h2><p class=\"not\">Cihazı ISO'dan kurulduktan hemen \
                  sonraki haline döndürür: bütün ayarlar (işletme adı ve unvanı, SMS bilgileri, yedek, metinler, yasaklı listeler) ürün \
                  varsayılanına döner, admin dışındaki hesaplar silinir ve açılışta kurulum ekranı gelir, portlar varsayılana döner \
-                 (Ethernet 1 internet alır, Ethernet 2 verir, Wi-Fi kapalı), bağlı müşterilerin oturumları kapanır. 5651 kayıtları \
-                 silinmez. Geri alınamaz.</p><form class=\"satir\" method=\"post\" action=\"/admin-ayarlari/fabrika\">{}\
+                 (Ethernet 1 internet alır, Ethernet 2 verir, Wi-Fi kapalı), bağlı müşterilerin oturumları kapanır. 5651 kayıtları önce \
+                 (bugün dahil) mühürlenip uzak sunucuya gönderilir, sonra cihazdan silinir; işletme sahibi kayıtlarını sunucudaki panelden \
+                 görmeye devam eder. Uzak yedek kapalıysa ya da bir gün gönderilemezse işlem iptal olur ve hiçbir şey silinmez. \
+                 Geri alınamaz.</p><form class=\"satir\" method=\"post\" action=\"/admin-ayarlari/fabrika\">{}\
                  <div><label for=\"fp\">Admin parolası</label><input type=\"password\" id=\"fp\" name=\"parola\" autocomplete=\"current-password\" required></div>\
                  <label class=\"secim\"><input type=\"checkbox\" name=\"onay\" value=\"1\" required> Bütün ayarların silineceğini anladım</label>\
                  <button class=\"tehlike\">Fabrika ayarlarına döndür</button></form></section>",
@@ -837,14 +839,19 @@ impl Panel {
             self.audit(cfg, req, Some(o), "PANEL_FABRIKA_RED", "");
             return redirect("/admin-ayarlari", Some(("Parola hatalı ya da onay işaretlenmedi; hiçbir şey değişmedi.", true)));
         }
+        if let Some(e) = crate::fabrika::engel(cfg) {
+            return redirect("/admin-ayarlari", Some((e, true)));
+        }
         self.audit(cfg, req, Some(o), "PANEL_FABRIKA", "");
         // yanıt tarayıcıya ulaşsın diye 2 sn sonra, panelden bağımsız işte (panel ve ağ yeniden başlar)
         let unit = format!("wfc-fabrika-{}", ortak::random_hex(4));
         if !(self.runner)(&cmd(&["systemd-run", "--unit", &unit, "--on-active", "2s", "/usr/local/bin/wificorrect", "ctl", "fabrika"])) {
             return redirect("/admin-ayarlari", Some(("Fabrika ayarları başlatılamadı.", true)));
         }
-        let body = "<div class=\"kart\"><p>Cihaz fabrika ayarlarına dönüyor. Ağ ve panel yeniden başlıyor; yaklaşık bir dakika sonra \
-                    bu adresi yenileyin, kurulum ekranı açılacak. İnternet kablosu Ethernet 1'de (sağ) değilse oraya takın.</p></div>";
+        let body = "<div class=\"kart\"><p>Cihaz fabrika ayarlarına dönüyor: önce kayıtlar sunucuya gönderiliyor (birkaç dakika \
+                    sürebilir), sonra ağ ve panel yeniden başlıyor. Biraz sonra bu adresi yenileyin; kurulum ekranı açılmışsa işlem tamamdır. \
+                    Panel açılıp ayarlar yerindeyse kayıtlar gönderilemediği için işlem iptal olmuştur (Panel hareketleri / denetim: \
+                    FABRIKA_IPTAL). İnternet kablosu Ethernet 1'de (sağ) değilse oraya takın.</p></div>";
         self.page(cfg, req, None, "Fabrika ayarları", body)
     }
 
@@ -1587,6 +1594,13 @@ mod tests {
         assert!(loc(&fab("yanlis-parola", "1")).contains("e=1"));
         assert!(loc(&fab("hizmet-parola-1", "")).contains("e=1"));
         assert!(!e.calls.lock().unwrap().iter().any(|c| c.join(" ").contains("ctl fabrika")));
+        // uzak yedek kapalıyken reddedilir (kayıtlar sunucuya gitmeden olmaz)
+        let r = fab("hizmet-parola-1", "1");
+        assert!(loc(&r).contains("e=1") && !e.calls.lock().unwrap().iter().any(|c| c.join(" ").contains("ctl fabrika")));
+        let mut c = Config::load(&e.p.cfg_path).unwrap();
+        c.backup.enabled = true;
+        c.backup.target = "kafe-x@sunucu:".into();
+        c.save(&e.p.cfg_path).unwrap();
         assert!(fab("hizmet-parola-1", "1").body.contains("fabrika ayarlarına dönüyor"));
         assert!(e.calls.lock().unwrap().iter().any(|c| c.join(" ").ends_with("wificorrect ctl fabrika")));
         let audit = std::fs::read_to_string(e.root.join("5651/gunluk/2026-09-29/denetim.csv")).unwrap();

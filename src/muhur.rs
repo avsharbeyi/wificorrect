@@ -311,7 +311,11 @@ pub fn backup(cfg: &Config, now: f64, runner: &Runner) -> String {
         cmd.extend(["--backup".into(), "--backup-dir=eski".into(), format!("--suffix=.{}", ortak::day_of(&ortak::now_iso(now)))]);
         cmd.extend(extras);
         cmd.push(format!("{target}/"));
-        runner(&cmd);
+        if !runner(&cmd) {
+            // zincir sunucuya ulaşmadan yerel kopyaya güvenilmesin (fabrika dönüşü bunu bekler)
+            audit(cfg, "YEDEK_HATA", now, "dosya=zincir.txt");
+            return "YEDEK HATASI: zincir.txt".into();
+        }
     }
     format!("yedeklendi: {}", pending.join(", "))
 }
