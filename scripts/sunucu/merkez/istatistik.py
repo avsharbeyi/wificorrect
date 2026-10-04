@@ -56,7 +56,7 @@ def guncelle(kafe_dizini, json_yolu):
     except (FileNotFoundError, ValueError):
         sayilar = {}
     g = os.path.join(kafe_dizini, "gunluk")
-    gunler = sorted(d for d in os.listdir(g) if GUN_RE.fullmatch(d)) if os.path.isdir(g) else []
+    gunler = sorted(d for d in os.listdir(g) if GUN_RE.fullmatch(d)) if os.path.isdir(g) and not os.path.islink(g) else []
     hatalar = []
     for gun in gunler:
         d = os.path.join(g, gun)

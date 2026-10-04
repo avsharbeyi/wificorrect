@@ -39,7 +39,7 @@ yedek_hesabi() { # $1=ad $2=ip $3=ssh-açık-anahtar
 	usermod -p '*' "$u" # parolasız ama kilitli değil (sshd anahtar girişini reddetmesin)
 	install -d -m 755 -o root -g root "$ARSIV" "$ARSIV/$1" "$ARSIV/$1/.ssh"
 	install -d -m 700 -o "$u" -g "$u" "$ARSIV/$1/veri"
-	printf 'restrict,from="%s",command="/usr/bin/rrsync -wo -no-del %s/%s/veri" %s\n' "$2" "$ARSIV" "$1" "$3" > "$ARSIV/$1/.ssh/authorized_keys"
+	printf 'restrict,from="%s",command="/usr/bin/rrsync -wo -no-del -munge %s/%s/veri" %s\n' "$2" "$ARSIV" "$1" "$3" > "$ARSIV/$1/.ssh/authorized_keys"
 	chmod 644 "$ARSIV/$1/.ssh/authorized_keys"
 }
 

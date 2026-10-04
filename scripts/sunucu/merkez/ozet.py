@@ -175,7 +175,7 @@ def detay_guncelle(kafe_dizini, detay_dizini, grup=None):
     yeniden denenir. Dönen: hata mesajları."""
     _klasor(detay_dizini, grup)
     g = os.path.join(kafe_dizini, "gunluk")
-    gunler = sorted(d for d in os.listdir(g) if GUN_RE.fullmatch(d)) if os.path.isdir(g) else []
+    gunler = sorted(d for d in os.listdir(g) if GUN_RE.fullmatch(d)) if os.path.isdir(g) and not os.path.islink(g) else []
     index, yeni, hatalar = None, [], []
     for gun in gunler:
         d, hedef = os.path.join(g, gun), os.path.join(detay_dizini, gun + ".json")

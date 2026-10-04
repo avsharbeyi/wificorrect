@@ -1,7 +1,6 @@
 """Cihaz API'si (spec §4): api.wificorrect.com/api/{giris,eslesme,parola}. JSON gövde ≤ 4 KB, IP başına dakikada 20 istek.
 Cihazın kimliği ilk girişte verilen cihaz anahtarıdır (merkez yalnızca SHA-256'sını tutar)."""
 import json
-import re
 import time
 
 import guvenlik
@@ -9,7 +8,7 @@ import kuyruk
 import veri as veri_modulu
 
 GOVDE_SINIRI = 4096
-NUMARA_RE = re.compile(r"[1-9]\d{5}")
+NUMARA_RE = guvenlik.NUMARA_RE
 YEDEK_SUNUCU = "10.99.0.1"
 
 
@@ -94,7 +93,7 @@ class Api:
         if c["durum"] == "serbest_birakiliyor":
             if b.get("temizlendi") is True:
                 self.veri.temizlendi(c["id"])
-                self.kuyruk_ekle("cihaz-kapat", {"numara": str(c["musteri"])})  # sonucu beklenmez
+                self.kuyruk_ekle("cihaz-kapat", {"numara": str(c["musteri"]), "wg_pub": c["wg_pub"]})  # sonucu beklenmez
                 self.veri.hareket(f"cihaz:{c['id']}", ip, "CIHAZ_SERBEST", c["musteri"])
             return _json(200, {"durum": "serbest"})
         self.veri.eslesme_kaydet(c["id"], _metin(b.get("isletme_adi")), _metin(b.get("unvan")), _metin(b.get("surum")))

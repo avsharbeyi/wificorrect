@@ -17,7 +17,7 @@ SONUC = "/var/lib/wificorrect/kuyruk-sonuc"
 SUNUCU = "/usr/local/sbin/wificorrect-sunucu"
 KAYIT = "/etc/wireguard/wificorrect/kayit.csv"
 WG_DIR = "/etc/wireguard/wificorrect"
-NUMARA_RE = re.compile(r"[1-9]\d{5}")
+NUMARA_RE = re.compile(r"[1-9][0-9]{5}")  # yalnızca ASCII rakam
 WG_RE = re.compile(r"[A-Za-z0-9+/]{43}=")
 SSH_RE = re.compile(r"ssh-ed25519 [A-Za-z0-9+/]+=*( [A-Za-z0-9@._-]+)?")
 IS_RE = re.compile(r"[0-9a-f]{16}\.json")
@@ -99,7 +99,11 @@ def isle(is_, calistir, kayit=KAYIT, wg_dir=WG_DIR):
     if not isinstance(numara, str) or not NUMARA_RE.fullmatch(numara):
         return _hata("gecersiz numara")
     if is_.get("islem") == "cihaz-kapat":
-        if kayit_satiri(numara, kayit):
+        wg = is_.get("wg_pub")
+        if wg is not None and not (isinstance(wg, str) and WG_RE.fullmatch(wg)):
+            return _hata("gecersiz anahtar")
+        s = kayit_satiri(numara, kayit)
+        if s and (wg is None or s[3] == wg):  # eski bir kapatma işi, numaraya sonradan bağlanan cihazı kapatmasın
             kod, _, hata = calistir([SUNUCU, "cihaz-kapat", numara])
             if kod != 0:
                 return _hata(hata)
@@ -134,7 +138,13 @@ def _calistir(komut):
 
 def main(kuyruk=KUYRUK, sonuc_dizini=SONUC, calistir=_calistir, kayit=KAYIT, wg_dir=WG_DIR, grup="wcpanel", simdi=None):
     simdi = time.time() if simdi is None else simdi
-    for ad in sorted(os.listdir(kuyruk)):
+    def yazilis(ad):
+        try:
+            return os.lstat(os.path.join(kuyruk, ad)).st_mtime, ad
+        except OSError:
+            return 0, ad
+
+    for ad in sorted(os.listdir(kuyruk), key=yazilis):  # yazılış sırası: kapat → ekle sırası bozulmasın
         yol = os.path.join(kuyruk, ad)
         if not ad.endswith(".json"):
             continue

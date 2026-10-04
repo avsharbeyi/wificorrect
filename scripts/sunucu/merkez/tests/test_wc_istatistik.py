@@ -161,6 +161,24 @@ def test_main_bozuk_arsiv_digerlerini_durdurmaz():
         assert oku(os.path.join(cikti, "b-kafe.json")) == {"2026-10-01": 1}
 
 
+def test_gunluk_sembolik_bag_ise_arsiv_okunmaz():
+    import ozet
+    with tempfile.TemporaryDirectory() as tmp:
+        baska = os.path.join(tmp, "baska")
+        gun_yaz(baska, "2026-10-01", ["5334553132"])
+        kok = os.path.join(tmp, "kotu")
+        os.makedirs(kok)
+        try:
+            os.symlink(os.path.join(baska, "gunluk"), os.path.join(kok, "gunluk"), target_is_directory=True)
+        except OSError:
+            return  # Windows: sembolik bağ yetkisi yok, sunucuda koşar
+        js, dd = os.path.join(tmp, "k.json"), os.path.join(tmp, "dd")
+        I.guncelle(kok, js)
+        assert oku(js) == {}
+        ozet.detay_guncelle(kok, dd)
+        assert [a for a in os.listdir(dd) if a != "kisiler.json"] == []
+
+
 if __name__ == "__main__":
     for _name, _fn in sorted(globals().items()):
         if _name.startswith("test_") and callable(_fn):

@@ -46,6 +46,22 @@ def test_istemci_ip_son_xff():
     assert MZ.istemci_ip({}) == "yerel"
 
 
+def test_fail2ban_hatali_ve_kilitli_satirlari_yakalar():
+    import re
+    s = open(os.path.join(HERE, "..", "fail2ban-wc-merkez-filtre.conf"), encoding="utf-8").read()
+    satirlar = [x.strip() for x in s.split("failregex =", 1)[1].split("journalmatch")[0].splitlines() if x.strip()]
+    desenler = [re.compile(x.replace("<HOST>", r"(?P<host>\S+)")) for x in satirlar]
+    for log in ("GIRIS_HATALI alan=musteri kullanici='100001' ip=203.0.113.5",
+                "GIRIS_KILITLI alan=yonetici kullanici='serkan' ip=203.0.113.5"):
+        assert any(d.search(log) and d.search(log).group("host") == "203.0.113.5" for d in desenler), log
+    jail = open(os.path.join(HERE, "..", "fail2ban-wc-merkez.conf"), encoding="utf-8").read()
+    assert "maxretry = 5" in jail and "192.168.1.0/24" in jail and "10.99.0.0/24" in jail
+
+
+def test_soket_zaman_asimi():
+    assert MZ.Isleyici.timeout == 20
+
+
 if __name__ == "__main__":
     for _name, _fn in sorted(globals().items()):
         if _name.startswith("test_") and callable(_fn):

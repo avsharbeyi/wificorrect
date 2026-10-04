@@ -25,14 +25,15 @@ class Musteri(web.Taban):
     giris_aciklama = "Size verilen müşteri numarası ve parolayla girin."
 
     def dogrula(self, kul, pw):
-        if not (kul.isdigit() and len(kul) == 6):
+        if not guvenlik.NUMARA_RE.fullmatch(kul):
             guvenlik.bos_dogrulama(pw)
             return None
         m = self.veri.parola_dogrula(int(kul), pw)
         return str(m["numara"]) if m else None
 
-    def hesap_var(self, kimlik):
-        return self.veri.musteri(int(kimlik)) is not None
+    def hesap_surumu(self, kimlik):
+        m = self.veri.musteri(int(kimlik))
+        return m["ozet"] if m is not None else None
 
     def girdi(self, kimlik, ip):
         self.veri.giris_kaydet(int(kimlik))
@@ -65,7 +66,7 @@ class Musteri(web.Taban):
             except ValueError as h:
                 return yanit_html(self.sayfa("Parola", parola_html(ot, hata=str(h)), ot), 400)
             self.oturumlar.drop_user(ot["user"])
-            yeni = self.oturumlar.create(ot["user"], self.rol, self.saat())
+            yeni = self.oturum_ac(ot["user"], self.saat())
             self.veri.hareket(ot["user"], ip, "PAROLA_DEGISTI", n, "müşteri paneli")
             tamam = "Parolanız değiştirildi. Cihazınızda ertesi sabah 06:00'dan sonra geçerli olur."
             return yanit_html(self.sayfa("Parola", parola_html(self.oturumlar.get(yeni, self.saat()), tamam=tamam), ot),

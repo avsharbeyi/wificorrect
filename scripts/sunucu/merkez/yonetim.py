@@ -16,7 +16,7 @@ import web
 import yonetici
 from web import bilgi_tablosu, e, kart, yanit_html, yonlendir
 
-NUMARA_RE = re.compile(r"[1-9]\d{5}")
+NUMARA_RE = guvenlik.NUMARA_RE
 CEVRIMICI_SN = 600
 ESLESME_GECIKME_SN = 26 * 3600
 GECIKME_GUN = 2
@@ -53,9 +53,9 @@ class Yonetim(web.Taban):
             return None
         return kul if guvenlik.dogru(pw, y["tuz"], y["ozet"], y["yineleme"]) else None
 
-    def hesap_var(self, kimlik):
+    def hesap_surumu(self, kimlik):
         y = yonetici.oku(self.yonetici_yolu)
-        return bool(y) and y["kullanici"] == kimlik
+        return y["ozet"] if y and y["kullanici"] == kimlik else None
 
     def girdi(self, kimlik, ip):
         self.veri.hareket("admin", ip, "GIRIS", None, "yönetim")
@@ -64,7 +64,7 @@ class Yonetim(web.Taban):
         return "admin"
 
     def hareket_musterisi(self, ot, yol):
-        m = re.match(r"/m/(\d{6})/", yol)
+        m = re.match(r"/m/([0-9]{6})/", yol)
         return int(m.group(1)) if m else None
 
     def menu(self, ot):
@@ -116,7 +116,7 @@ class Yonetim(web.Taban):
             return self.eski_arsivler(ot, yontem, form, ip)
         if yol == "/hesabim":
             return self.hesabim(ot, yontem, form, ip)
-        m = re.fullmatch(r"/m/(\d{6})(/.*)?", yol)
+        m = re.fullmatch(r"/m/([0-9]{6})(/.*)?", yol)
         if not m or self.veri.musteri(int(m.group(1))) is None:
             return None
         n, alt = int(m.group(1)), m.group(2) or "/"
@@ -133,11 +133,14 @@ class Yonetim(web.Taban):
             return self.serbest(ot, n, form, ip)
         if (yontem, alt) == ("POST", "/uyelik"):
             if form.get("islem") == "bitir":
+                if form.get("onay", "").strip() != str(n):
+                    return yanit_html(self.mesaj(ot, "Onaylanmadı", "Üyeliği bitirmek için müşteri numarasını doğru yazın."), 400)
                 self.veri.uyelik(n, "bitti")
                 self.veri.serbest_birak(n)
                 self.veri.hareket("admin", ip, "UYELIK_BITTI", n)
             elif form.get("islem") == "ac":
                 self.veri.uyelik(n, "aktif")
+                self.veri.serbest_iptal(n)  # bitirirken başlayan serbest bırakma, cihaz temizlenmediyse geri alınır
                 self.veri.hareket("admin", ip, "UYELIK_ACILDI", n)
             return yonlendir(f"/m/{n}")
         if (yontem, alt) == ("GET", "/hareketler"):
@@ -214,7 +217,10 @@ class Yonetim(web.Taban):
         islemler = (f'<form method="post" action="/m/{n}/parola-sifirla"><input type="hidden" name="csrf" value="{cs}">'
                     '<button>Parola sıfırla</button></form>'
                     f'<form method="post" action="/m/{n}/uyelik"><input type="hidden" name="csrf" value="{cs}">'
-                    f'<input type="hidden" name="islem" value="{uyelik_dugme[0]}"><button class="{uyelik_dugme[2]}">{uyelik_dugme[1]}</button></form>'
+                    f'<input type="hidden" name="islem" value="{uyelik_dugme[0]}">'
+                    + (f'<label for="u">Üyeliği bitirmek için müşteri numarasını yazın ({n})</label>'
+                       '<input id="u" name="onay" inputmode="numeric" autocomplete="off" required>' if uyelik_dugme[0] == "bitir" else "")
+                    + f'<button class="{uyelik_dugme[2]}">{uyelik_dugme[1]}</button></form>'
                     f'<p><a href="/m/{n}/kayitlar/">Kayıtlar</a> · <a href="/m/{n}/hareketler">Hareketler</a></p>')
         gecmis = detay._tablo(("No", "Durum", "Bağlanma", "Ayrılma", "Tünel"),
                                   [(x["id"], x["durum"], x["baglanma"][:16], x["ayrilma"][:16], x["tunel_ip"])
@@ -230,7 +236,7 @@ class Yonetim(web.Taban):
         if c is None and not zorla:
             return yanit_html(self.mesaj(ot, "Cihaz yok", "Bu müşterinin bağlı cihazı yok."), 400)
         if zorla:
-            self.kuyruk_ekle("cihaz-kapat", {"numara": str(n)})
+            self.kuyruk_ekle("cihaz-kapat", dict({"numara": str(n)}, **({"wg_pub": c["wg_pub"]} if c else {})))
             self.veri.hareket("admin", ip, "CIHAZ_ZORLA_AYRILDI", n, f"cihaz={c['id'] if c else '-'}")
         else:
             self.veri.hareket("admin", ip, "SERBEST_BIRAKMA_ISTENDI", n, f"cihaz={c['id']}")
@@ -284,4 +290,7 @@ class Yonetim(web.Taban):
         except ValueError as h:
             return yanit_html(html(str(h)), 400)
         self.veri.hareket("admin", ip, "YONETICI_PAROLA_DEGISTI")
-        return yanit_html(html(tamam="Parola değiştirildi."))
+        self.oturumlar.drop_user(ot["user"])  # diğer oturumlar da düşer; değiştiren yeni oturumla devam eder
+        yeni = self.oturum_ac(ot["user"], self.saat())
+        ot = self.oturumlar.get(yeni, self.saat())
+        return yanit_html(html(tamam="Parola değiştirildi."), cerez=(self.cerez, yeni))

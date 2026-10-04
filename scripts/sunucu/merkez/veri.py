@@ -170,6 +170,11 @@ class Veri:
                 db.execute("UPDATE cihaz SET durum = 'serbest_birakiliyor' WHERE id = ?", (c["id"],))
             return c
 
+    def serbest_iptal(self, numara):
+        """Henüz tamamlanmamış serbest bırakmayı geri alır (cihaz temizlenmeden önce)."""
+        with self._islem() as db:
+            db.execute("UPDATE cihaz SET durum = 'bagli' WHERE musteri = ? AND durum = 'serbest_birakiliyor'", (numara,))
+
     def temizlendi(self, cid):
         with self._islem() as db:
             db.execute("UPDATE cihaz SET durum = 'serbest', ayrilma = ? WHERE id = ?", (self._simdi(), cid))

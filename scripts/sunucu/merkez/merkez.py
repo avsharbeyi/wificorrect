@@ -42,6 +42,7 @@ class Isleyici(BaseHTTPRequestHandler):
     app = None
     server_version = "wificorrect"
     sys_version = ""
+    timeout = 20  # yavaş istemci iş parçacığını süresiz tutmasın
 
     def _cevapla(self, yontem):
         parca = urllib.parse.urlsplit(self.path)

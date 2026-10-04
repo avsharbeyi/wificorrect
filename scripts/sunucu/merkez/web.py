@@ -66,7 +66,11 @@ def yonlendir(yer, cerez=None):
 
 
 def guvenli_donus(p):
-    return p if isinstance(p, str) and p.startswith("/") and not p.startswith("//") and not any(c in p for c in "\\\r\n") else "/"
+    """Yalnızca bu sitedeki bir yol. Tarayıcılar sekme/satır sonunu silip "/\t/x"i "//x"e çevirir: boşluk ve denetim
+    karakteri, ters bölü ve "//" reddedilir."""
+    if not isinstance(p, str) or not p.startswith("/") or p.startswith("//"):
+        return "/"
+    return "/" if any(c.isspace() or ord(c) < 0x20 or ord(c) == 0x7f or c == "\\" for c in p) else p
 
 
 def kart(icerik):
@@ -100,8 +104,12 @@ class Taban:
     def dogrula(self, kul, pw):
         raise NotImplementedError
 
-    def hesap_var(self, kimlik):
+    def hesap_surumu(self, kimlik):
+        """Hesabın parola özeti; hesap yoksa None. Oturumdakiyle aynı değilse oturum düşer."""
         raise NotImplementedError
+
+    def oturum_ac(self, kimlik, simdi):
+        return self.oturumlar.create(kimlik, self.rol, simdi, self.hesap_surumu(kimlik))
 
     def girdi(self, kimlik, ip):
         raise NotImplementedError
@@ -143,7 +151,7 @@ class Taban:
         simdi = self.saat()
         token = cerez_degeri(basliklar.get("Cookie"), self.cerez)
         ot = self.oturumlar.get(token, simdi)
-        if ot and not self.hesap_var(ot["user"]):  # hesap silinmiş / değişmiş
+        if ot and self.hesap_surumu(ot["user"]) != ot.get("surum"):  # hesap silinmiş ya da parolası değişmiş
             self.oturumlar.drop(token)
             ot = None
         form = dict(urllib.parse.parse_qsl(govde)) if yontem == "POST" else {}
@@ -174,7 +182,7 @@ class Taban:
             return yanit_html(self._giris_html(f"{self.kullanici_etiketi} veya parola hatalı."), 401)
         self.kilit.succeed(ip, kul, simdi)
         self.girdi(kimlik, ip)
-        return yonlendir("/", (self.cerez, self.oturumlar.create(kimlik, self.rol, simdi)))
+        return yonlendir("/", (self.cerez, self.oturum_ac(kimlik, simdi)))
 
     def _gerekce(self, ot, token, yontem, sorgu, form, ip, simdi):
         if yontem == "GET":

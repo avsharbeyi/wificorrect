@@ -84,8 +84,8 @@ def test_parola_sifirla_serbest_birak_uyelik():
         assert Y.gonder(app, f"/m/{n}/serbest", c, {"csrf": t, "onay": str(n)})[0] == 303
         assert v.bagli_cihaz(n)["durum"] == "serbest_birakiliyor" and isler == []
         assert Y.gonder(app, f"/m/{n}/serbest", c, {"csrf": t, "onay": str(n), "zorla": "1"})[0] == 303
-        assert v.bagli_cihaz(n) is None and isler == [("cihaz-kapat", {"numara": str(n)})]
-        Y.gonder(app, f"/m/{n}/uyelik", c, {"csrf": t, "islem": "bitir"})
+        assert v.bagli_cihaz(n) is None and isler == [("cihaz-kapat", {"numara": str(n), "wg_pub": WG})]
+        Y.gonder(app, f"/m/{n}/uyelik", c, {"csrf": t, "islem": "bitir", "onay": str(n)})
         assert v.musteri(n)["uyelik"] == "bitti"
         Y.gonder(app, f"/m/{n}/uyelik", c, {"csrf": t, "islem": "ac"})
         assert v.musteri(n)["uyelik"] == "aktif"
@@ -126,6 +126,30 @@ def test_eski_arsiv_baglama_ve_hesabim():
         assert Y.gonder(app, "/hesabim", c, {"csrf": Y.csrf(h), "mevcut": PW, "yeni": "kisa", "tekrar": "kisa"})[0] == 400
         assert Y.gonder(app, "/hesabim", c, {"csrf": Y.csrf(h), "mevcut": PW, "yeni": "yeni-yonetici-12", "tekrar": "yeni-yonetici-12"})[0] == 200
         assert Y.giris(app, "serkan", "yeni-yonetici-12")[0] == 303
+
+
+def test_yonetici_parolasi_degisince_eski_oturum_duser():
+    with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
+        app, v, _, c, _ = kur(tmp)
+        c2 = Y.cerez(Y.giris(app, "serkan", PW))
+        h = Y.al(app, "/hesabim", c)
+        r = Y.gonder(app, "/hesabim", c, {"csrf": Y.csrf(h), "mevcut": PW, "yeni": "yeni-yonetici-12", "tekrar": "yeni-yonetici-12"})
+        assert r[0] == 200 and Y.al(app, "/", Y.cerez(r))[0] == 200  # değiştiren yeni oturumla devam eder
+        assert Y.al(app, "/", c2)[0] == 303 and Y.al(app, "/", c)[0] == 303
+
+
+def test_uyelik_bitir_onay_ister_yeniden_acma_serbest_birakmayi_geri_alir():
+    with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
+        app, v, _, c, _ = kur(tmp)
+        n, _ = v.musteri_ekle()
+        v.cihaz_bagla(n, WG, SSH)
+        t = Y.csrf(Y.al(app, f"/m/{n}", c))
+        assert Y.gonder(app, f"/m/{n}/uyelik", c, {"csrf": t, "islem": "bitir"})[0] == 400
+        assert v.musteri(n)["uyelik"] == "aktif" and v.bagli_cihaz(n)["durum"] == "bagli"
+        Y.gonder(app, f"/m/{n}/uyelik", c, {"csrf": t, "islem": "bitir", "onay": str(n)})
+        assert v.musteri(n)["uyelik"] == "bitti" and v.bagli_cihaz(n)["durum"] == "serbest_birakiliyor"
+        Y.gonder(app, f"/m/{n}/uyelik", c, {"csrf": t, "islem": "ac"})
+        assert v.musteri(n)["uyelik"] == "aktif" and v.bagli_cihaz(n)["durum"] == "bagli"
 
 
 if __name__ == "__main__":

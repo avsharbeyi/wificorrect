@@ -116,7 +116,7 @@ def test_eslesme_parola_ve_serbest_birakma():
         v.serbest_birak(n)
         assert post(api, "/api/eslesme", {"cihaz_anahtari": a})[1]["durum"] == "serbest"
         assert post(api, "/api/eslesme", {"cihaz_anahtari": a, "temizlendi": True})[1]["durum"] == "serbest"
-        assert q.isler[-1] == ("cihaz-kapat", {"numara": str(n)})
+        assert q.isler[-1] == ("cihaz-kapat", {"numara": str(n), "wg_pub": WG})
         assert post(api, "/api/eslesme", {"cihaz_anahtari": a})[1]["kod"] == "taninmadi"
         assert v.bagli_cihaz(n) is None
 
@@ -131,6 +131,17 @@ def test_metinler_kirpilir_ve_hiz_siniri():
         assert c["isletme_adi"] == "" and c["unvan"] == "" and c["surum"] == ""
         kodlar = [post(api, "/api/eslesme", {"cihaz_anahtari": a}, ip="203.0.113.99")[0] for _ in range(21)]
         assert kodlar[-1] == 429 and 429 not in kodlar[:20]
+
+
+def test_unicode_rakam_kilidi_atlatamaz():
+    with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
+        api, v, q, _ = kur(tmp)
+        n, pw = v.musteri_ekle()
+        for _ in range(5):
+            giris(api, n, "yanlis-parola")
+        assert giris(api, n, pw)[0] == 429
+        d, j = post(api, "/api/giris", {"numara": "1\uff100001", "parola": pw, "wg_pub": WG, "ssh_pub": SSH})
+        assert d == 400 and j["kod"] == "gecersiz" and q.isler == []
 
 
 if __name__ == "__main__":

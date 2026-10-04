@@ -5,6 +5,7 @@ cd "$(dirname "$0")"
 sed -i 's/\r$//' ./*.py ./*.service ./*.timer ./*.path ./*.conf Caddyfile hotspot-arsiv-saklama
 L=/usr/local/lib/wificorrect
 command -v caddy >/dev/null || DEBIAN_FRONTEND=noninteractive apt-get install -y -q caddy >/dev/null
+command -v fail2ban-client >/dev/null || DEBIAN_FRONTEND=noninteractive apt-get install -y -q fail2ban >/dev/null
 id wcpanel >/dev/null 2>&1 || useradd --system --no-create-home --home-dir /nonexistent --shell /usr/sbin/nologin wcpanel
 install -d -m 755 $L /var/lib/wificorrect /var/lib/wificorrect/istatistik
 install -d -o root -g wcpanel -m 750 /var/lib/wificorrect/detay /var/lib/wificorrect/kuyruk-sonuc
@@ -19,6 +20,7 @@ ln -sf $L/yonetici.py /usr/local/sbin/wc-yonetici
 rm -f /usr/local/sbin/wc-hesap
 install -m 644 wc-merkez.service wc-kuyruk.path wc-kuyruk.service wc-durum.service wc-durum.timer \
   wc-istatistik.service wc-istatistik.timer /etc/systemd/system/
+[ -f /etc/caddy/Caddyfile ] && cp -n /etc/caddy/Caddyfile /etc/caddy/Caddyfile.eski
 install -m 644 Caddyfile /etc/caddy/Caddyfile
 install -m 755 hotspot-arsiv-saklama /etc/cron.daily/
 install -m 644 fail2ban-wc-merkez-filtre.conf /etc/fail2ban/filter.d/wc-merkez.conf

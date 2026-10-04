@@ -74,7 +74,8 @@ def test_gecersiz_girdiler_komut_calistirmaz():
                     {"islem": "cihaz-ekle", "numara": 100001, "wg_pub": WG, "ssh_pub": SSH},
                     {"islem": "cihaz-ekle", "numara": "100001", "wg_pub": WG + "\n[Peer]", "ssh_pub": SSH},
                     {"islem": "cihaz-ekle", "numara": "100001", "wg_pub": WG, "ssh_pub": SSH + "\ncommand=x"},
-                    {"islem": "kabuk", "numara": "100001"}):
+                    {"islem": "kabuk", "numara": "100001"},
+                    {"islem": "cihaz-kapat", "numara": "1\uff100001"}):
             assert K.isle(is_, s, s.kayit, s.wg)["durum"] == "hata"
         assert s.komutlar == []
 
@@ -112,6 +113,33 @@ def test_sembolik_bag_ve_fifo_izlenmez():
         assert K.is_oku(os.path.join(tmp, "a.json")) is None
         os.mkfifo(os.path.join(tmp, "b.json"))
         assert K.is_oku(os.path.join(tmp, "b.json")) is None
+
+
+def test_eski_kapatma_isi_yeni_cihazi_kapatmaz():
+    with tempfile.TemporaryDirectory() as tmp:
+        s = Sunucu(tmp)
+        K.isle({"islem": "cihaz-ekle", "numara": "100001", "wg_pub": WG2, "ssh_pub": SSH}, s, s.kayit, s.wg)
+        assert K.isle({"islem": "cihaz-kapat", "numara": "100001", "wg_pub": WG}, s, s.kayit, s.wg) == {"durum": "tamam"}
+        assert [k[0] for k in s.komutlar] == ["cihaz-ekle"]
+        K.isle({"islem": "cihaz-kapat", "numara": "100001", "wg_pub": WG2}, s, s.kayit, s.wg)
+        assert [k[0] for k in s.komutlar] == ["cihaz-ekle", "cihaz-kapat"]
+        assert K.isle({"islem": "cihaz-kapat", "numara": "100001", "wg_pub": "kotu"}, s, s.kayit, s.wg)["durum"] == "hata"
+
+
+def test_isler_yazilis_sirasiyla_islenir():
+    with tempfile.TemporaryDirectory() as tmp:
+        s = Sunucu(tmp)
+        K.isle({"islem": "cihaz-ekle", "numara": "100001", "wg_pub": WG, "ssh_pub": SSH}, s, s.kayit, s.wg)
+        kq, sd = os.path.join(tmp, "kuyruk"), os.path.join(tmp, "sonuc")
+        os.makedirs(kq)
+        os.makedirs(sd)
+        for ad, is_, zaman in (("ffffffffffffffff", {"islem": "cihaz-kapat", "numara": "100001", "wg_pub": WG}, 1000),
+                               ("0000000000000000", {"islem": "cihaz-ekle", "numara": "100001", "wg_pub": WG, "ssh_pub": SSH}, 2000)):
+            with open(os.path.join(kq, ad + ".json"), "w", encoding="utf-8") as f:
+                json.dump(is_, f)
+            os.utime(os.path.join(kq, ad + ".json"), (zaman, zaman))
+        K.main(kq, sd, s, s.kayit, s.wg, grup=None)
+        assert K.kayit_satiri("100001", s.kayit) is not None  # önce kapat, sonra ekle: cihaz açık kalır
 
 
 if __name__ == "__main__":

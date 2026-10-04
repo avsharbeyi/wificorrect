@@ -78,6 +78,35 @@ def test_baska_musterinin_yollari_yok():
             assert Y.al(app, yol, c)[0] == 404, yol
 
 
+def test_unicode_rakamli_numara_reddedilir():
+    with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
+        app, v, _ = kur(tmp)
+        n, pw = v.musteri_ekle()
+        assert Y.giris(app, "1\uff100001", pw)[0] == 401
+        assert Y.giris(app, "\u00b2" * 6, pw)[0] == 401
+
+
+def test_parola_sifirlaninca_eski_oturum_duser():
+    with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
+        app, v, _ = kur(tmp)
+        n, pw = v.musteri_ekle()
+        c = Y.cerez(Y.giris(app, str(n), pw))
+        assert Y.al(app, "/", c)[0] == 200
+        v.parola_sifirla(n)
+        assert Y.al(app, "/", c)[0] == 303
+
+
+def test_gerekce_donusu_baska_siteye_gitmez():
+    with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
+        app, v, _ = kur(tmp)
+        n, pw = v.musteri_ekle()
+        c = Y.cerez(Y.giris(app, str(n), pw))
+        f = Y.al(app, "/gerekce", c)
+        for kotu in ("/\t/evil.example", "//evil.example", "/\\evil.example", "/\n/x", "https://evil.example", "/ /evil.example"):
+            r = Y.gonder(app, "/gerekce", c, {"csrf": Y.csrf(f), "gerekce": "Müşteri şikâyeti", "donus": kotu})
+            assert r[1]["Location"] == "/", kotu
+
+
 if __name__ == "__main__":
     for _name, _fn in sorted(globals().items()):
         if _name.startswith("test_") and callable(_fn):

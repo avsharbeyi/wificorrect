@@ -2,11 +2,13 @@
 import collections
 import hashlib
 import hmac
+import re
 import secrets
 import threading
 
 YINELEME = 120_000  # Rust hesap.rs ITER ile aynı: cihaz aynı özeti internetsiz doğrular
 EN_AZ = 10
+NUMARA_RE = re.compile(r"[1-9][0-9]{5}")  # yalnızca ASCII: \d Unicode rakamları da kabul eder (kilit atlatılırdı)
 HARFLER = "abcdefghjkmnpqrstuvwxyzACDEFGHJKLMNPQRSTUVWXYZ2345679"  # 0/O, 1/l/I, 8/B karışmasın
 
 
@@ -41,11 +43,12 @@ class Oturumlar:
         self._s = {}
         self.lock = threading.Lock()
 
-    def create(self, user, role, now):
+    def create(self, user, role, now, surum=""):
+        """surum: hesabın o anki parola özeti; değişince (sıfırlama, başka yerden değişim) oturum geçersizleşir."""
         token = secrets.token_urlsafe(32)
         with self.lock:
             self._s[token] = {"user": user, "role": role, "csrf": secrets.token_urlsafe(24),
-                              "created": now, "last": now, "gerekce": None}
+                              "created": now, "last": now, "gerekce": None, "surum": surum}
         return token
 
     def get(self, token, now):
