@@ -1,6 +1,6 @@
 # Merkezi panel (panel.wificorrect.com) — yeni sisteme uyarlama — Tasarım
 
-> Tarih: 2026-10-03 · Durum: kullanıcı incelemesi bekliyor
+> Tarih: 2026-10-03 · Durum: **YERİNE GEÇTİ** → `2026-10-04-yonetim-merkezi-design.md` (hesaplar artık merkezde açılıyor)
 > Temel: eski kafe paneli (`openwrt-kafe-paneli/docs/superpowers/specs/2026-09-28-kafe-paneli-design.md` ve
 > `…-detay-design.md`). Bu belge onları genişletir; çelişkide bu belge geçerlidir.
 
