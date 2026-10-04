@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
-"""wc-istatistik: kafe paneli sayıları (spec §3).
-Her kafenin eksiksiz gelmiş her günü için o gün internete çıkan farklı telefon sayısını
-/var/lib/wificorrect/istatistik/<kafe>.json'a yazar. Root çalışır; panel yalnızca bu dosyaları okur."""
+"""wc-istatistik: yönetim merkezi sayıları ve gün özetleri.
+Her arşivin (wc-durum'un listesi: cihaz yedekleri + eski arşivler) eksiksiz gelmiş her günü için o gün internete çıkan
+farklı telefon sayısını /var/lib/wificorrect/istatistik/<arşiv>.json'a yazar. Root çalışır; panel yalnızca bu dosyaları okur."""
 import json
 import os
 import re
@@ -10,9 +10,7 @@ import sys
 sys.path.insert(0, os.path.dirname(os.path.realpath(__file__)))
 import common  # noqa: E402
 
-ARSIV = "/srv/hotspot-arsiv"
 CIKTI = "/var/lib/wificorrect/istatistik"
-HESAPLAR = "/etc/wificorrect/hesaplar.json"
 DETAY = "/var/lib/wificorrect/detay"
 PANEL_GRUBU = "wcpanel"  # özetler root:wcpanel 640; testlerde None (sahiplik değişmez)
 GUN_RE = re.compile(r"\d{4}-\d{2}-\d{2}")
@@ -30,7 +28,7 @@ def tamam_mi(gun_dizini):
 
 def normal_dosya(yol):
     """Yol yoksa None; varsa ve normal dosya değilse (cihazdan gelmiş sembolik bağ/FIFO) ValueError:
-    başka kafeyi okutmasın, root görevini takmasın."""
+    başka arşivi okutmasın, root görevini takmasın."""
     if not os.path.lexists(yol):
         return None
     if os.path.islink(yol) or not os.path.isfile(yol):
@@ -74,24 +72,20 @@ def guncelle(kafe_dizini, json_yolu):
     return hatalar
 
 
-def main():
-    import panel_auth  # eski panel; Görev 4 bu main'i değiştirir
+def main(kayit=None, yeni=None, eski=None, cikti=CIKTI, detay=DETAY, grup=PANEL_GRUBU):
+    import durum  # durum → common; döngü yok ama istatistik'i hafif tutmak için burada
+    import ozet  # istatistik'i içe aktarır; döngüsel içe aktarma olmasın diye burada
     kod = 0
-    for h in panel_auth.Accounts(HESAPLAR).list():
-        kafe = h["kullanici"]
-        if not panel_auth.USER_RE.fullmatch(kafe):  # hesap dosyası wcpanel'in: root yolunu ondan kurmadan önce doğrula
-            print(f"{kafe!r}: geçersiz hesap adı, atlandı", file=sys.stderr)
-            kod = 1
-            continue
-        import ozet  # istatistik'i içe aktarır; döngüsel içe aktarma olmasın diye burada
-        kafe_dizini, hatalar = os.path.join(ARSIV, kafe), []
-        try:
-            hatalar += guncelle(kafe_dizini, os.path.join(CIKTI, kafe + ".json"))
-            hatalar += ozet.detay_guncelle(kafe_dizini, os.path.join(DETAY, kafe), PANEL_GRUBU)
-        except Exception as e:  # bir kafenin bozuk klasörü diğerlerini durdurmasın
-            hatalar.append(repr(e))
+    for ad, a in durum.arsivler(kayit or durum.KAYIT, yeni or durum.YENI, eski or durum.ESKI).items():
+        hatalar = []
+        for kaynak in a["kaynaklar"]:  # yeni arşiv önce: aynı gün eskide de varsa atlanır
+            try:
+                hatalar += guncelle(kaynak, os.path.join(cikti, ad + ".json"))
+                hatalar += ozet.detay_guncelle(kaynak, os.path.join(detay, ad), grup)
+            except Exception as e:  # bir arşivin bozuk klasörü diğerlerini durdurmasın
+                hatalar.append(repr(e))
         for hata in hatalar:
-            print(f"{kafe}: {hata}", file=sys.stderr)
+            print(f"{ad}: {hata}", file=sys.stderr)
             kod = 1
     return kod
 

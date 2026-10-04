@@ -1,0 +1,8 @@
+[Unit]
+Description=WifiCorrect yönetim merkezi: arşiv ve tünel durumu
+
+[Service]
+Type=oneshot
+Environment=PYTHONDONTWRITEBYTECODE=1
+ExecStart=/usr/local/sbin/wc-durum
+TimeoutStartSec=10min

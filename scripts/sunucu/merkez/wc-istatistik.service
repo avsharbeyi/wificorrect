@@ -1,5 +1,5 @@
 [Unit]
-Description=WifiCorrect kafe paneli sayıları (arşivden günlük farklı kişi)
+Description=WifiCorrect yönetim merkezi: arşivlerden günlük sayılar ve gün özetleri
 
 [Service]
 Type=oneshot

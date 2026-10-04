@@ -133,6 +133,32 @@ def test_sembolik_bag_gun_ve_dosya_atlanir():
         assert len(hatalar) == 1 and hatalar[0].startswith("2026-09-28")
 
 
+def test_main_arsivleri_isler_yeni_once():
+    with tempfile.TemporaryDirectory() as tmp:
+        yeni, eski = os.path.join(tmp, "yeni"), os.path.join(tmp, "eski")
+        kayit = os.path.join(tmp, "kayit.csv")
+        with open(kayit, "w", encoding="utf-8") as f:
+            f.write("cihaz;bocafe;10.99.0.10;" + "A" * 43 + "=;wfc-bocafe\n")
+        gun_yaz(os.path.join(yeni, "bocafe", "veri"), "2026-10-01", ["5334553132"])
+        gun_yaz(os.path.join(eski, "bocafe"), "2026-09-20", ["5334553132", "5551112233"])
+        gun_yaz(os.path.join(eski, "bocafe"), "2026-10-01", ["5550000000", "5551111111", "5552222222"])
+        cikti, detay = os.path.join(tmp, "ist"), os.path.join(tmp, "detay")
+        assert I.main(kayit, yeni, eski, cikti, detay, None) == 0
+        assert oku(os.path.join(cikti, "bocafe.json")) == {"2026-09-20": 2, "2026-10-01": 1}
+
+
+def test_main_bozuk_arsiv_digerlerini_durdurmaz():
+    with tempfile.TemporaryDirectory() as tmp:
+        yeni, eski = os.path.join(tmp, "yeni"), os.path.join(tmp, "eski")
+        kayit = os.path.join(tmp, "kayit.csv")
+        open(kayit, "w").close()
+        os.makedirs(os.path.join(eski, "a-kafe"))
+        with open(os.path.join(eski, "a-kafe", "gunluk"), "w") as f:  # klasör olması gereken yerde dosya
+            f.write("x")
+        gun_yaz(os.path.join(eski, "b-kafe"), "2026-10-01", ["5334553132"])
+        cikti, detay = os.path.join(tmp, "ist"), os.path.join(tmp, "detay")
+        I.main(kayit, yeni, eski, cikti, detay, None)
+        assert oku(os.path.join(cikti, "b-kafe.json")) == {"2026-10-01": 1}
 
 
 if __name__ == "__main__":
