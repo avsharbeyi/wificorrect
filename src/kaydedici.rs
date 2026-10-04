@@ -177,6 +177,9 @@ pub struct Kaydedici {
     wan_bad_since: Option<f64>,
     wan_last_fix: f64,
     uzak_last_fix: f64,
+    /// Yönetim merkezi bağı (testte geçici) ve son eşitleme başlatma zamanı
+    pub merkez_path: std::path::PathBuf,
+    merkez_son: f64,
 }
 
 impl Kaydedici {
@@ -196,6 +199,8 @@ impl Kaydedici {
             wan_bad_since: None,
             wan_last_fix: f64::NEG_INFINITY,
             uzak_last_fix: f64::NEG_INFINITY,
+            merkez_path: crate::merkez::PATH.into(),
+            merkez_son: f64::NEG_INFINITY,
         }
     }
 
@@ -364,6 +369,7 @@ impl Kaydedici {
         self.check_disk(now);
         self.check_wan(now);
         self.check_uzak(now);
+        self.check_merkez(now);
     }
 
     /// Uzak erişim açıkken tünel yoksa ya da sunucuyla 10 dk'dır el sıkışılmadıysa (açılışta ad çözülemedi, sunucu IP'si
@@ -385,6 +391,25 @@ impl Kaydedici {
         let ok = (self.runner)(&["systemctl".to_string(), "restart".to_string(), crate::uzak::UNIT.to_string()]);
         let row = Row::new("UZAK_YENIDEN", &ortak::now_iso(now)).set("ek", format!("arayuz={} sonuc={}", if up { "var" } else { "yok" }, if ok { "tamam" } else { "hata" }));
         ortak::audit(&self.cfg.main.log_root, row);
+    }
+
+    /// Yönetim merkezi eşitlemesi: zamanı geldiyse (her gün 06:00 sonrası, hatada 30 dk sonra) arka planda
+    /// `ctl merkez-eslesme` başlatılır (ağ çağrısı kaydediciyi bekletmesin). En çok dakikada bir.
+    fn check_merkez(&mut self, now: f64) {
+        if now - self.merkez_son < 60.0 {
+            return;
+        }
+        let Some(m) = crate::merkez::oku(&self.merkez_path) else { return };
+        if !crate::merkez::zamani_geldi(&m, now) {
+            return;
+        }
+        self.merkez_son = now;
+        let unit = format!("wfc-merkez-eslesme-{}", now as u64);
+        let c: Vec<String> = ["systemd-run", "--unit", &unit, "--on-active", "1s", "/usr/local/bin/wificorrect", "ctl", "merkez-eslesme"]
+            .iter()
+            .map(|s| s.to_string())
+            .collect();
+        (self.runner)(&c);
     }
 
     /// İnternet portunda kablo takılıyken DHCP istemcisi (dhcpcd) 1 dk'dan uzun yoksa WAN birimi yeniden başlatılır
@@ -796,4 +821,31 @@ mod tests {
         let audit = std::fs::read_to_string(root.join(format!("5651/gunluk/{}/denetim.csv", ortak::day_of(&ortak::now_iso(1095.0))))).unwrap();
         assert!(audit.contains("WAN_DHCP_YENIDEN") && audit.contains("arayuz=enp3s0 birim=ifup@enp3s0.service sonuc=tamam"));
     }
+
+    #[test]
+    fn merkez_eslesmesi_zamani_gelince_arka_planda() {
+        let (mut k, root, _) = setup();
+        let calls = Arc::new(Mutex::new(Vec::<String>::new()));
+        let c2 = calls.clone();
+        k.runner = Box::new(move |c: &[String]| {
+            c2.lock().unwrap().push(c.join(" "));
+            true
+        });
+        k.merkez_path = root.join("merkez.json");
+        let n = |calls: &Arc<Mutex<Vec<String>>>| calls.lock().unwrap().iter().filter(|x| x.contains("ctl merkez-eslesme")).count();
+        let gun = 1_791_072_000.0; // 2026-10-04 00:00 UTC
+        let tr = |saat: f64| gun + (saat - 3.0) * 3600.0;
+        k.check_merkez(tr(7.0));
+        assert_eq!(n(&calls), 0); // bağ yok
+        let m = crate::merkez::Merkez { numara: "4511643".into(), tuz: "t".into(), ozet: "o".into(), yineleme: 120_000, cihaz_anahtari: "k".into(), son_eslesme: tr(5.0), deneme: 0.0 };
+        std::fs::create_dir_all(&root).unwrap();
+        crate::merkez::kaydet(&k.merkez_path, &m).unwrap();
+        k.check_merkez(tr(5.5));
+        assert_eq!(n(&calls), 0); // 06:00 olmadı
+        k.check_merkez(tr(6.1));
+        assert_eq!(n(&calls), 1);
+        k.check_merkez(tr(6.11));
+        assert_eq!(n(&calls), 1); // aynı dakikada ikinci kez başlatılmaz
+    }
+
 }

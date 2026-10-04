@@ -4,6 +4,8 @@
 //! 5651 kayıtları (kullanıcı kararı): bugün dahil bütün günler mühürlenip uzak sunucuya gönderilir, ancak hepsi gönderildiyse
 //! cihazdan silinir (işletme sahibi kayıtlarını sunucudaki panelden görmeye devam eder). Uzak yedek kapalıysa ya da bir gün
 //! gönderilemezse işlem İPTAL olur: kayıt silinmez, ayarlara dokunulmaz.
+//! Yönetim merkezi (2026-10-04): kayıtlar teslim edilince merkeze `temizlendi` bildirilir ve müşteri bağı (merkez.json)
+//! silinir; cihaz giriş ekranına döner ve yeni müşteri girebilir.
 
 use crate::ag::{self, Ag, Yollar};
 use crate::ayar::Config;
@@ -49,7 +51,18 @@ fn kayitlari_teslim_et(cfg: &Config, now: f64, runner: &Runner) -> Result<(), St
     Ok(())
 }
 
-pub fn fabrika(cfg: &Config, cfg_path: &str, hesap_path: &str, filtre_conf: &Path, y: &Yollar, now: f64, runner: &Runner) -> Result<Vec<String>, String> {
+#[allow(clippy::too_many_arguments)]
+pub fn fabrika(
+    cfg: &Config,
+    cfg_path: &str,
+    hesap_path: &str,
+    merkez_path: &Path,
+    bildir: &dyn Fn(&crate::merkez::Merkez) -> Result<(), String>,
+    filtre_conf: &Path,
+    y: &Yollar,
+    now: f64,
+    runner: &Runner,
+) -> Result<Vec<String>, String> {
     let m = &cfg.main;
     if let Some(e) = engel(cfg) {
         audit(&m.log_root, "FABRIKA_IPTAL", now, "neden=yedek_kapali");
@@ -72,7 +85,16 @@ pub fn fabrika(cfg: &Config, cfg_path: &str, hesap_path: &str, filtre_conf: &Pat
         return Err(format!("Fabrika ayarlarına dönülmedi, kayıtlar sunucuya gönderilemedi: {e}"));
     }
     let mut errs = vec![];
-    // 3) yalnızca admin kalır → panel kurulum ekranını açar
+    // 2b) yönetim merkezi: kayıtlar sunucuda → cihazın temizlendiği bildirilir, bağ silinir (yeni müşteri girebilir).
+    // Bildirim gitmezse fabrika sürer (kayıtlar teslim edildi); admin yönetim merkezinden "zorla ayır" ile kapatır.
+    if let Some(mz) = crate::merkez::oku(merkez_path) {
+        if let Err(e) = bildir(&mz) {
+            errs.push(format!("merkeze bildirilemedi: {e}"));
+            audit(&m.log_root, "MERKEZ_BILDIRIM_HATA", now, &format!("hata={e}"));
+        }
+        crate::merkez::sil(merkez_path);
+    }
+    // 3) yalnızca admin kalır
     if let Err(e) = Hesaplar::new(hesap_path).keep_only_admin() {
         errs.push(e);
     }
@@ -134,6 +156,15 @@ mod tests {
         let cfg = Config::parse(&text).unwrap();
         let h = Hesaplar::new(root.join("hesaplar.json"));
         h.set_admin("admin-parola-123").unwrap();
+        let mp = root.join("merkez.json");
+        crate::merkez::kaydet(&mp, &crate::merkez::Merkez { numara: "4511643".into(), tuz: "t".into(), ozet: "o".into(), yineleme: 120_000,
+                                                          cihaz_anahtari: "k".into(), son_eslesme: 0.0, deneme: 0.0 }).unwrap();
+        let bildirimler: Arc<Mutex<Vec<String>>> = Arc::default();
+        let b2 = bildirimler.clone();
+        let bildir = move |m: &crate::merkez::Merkez| {
+            b2.lock().unwrap().push(m.numara.clone());
+            Ok(())
+        };
         let mut ses = ortak::Sessions::new();
         ses.insert("aa:bb:cc:dd:ee:01".into(), ortak::Session {
             phone: "905334553132".into(), ad: "Ayşe".into(), soyad: "Yılmaz".into(), ip: "10.50.0.23".into(),
@@ -160,12 +191,12 @@ mod tests {
         ortak::append_rows(&ortak::day_file(&cfg.main.log_root, "2026-10-01", "dhcp.csv"), &[Row::new("DHCP_ATAMA", "2026-10-01T10:00:00+03:00")]).unwrap();
         // sunucuya gönderilemezse iptal: hiçbir şey silinmez, ayarlar aynı, servisler geri açılır
         let fail = |c: &[String]| c[0] != "rsync";
-        let r = fabrika(&cfg, &cfg_path.to_string_lossy(), &root.join("hesaplar.json").to_string_lossy(), &root.join("yasak.conf"), &y, 1_791_000_000.0, &fail);
+        let r = fabrika(&cfg, &cfg_path.to_string_lossy(), &root.join("hesaplar.json").to_string_lossy(), &mp, &bildir, &root.join("yasak.conf"), &y, 1_791_000_000.0, &fail);
         assert!(r.unwrap_err().contains("gönderilemedi"));
-        assert!(root.join("5651/gunluk/2026-10-01").exists() && h.load().unwrap().len() == 1);
+        assert!(root.join("5651/gunluk/2026-10-01").exists() && h.load().unwrap().len() == 1 && mp.exists() && bildirimler.lock().unwrap().is_empty());
         assert_eq!(Config::load(&cfg_path.to_string_lossy()).unwrap().main.site_name, "Bocafe");
         // gönderilince: kayıtlar mühürlü + yedeklendi işaretli olarak sunucuya, sonra cihazdan silinir
-        let errs = fabrika(&cfg, &cfg_path.to_string_lossy(), &root.join("hesaplar.json").to_string_lossy(), &root.join("yasak.conf"), &y, 1_791_000_000.0, &runner).unwrap();
+        let errs = fabrika(&cfg, &cfg_path.to_string_lossy(), &root.join("hesaplar.json").to_string_lossy(), &mp, &bildir, &root.join("yasak.conf"), &y, 1_791_000_000.0, &runner).unwrap();
         assert!(errs.is_empty(), "{errs:?}");
         {
             let v = calls.lock().unwrap();
@@ -180,6 +211,7 @@ mod tests {
         let m = h.load().unwrap();
         assert_eq!((m.len(), m.get(ADMIN).map(|x| x.rol)), (1, Some(Rol::Hizmet)));
         assert!(h.verify(ADMIN, "admin-parola-123").is_some());
+        assert!(!mp.exists() && *bildirimler.lock().unwrap() == vec!["4511643".to_string()]); // teslimden sonra merkeze bildirildi, bağ silindi
         // oturum kapandı (OTURUM_BITIS sunucuya giden kayda girdi)
         assert!(ortak::load_sessions(&root.join("state").to_string_lossy()).is_empty());
         // portlar varsayılan, ağ yeniden kuruldu

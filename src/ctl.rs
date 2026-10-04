@@ -141,6 +141,39 @@ fn admin_parola(path: &str) -> ExitCode {
     }
 }
 
+/// Fabrika dönüşü (panel ya da merkezin serbest bırakması): kayıtlar teslim edilince merkeze `temizlendi` bildirilir.
+fn fabrika_calistir(cfg: &Config, now: f64, runner: &Runner) -> ExitCode {
+    let path = std::env::var("WFC_AYAR").unwrap_or_else(|_| crate::ayar::PATH.to_string());
+    let bildir = |m: &crate::merkez::Merkez| {
+        let mut m = m.clone();
+        crate::merkez::eslesme(&mut m, "", "", true, &crate::merkez::curl, now).map(|_| ())
+    };
+    match crate::fabrika::fabrika(
+        cfg,
+        &path,
+        crate::hesap::PATH,
+        std::path::Path::new(crate::merkez::PATH),
+        &bildir,
+        std::path::Path::new(crate::filtre::DNSMASQ_CONF),
+        &crate::ag::Yollar::sistem(),
+        now,
+        runner,
+    ) {
+        Ok(errs) if errs.is_empty() => {
+            println!("Fabrika ayarlarına dönüldü.");
+            ExitCode::SUCCESS
+        }
+        Ok(errs) => {
+            eprintln!("Fabrika ayarlarına dönüldü, uyarılar: {}", errs.join("; "));
+            ExitCode::from(1)
+        }
+        Err(e) => {
+            eprintln!("{e}");
+            ExitCode::from(1)
+        }
+    }
+}
+
 pub fn run(cfg: Config, args: &[String]) -> ExitCode {
     let runner = |c: &[String]| ortak::run(c);
     let now = ortak::wall();
@@ -177,19 +210,37 @@ pub fn run(cfg: Config, args: &[String]) -> ExitCode {
         }
         Some("admin-parola") => admin_parola(crate::hesap::PATH),
         // Panel → Admin ayarları → Fabrika ayarları (ayrı systemd işinde; ağ yeniden kurulur)
-        Some("fabrika") => {
-            let path = std::env::var("WFC_AYAR").unwrap_or_else(|_| crate::ayar::PATH.to_string());
-            match crate::fabrika::fabrika(&cfg, &path, crate::hesap::PATH, std::path::Path::new(crate::filtre::DNSMASQ_CONF), &crate::ag::Yollar::sistem(), now, &runner) {
-                Ok(errs) if errs.is_empty() => {
-                    println!("Fabrika ayarlarına dönüldü.");
+        Some("fabrika") => fabrika_calistir(&cfg, now, &runner),
+        // Kaydedici zamanı gelince başlatır (her gün 06:00 sonrası; hata olursa 30 dk sonra yeniden)
+        Some("merkez-eslesme") => {
+            let p = std::path::Path::new(crate::merkez::PATH);
+            let Some(mut m) = crate::merkez::oku(p) else {
+                println!("cihaz bir müşteriye bağlı değil");
+                return ExitCode::SUCCESS;
+            };
+            m.deneme = now;
+            let _ = crate::merkez::kaydet(p, &m);
+            let denetim = |olay: &str, ek: String| ortak::audit(&cfg.main.log_root, Row::new(olay, &ortak::now_iso(now)).set("ek", ek));
+            match crate::merkez::eslesme(&mut m, &cfg.main.site_name, &cfg.main.unvan, false, &crate::merkez::curl, now) {
+                Ok(crate::merkez::Eslesme::Bagli { uyelik }) => {
+                    if let Err(e) = crate::merkez::kaydet(p, &m) {
+                        eprintln!("{e}");
+                        return ExitCode::from(1);
+                    }
+                    denetim("MERKEZ_ESLESME", format!("uyelik={uyelik}"));
                     ExitCode::SUCCESS
                 }
-                Ok(errs) => {
-                    eprintln!("Fabrika ayarlarına dönüldü, uyarılar: {}", errs.join("; "));
+                Ok(crate::merkez::Eslesme::Serbest) => {
+                    denetim("MERKEZ_SERBEST", "fabrika=basladi".into());
+                    fabrika_calistir(&cfg, now, &runner) // teslim olmazsa bağ kalır, 30 dk sonra yeniden denenir
+                }
+                Ok(crate::merkez::Eslesme::Taninmadi) => {
+                    // cihaz silinmez: merkezdeki bir hata bütün cihazları sıfırlamasın; admin yönetim merkezinden bakar
+                    denetim("MERKEZ_TANINMADI", String::new());
                     ExitCode::from(1)
                 }
                 Err(e) => {
-                    eprintln!("{e}");
+                    denetim("MERKEZ_ESLESME_HATA", format!("hata={e}"));
                     ExitCode::from(1)
                 }
             }
@@ -299,7 +350,7 @@ pub fn run(cfg: Config, args: &[String]) -> ExitCode {
         _ => {
             eprintln!(
                 "Kullanım: wificorrect ctl <komut>\n  dhcp-olay <add|old|del> <mac> <ip> [ad]\n  yukle\n  oturumlar\n  \
-                 gun-kapat [YYYY-AA-GG] [--zorla]\n  dogrula [--son N]\n  temizle [--kuru]\n  yedekle\n  ara ...  (ayrıntı: ctl ara)\n  disa-aktar --baslangic G --bitis G --cikti DOSYA\n  ag-uygula | ag-gecis DOSYA | ag-onayla | ag-geri-al\n  filtre-uygula\n  admin-parola"
+                 gun-kapat [YYYY-AA-GG] [--zorla]\n  dogrula [--son N]\n  temizle [--kuru]\n  yedekle\n  ara ...  (ayrıntı: ctl ara)\n  disa-aktar --baslangic G --bitis G --cikti DOSYA\n  ag-uygula | ag-gecis DOSYA | ag-onayla | ag-geri-al\n  filtre-uygula\n  admin-parola\n  merkez-eslesme"
             );
             ExitCode::from(2)
         }
