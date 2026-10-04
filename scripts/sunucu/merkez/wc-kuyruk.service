@@ -1,0 +1,8 @@
+[Unit]
+Description=WifiCorrect yönetim merkezi root işleri
+
+[Service]
+Type=oneshot
+Environment=PYTHONDONTWRITEBYTECODE=1
+ExecStart=/usr/local/sbin/wc-kuyruk
+TimeoutStartSec=10min

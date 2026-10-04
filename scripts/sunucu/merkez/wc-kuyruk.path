@@ -1,0 +1,9 @@
+[Unit]
+Description=WifiCorrect yönetim merkezi root işleri (tünel/yedek hesabı) kuyruğu
+
+[Path]
+PathExistsGlob=/var/lib/wificorrect/kuyruk/*.json
+Unit=wc-kuyruk.service
+
+[Install]
+WantedBy=multi-user.target
