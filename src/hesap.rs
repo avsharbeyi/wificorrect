@@ -41,7 +41,7 @@ pub struct Hesap {
     pub yineleme: u32,
 }
 
-fn digest(pw: &str, salt: &str, iter: u32) -> String {
+pub(crate) fn digest(pw: &str, salt: &str, iter: u32) -> String {
     let mut out = [0u8; 32];
     pbkdf2::pbkdf2_hmac::<Sha256>(pw.as_bytes(), salt.as_bytes(), iter, &mut out);
     out.iter().map(|b| format!("{b:02x}")).collect()
