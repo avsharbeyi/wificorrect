@@ -33,21 +33,23 @@ müşterinin kendi kendine kaydolması; ödeme/fatura.
 ```
 yonetim.wificorrect.com ── admin: müşteriler, cihazlar, parola sıfırlama, serbest bırakma, hareketler, kayıtlar
 panel.wificorrect.com   ── müşteri: kayıtları (gün/kişi/arama), parola değiştirme
-wificorrect.com/api/    ── cihazlar: ilk giriş, günlük eşitleme, parola değişimi
+api.wificorrect.com/api/ ── cihazlar: ilk giriş, günlük eşitleme, parola değişimi
           │ Caddy (HTTPS, Let's Encrypt) → tek Python programı (stdlib), kullanıcı wcpanel, /srv'ye erişimi yok
           ▼
    /var/lib/wificorrect/merkez.db (SQLite, wcpanel 600)
-          │ yetki gereken işler kuyruğa yazılır
+          │ yetki gereken işler dosya kuyruğuna yazılır (/var/lib/wificorrect/kuyruk/<id>.json)
           ▼
    wc-kuyruk (root, systemd .path ile anında): wificorrect-sunucu cihaz-ekle / cihaz-kapat
-   wc-istatistik (root, 02:30/12:30): arşiv → gün özetleri (değişmedi)
-   wc-genel (root, 5 dk): tünel el sıkışmaları, son gelen gün, arşiv boyutu → genel.json
+             sonuç → /var/lib/wificorrect/kuyruk-sonuc/<id>.json (yalnızca root yazar); root veritabanına dokunmaz
+   wc-istatistik (root, 02:30/12:30): arşiv → gün özetleri (arşivleri wc-durum'un listesinden alır)
+   wc-durum (root, 5 dk): arşiv klasörleri + kayit.csv + tünel el sıkışmaları → durum.json (son gün, boyut, el sıkışma)
 ```
 
 - Program: mevcut Python paneli (`openwrt-kafe-paneli/sunucu/panel`) bu repoya `scripts/sunucu/merkez/` olarak taşınır
   ve genişletilir. Yalnızca standart kütüphane (`sqlite3` dahil). Üç alan adı tek süreçte, `Host` başlığına göre ayrılır.
-- Panel süreci root olmaz. WireGuard eşi ve yedek hesabı açmak root gerektirir: panel `kuyruk` tablosuna iş yazar,
-  `wc-kuyruk` (root) işi doğrulayıp çalıştırır, sonucu tabloya yazar. Panel, kuyruk sonucunu en çok 15 sn bekler.
+- Panel süreci root olmaz. WireGuard eşi ve yedek hesabı açmak root gerektirir: panel kuyruk klasörüne iş dosyası yazar,
+  `wc-kuyruk` (root) işi doğrulayıp çalıştırır, sonucu ayrı (root'un) klasöre yazar. Panel sonucu en çok 15 sn bekler.
+- Cihaz API'si `api.wificorrect.com`'dadır; kök `wificorrect.com` hosting firmasındadır (185.106.208.2), ona dokunulmaz.
 - `wc-kuyruk` girdiyi yeniden doğrular (numara rakam, anahtarlar biçim), panelden gelen hiçbir metni kabuğa vermez.
 
 ## 3. Kayıtlar (SQLite)
@@ -57,16 +59,15 @@ wificorrect.com/api/    ── cihazlar: ilk giriş, günlük eşitleme, parola 
 | `musteri` | `numara` INTEGER PK (100001'den sırayla), `tuz`, `ozet`, `yineleme` (cihazla aynı PBKDF2-HMAC-SHA256 biçimi), `not_` (admin notu), `uyelik` (`aktif`/`bitti`), `bitis`, `olusturma`, `son_giris` |
 | `cihaz` | `id`, `musteri` (numara), `durum` (`bagli`/`serbest_birakiliyor`/`serbest`), `tunel_ip`, `wg_pub`, `ssh_pub`, `anahtar_ozet` (cihaz anahtarının SHA-256'sı), `isletme_adi`, `unvan`, `surum` (cihazın bildirdiği), `son_eslesme`, `baglanma`, `ayrilma` |
 | `hareket` | `zaman`, `kim` (`admin` / müşteri numarası / `cihaz:<id>`), `ip`, `olay`, `musteri`, `ayrinti` |
-| `kuyruk` | `id`, `islem` (`cihaz-ekle`/`cihaz-kapat`), `veri` (JSON), `durum` (`bekliyor`/`tamam`/`hata`), `sonuc`, `zaman` |
 | `eski_arsiv` | `ad` (eski arşiv klasörü), `musteri` (bağlandığı numara, boş olabilir) |
 
 - Bir müşterinin en çok bir `bagli` cihazı olur (kısmi benzersiz dizin). Eski cihaz satırları tarihçe olarak kalır.
-- Yönetici hesabı veritabanında değil, `/etc/wificorrect/yonetici.json`'da (tek kayıt; `wificorrect-sunucu yonetici-parola`).
+- Yönetici hesabı veritabanında değil, `/var/lib/wificorrect/merkez/yonetici.json`'da (tek kayıt; `wificorrect-sunucu yonetici-parola` → `wc-yonetici`).
 - Arşiv klasörü müşteri numarasıdır: `/srv/wificorrect-arsiv/<numara>/veri`, yedek hesabı `wfc-<numara>`. İşletme adı
   değişse ya da cihaz değişse kayıtlar aynı yerde birikir.
 - Parola en az 10 karakter. Admin'in ürettiği parola 12 karakter, karışması kolay harfler (`0/O`, `1/l/I`) olmadan.
 
-## 4. Cihaz API'si (`https://wificorrect.com/api/…`)
+## 4. Cihaz API'si (`https://api.wificorrect.com/api/…`)
 
 JSON gövde, en çok 4 KB, IP başına dakikada 20 istek.
 
@@ -83,8 +84,8 @@ JSON gövde, en çok 4 KB, IP başına dakikada 20 istek.
 ## 5. Yönetim merkezi ekranları (`yonetim.wificorrect.com`)
 
 1. **Giriş** — kullanıcı adı + parola; 15 dk'da 5 hata → kilit; sunucuda fail2ban (journal'daki `GIRIS_HATALI`).
-2. **Müşteriler** (ana sayfa) — numara, işletme adı (cihazdan), not, cihaz (çevrimiçi = son 24 saatte eşitlendi /
-   "3 gündür yok" / "cihaz yok"), son gelen gün (**GECİKTİ**: bugünden 2 günden eski), son 7 gün kişi sayısı, üyelik.
+2. **Müşteriler** (ana sayfa) — numara, işletme adı (cihazdan), not, cihaz (çevrimiçi = son 10 dk'da tünel el sıkışması;
+   değilse "son eşitleme X önce"; son eşitleme 26 saatten eskiyse sorunlu / "cihaz yok"), son gelen gün (**GECİKTİ**: bugünden 2 günden eski), son 7 gün kişi sayısı, üyelik.
    Sorunlular üstte. Numara/ad/not ile arama.
 3. **Yeni müşteri** — not (isteğe bağlı) → numara ve üretilmiş parola **bir kez** gösterilir.
 4. **Müşteri sayfası**
@@ -99,7 +100,7 @@ JSON gövde, en çok 4 KB, IP başına dakikada 20 istek.
      panele girip eski kayıtlarına bakmaya devam eder.
    - **Kayıtlar** — gün/kişi/arama (gerekçe istenir, kaydedilir). **Hareketler** — o müşterinin olayları.
 5. **Hareketler** — bütün sistem, en yeni üstte.
-6. **Eski arşivler** — OpenWrt dönemi ve elle eklenmiş arşivler; bir müşteriye bağlanabilir.
+6. **Eski arşivler** — OpenWrt dönemi ve elle eklenmiş arşivler; bir müşteriye bağlanabilir (yalnızca bu ekrandan, komut yok).
 7. **Hesabım** — admin parolasını değiştirir.
 
 ## 6. Müşteri paneli (`panel.wificorrect.com`)
@@ -127,7 +128,7 @@ gerekçe ister; her görüntüleme `hareket`'e yazılır. Parola değiştirme bu
 - **Parola değiştir** (cihaz paneli): `/api/parola`; başarılıysa yerel özet hemen güncellenir. İnternet yoksa
   "Parola değişimi için internet gerekli."
 - **Hesaplar sayfası:** yerel ek sahip hesabı açma kalkar; yalnızca müşteri ve `admin` görünür.
-- **İstemci:** `curl --fail --max-time 20 https://wificorrect.com/api/…`, gövde standart girdiden (`--data-binary @-`);
+- **İstemci:** `curl --fail --max-time 20 https://api.wificorrect.com/api/…`, gövde standart girdiden (`--data-binary @-`);
   parola komut satırında görünmez. Sertifika doğrulanır.
 - Admin ayarlarındaki uzak erişim/yedek alanları elle düzeltme için kalır.
 
@@ -138,20 +139,20 @@ iner; o zamana kadar cihazda eski parola geçerlidir.
 
 - `cihaz-ekle` ve yeni `cihaz-kapat` artık `wc-kuyruk` tarafından çağrılır; ad = müşteri numarası.
 - `yonetici-parola` — yönetim merkezi admin parolası (terminalde iki kez sorulur, en az 12 karakter).
-- `eski-arsiv-bagla <eski-ad> <numara>` — eski arşivi müşteriye bağlar.
 - `liste` — müşteri numarasıyla. `tasi-paketle` — `merkez.db`, `yonetici.json`, eski arşivler de pakete girer.
 
 ## 9. Geçiş
 
-- Bocafe → müşteri **100001**; OpenWrt dönemi arşivi `bocafe` ona bağlanır.
-- Test cihazının elle eklenmiş tüneli (`bocafe-test`) `cihaz-kapat` ile kapanır, arşivi "eski arşiv" olur. Cihaz yeni
-  sürümle giriş ekranına döner; 100001 ile girince kendiliğinden yeniden kaydolur.
+- Bocafe → müşteri **100001**; OpenWrt dönemi arşivi `bocafe` ona (Eski arşivler ekranından) bağlanır.
+- Test cihazının elle eklenmiş tüneli (`bocafe-test`) cihaz planında, cihaz yeni sürüme geçerken `cihaz-kapat` ile kapanır
+  (önce kapatılırsa cihazın yedeği durur); arşivi "eski arşiv" olur. Cihaz giriş ekranına döner; 100001 ile girince
+  kendiliğinden yeniden kaydolur.
 - Eski panel servisleri (`wc-panel`, `hesaplar.json`) yeni program kurulunca durdurulur; eski hesap dosyası silinmez,
   `hesaplar.json.eski` olarak kalır.
-- Caddy: `wificorrect.com`, `yonetim.wificorrect.com`, `panel.wificorrect.com` → aynı program. DNS'e `yonetim` ve kök
-  (`@`) A kayıtları (<dış-ip>) eklenir.
-- Uygulamaya başlamadan önce: dükkândaki cihazın `https://wificorrect.com`'a modemin dış IP'si üzerinden ulaştığı
-  doğrulanır (NAT döngüsü). Ulaşamıyorsa cihaz için `wificorrect.com` → 192.168.1.109 yerel DNS kaydı eklenir.
+- Caddy: `yonetim.wificorrect.com`, `panel.wificorrect.com`, `api.wificorrect.com` → aynı program. DNS'e `yonetim` ve
+  `api` A kayıtları (<dış-ip>) eklenir; kök kayda dokunulmaz.
+- Dükkândaki cihazın `https://panel.wificorrect.com`'a modemin dış IP'si üzerinden ulaştığı doğrulandı (2026-10-04, NAT
+  döngüsü TCP'de çalışıyor); `api` aynı IP'de olduğu için yerel DNS kaydı gerekmez.
 
 ## 10. Güvenlik
 
