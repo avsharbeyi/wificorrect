@@ -1,0 +1,21 @@
+[Unit]
+Description=WifiCorrect yönetim merkezi (127.0.0.1:8081: yonetim, panel, api)
+After=network.target
+
+[Service]
+User=wcpanel
+Group=wcpanel
+Environment=PYTHONDONTWRITEBYTECODE=1
+ExecStart=/usr/bin/python3 /usr/local/lib/wificorrect/merkez.py
+Restart=on-failure
+RestartSec=3
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ReadWritePaths=/var/lib/wificorrect/merkez /var/lib/wificorrect/kuyruk
+InaccessiblePaths=/srv
+
+[Install]
+WantedBy=multi-user.target
