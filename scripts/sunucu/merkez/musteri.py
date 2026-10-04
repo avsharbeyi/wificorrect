@@ -1,6 +1,5 @@
 """Müşteri paneli (spec §6): panel.wificorrect.com — müşteri numarası + parola; kayıtlar (gün/kişi/arama) ve parola.
 Üyeliği bitmiş müşteri de girer (yalnızca okuma)."""
-import time
 
 import guvenlik
 import web

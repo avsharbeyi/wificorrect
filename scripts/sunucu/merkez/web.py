@@ -1,7 +1,6 @@
 """Yönetim merkezi web tabanı: CSS, sayfa çerçevesi, çerezler, giriş/çıkış/CSRF/gerekçe (spec §5–§6, §10).
 Uygulamalar (yönetim, müşteri) Taban'dan türer ve yalnızca kendi sayfalarını yazar."""
 import hmac
-import html
 import sys
 import time
 import urllib.parse
