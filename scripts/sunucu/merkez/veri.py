@@ -10,7 +10,7 @@ import time
 import common
 import guvenlik
 
-ILK_NUMARA = 100001
+NUMARA_ARALIGI = (1_000_000, 9_999_999)  # 7 haneli, rastgele (sıralı değil: müşteri sayısı ve sırası anlaşılmasın)
 SEMA = """
 CREATE TABLE IF NOT EXISTS musteri (
   numara INTEGER PRIMARY KEY, tuz TEXT NOT NULL, ozet TEXT NOT NULL, yineleme INTEGER NOT NULL,
@@ -77,8 +77,10 @@ class Veri:
         pw = guvenlik.parola_uret()
         tuz, oz, y = guvenlik.yeni_kayit(pw)
         with self._islem() as db:
-            son = db.execute("SELECT MAX(numara) FROM musteri").fetchone()[0]
-            numara = max(son or 0, ILK_NUMARA - 1) + 1
+            while True:
+                numara = NUMARA_ARALIGI[0] + secrets.randbelow(NUMARA_ARALIGI[1] - NUMARA_ARALIGI[0] + 1)
+                if db.execute("SELECT 1 FROM musteri WHERE numara = ?", (numara,)).fetchone() is None:
+                    break
             db.execute("INSERT INTO musteri (numara, tuz, ozet, yineleme, not_, olusturma) VALUES (?, ?, ?, ?, ?, ?)",
                        (numara, tuz, oz, y, (not_ or "").strip()[:200], self._simdi()))
         return numara, pw

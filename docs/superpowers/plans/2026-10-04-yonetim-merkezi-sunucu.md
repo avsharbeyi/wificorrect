@@ -22,7 +22,7 @@ Cihaz (Rust) tarafı ayrı plandır: `docs/superpowers/plans/2026-10-04-yonetim-
 - Sunucu kodu yalnızca Python standart kütüphanesi; `subprocess` her zaman liste argümanla, `shell=True` yok.
 - Parola özeti cihazla aynı: PBKDF2-HMAC-SHA256, tuz = metnin UTF-8 baytları, 120.000 tur, hex. Test vektörü:
   `ozet("parola-12345", "a1b2c3d4", 120000) == "ee38d08b3d6573ecc281263ad6259d2e7ee39f37d6b8958b3180906580a44495"`.
-- Müşteri numarası 6 hane, 100001'den sırayla. Müşteri parolası ≥ 10, yönetici parolası ≥ 12 karakter.
+- Müşteri numarası **7 hane, rastgele** (1000000–9999999; 2026-10-04 kullanıcı kararı — aşağıdaki kod örneklerindeki 6 haneli/sıralı 100001 değerleri uygulamada buna göre değiştirildi). Müşteri parolası ≥ 10, yönetici parolası ≥ 12 karakter.
 - Üretilen parola 12 karakter, `0/O`, `1/l/I`, `8/B` yok.
 - Panel süreci `wcpanel`, `/srv`'ye erişimi yok (`InaccessiblePaths=/srv`); root `wcpanel`'in dosyalarına yazmaz.
 - Cihazdan / panelden gelen her dosya root için güvenilmez: sembolik bağ izlenmez, FIFO'da beklenmez, ≤ 4 KB.

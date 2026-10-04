@@ -8,7 +8,7 @@ import threading
 
 YINELEME = 120_000  # Rust hesap.rs ITER ile aynı: cihaz aynı özeti internetsiz doğrular
 EN_AZ = 10
-NUMARA_RE = re.compile(r"[1-9][0-9]{5}")  # yalnızca ASCII: \d Unicode rakamları da kabul eder (kilit atlatılırdı)
+NUMARA_RE = re.compile(r"[1-9][0-9]{6}")  # 7 hane; yalnızca ASCII: \d Unicode rakamları da kabul eder (kilit atlatılırdı)
 HARFLER = "abcdefghjkmnpqrstuvwxyzACDEFGHJKLMNPQRSTUVWXYZ2345679"  # 0/O, 1/l/I, 8/B karışmasın
 
 

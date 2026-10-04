@@ -64,7 +64,7 @@ class Yonetim(web.Taban):
         return "admin"
 
     def hareket_musterisi(self, ot, yol):
-        m = re.match(r"/m/([0-9]{6})/", yol)
+        m = re.match(r"/m/([0-9]{7})/", yol)
         return int(m.group(1)) if m else None
 
     def menu(self, ot):
@@ -116,7 +116,7 @@ class Yonetim(web.Taban):
             return self.eski_arsivler(ot, yontem, form, ip)
         if yol == "/hesabim":
             return self.hesabim(ot, yontem, form, ip)
-        m = re.fullmatch(r"/m/([0-9]{6})(/.*)?", yol)
+        m = re.fullmatch(r"/m/([0-9]{7})(/.*)?", yol)
         if not m or self.veri.musteri(int(m.group(1))) is None:
             return None
         n, alt = int(m.group(1)), m.group(2) or "/"

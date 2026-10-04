@@ -56,7 +56,7 @@ class Api:
         simdi = self.saat()
         numara, pw = b.get("numara"), b.get("parola")
         if not isinstance(numara, str) or not NUMARA_RE.fullmatch(numara) or not isinstance(pw, str):
-            return _hata(400, "gecersiz", "Müşteri numarası 6 haneli olmalı.")
+            return _hata(400, "gecersiz", "Müşteri numarası 7 haneli olmalı.")
         if not self.kilit.attempt(ip, numara, simdi):
             return _hata(429, "kilit", "Çok fazla deneme. 15 dakika sonra tekrar deneyin.")
         m = self.veri.parola_dogrula(int(numara), pw)

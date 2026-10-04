@@ -56,7 +56,7 @@ api.wificorrect.com/api/ ── cihazlar: ilk giriş, günlük eşitleme, parola
 
 | Tablo | Alanlar |
 |---|---|
-| `musteri` | `numara` INTEGER PK (100001'den sırayla), `tuz`, `ozet`, `yineleme` (cihazla aynı PBKDF2-HMAC-SHA256 biçimi), `not_` (admin notu), `uyelik` (`aktif`/`bitti`), `bitis`, `olusturma`, `son_giris` |
+| `musteri` | `numara` INTEGER PK (7 hane, rastgele 1000000–9999999; sıralı değil — müşteri sayısı/sırası anlaşılmasın; kullanıcı kararı 2026-10-04), `tuz`, `ozet`, `yineleme` (cihazla aynı PBKDF2-HMAC-SHA256 biçimi), `not_` (admin notu), `uyelik` (`aktif`/`bitti`), `bitis`, `olusturma`, `son_giris` |
 | `cihaz` | `id`, `musteri` (numara), `durum` (`bagli`/`serbest_birakiliyor`/`serbest`), `tunel_ip`, `wg_pub`, `ssh_pub`, `anahtar_ozet` (cihaz anahtarının SHA-256'sı), `isletme_adi`, `unvan`, `surum` (cihazın bildirdiği), `son_eslesme`, `baglanma`, `ayrilma` |
 | `hareket` | `zaman`, `kim` (`admin` / müşteri numarası / `cihaz:<id>`), `ip`, `olay`, `musteri`, `ayrinti` |
 | `eski_arsiv` | `ad` (eski arşiv klasörü), `musteri` (bağlandığı numara, boş olabilir) |
@@ -143,9 +143,9 @@ iner; o zamana kadar cihazda eski parola geçerlidir.
 
 ## 9. Geçiş
 
-- Bocafe → müşteri **100001**; OpenWrt dönemi arşivi `bocafe` ona (Eski arşivler ekranından) bağlanır.
+- Bocafe → yeni bir müşteri numarası (7 hane, rastgele); OpenWrt dönemi arşivi `bocafe` ona (Eski arşivler ekranından) bağlanır.
 - Test cihazının elle eklenmiş tüneli (`bocafe-test`) cihaz planında, cihaz yeni sürüme geçerken `cihaz-kapat` ile kapanır
-  (önce kapatılırsa cihazın yedeği durur); arşivi "eski arşiv" olur. Cihaz giriş ekranına döner; 100001 ile girince
+  (önce kapatılırsa cihazın yedeği durur); arşivi "eski arşiv" olur. Cihaz giriş ekranına döner; Bocafe'nin numarasıyla girince
   kendiliğinden yeniden kaydolur.
 - Eski panel servisleri (`wc-panel`, `hesaplar.json`) yeni program kurulunca durdurulur; eski hesap dosyası silinmez,
   `hesaplar.json.eski` olarak kalır.

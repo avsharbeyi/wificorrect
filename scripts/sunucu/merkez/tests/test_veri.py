@@ -18,11 +18,12 @@ def test_musteri_numara_sirasi_ve_parola():
     with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
         v = yeni(tmp)
         n1, p1 = v.musteri_ekle("Bocafe, Göztepe")
-        n2, _ = v.musteri_ekle()
-        assert (n1, n2) == (100001, 100002) and len(p1) == 12
+        numaralar = [n1] + [v.musteri_ekle()[0] for _ in range(30)]
+        assert all(1_000_000 <= n <= 9_999_999 for n in numaralar) and len(set(numaralar)) == 31 and len(p1) == 12
+        assert sorted(numaralar) != numaralar or numaralar != list(range(n1, n1 + 31))  # sıralı değil, rastgele
         assert v.parola_dogrula(n1, p1)["not_"] == "Bocafe, Göztepe"
-        assert v.parola_dogrula(n1, "yanlis") is None and v.parola_dogrula(999999, p1) is None
-        assert v.parola_dogrula("100001", p1) is None  # numara int olmalı
+        assert v.parola_dogrula(n1, "yanlis") is None and v.parola_dogrula(1, p1) is None
+        assert v.parola_dogrula(str(n1), p1) is None  # numara int olmalı
         try:
             v.parola_koy(n1, "kisa")
             assert False

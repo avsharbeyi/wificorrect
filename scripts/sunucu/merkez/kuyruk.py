@@ -17,7 +17,7 @@ SONUC = "/var/lib/wificorrect/kuyruk-sonuc"
 SUNUCU = "/usr/local/sbin/wificorrect-sunucu"
 KAYIT = "/etc/wireguard/wificorrect/kayit.csv"
 WG_DIR = "/etc/wireguard/wificorrect"
-NUMARA_RE = re.compile(r"[1-9][0-9]{5}")  # yalnızca ASCII rakam
+NUMARA_RE = re.compile(r"[1-9][0-9]{6}")  # müşteri numarası: 7 hane, yalnızca ASCII rakam
 WG_RE = re.compile(r"[A-Za-z0-9+/]{43}=")
 SSH_RE = re.compile(r"ssh-ed25519 [A-Za-z0-9+/]+=*( [A-Za-z0-9@._-]+)?")
 IS_RE = re.compile(r"[0-9a-f]{16}\.json")

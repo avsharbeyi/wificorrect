@@ -31,6 +31,11 @@ def kur(tmp, sonuc=TAMAM):
     return A.Api(v, saat, q.ekle, q.bekle), v, q, saat
 
 
+def baska(n):
+    """n'den farklı, geçerli biçimde ama kayıtlı olmayan numara."""
+    return 1234567 if n != 1234567 else 7654321
+
+
 def post(api, yol, govde, ip="198.51.100.7"):
     d, b, g = api.istek("POST", yol, {}, json.dumps(govde) if not isinstance(govde, str) else govde, "", ip)
     return d, json.loads(g)
@@ -61,13 +66,14 @@ def test_hatali_parola_kilit_ve_gecersiz_girdi():
         api, v, q, _ = kur(tmp)
         n, pw = v.musteri_ekle()
         assert giris(api, n, "yanlis-parola")[1]["kod"] == "hatali"
-        assert giris(api, 999999, "yanlis-parola")[1]["kod"] == "hatali"
+        assert giris(api, baska(n), "yanlis-parola")[1]["kod"] == "hatali"
+        assert giris(api, 100001, "yanlis-parola")[1]["kod"] == "gecersiz"  # 6 hane
         for _ in range(4):
             giris(api, n, "yanlis-parola", ip="198.51.100.8")
         assert giris(api, n, pw)[0] == 429  # numara kilitli
         assert post(api, "/api/giris", "{bozuk")[0] == 400
         assert post(api, "/api/giris", {"numara": "abc", "parola": "x"})[1]["kod"] == "gecersiz"
-        assert post(api, "/api/giris", {"numara": "100009", "parola": "x" * 10, "wg_pub": "kotu", "ssh_pub": SSH})[1]["kod"] == "hatali"
+        assert post(api, "/api/giris", {"numara": str(baska(n)), "parola": "x" * 10, "wg_pub": "kotu", "ssh_pub": SSH})[1]["kod"] == "hatali"
         assert api.istek("GET", "/api/giris", {}, "", "", "1.1.1.1")[0] == 404
         assert api.istek("POST", "/baska", {}, "{}", "", "1.1.1.1")[0] == 404
         assert api.istek("POST", "/api/giris", {}, "x" * 5000, "", "1.1.1.1")[0] == 413

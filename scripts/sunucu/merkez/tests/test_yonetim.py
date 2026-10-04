@@ -51,17 +51,20 @@ def test_yeni_musteri_parola_bir_kez():
         f = Y.al(app, "/yeni", c)
         r = Y.gonder(app, "/yeni", c, {"csrf": Y.csrf(f), "not": "Bocafe <Göztepe>"})
         numara, pw = re.findall(r'class="sir">([^<]+)<', r[2].decode())
-        assert r[0] == 200 and numara == "100001" and v.parola_dogrula(100001, pw)
-        assert pw not in Y.al(app, "/m/100001", c)[2].decode()
+        assert r[0] == 200 and re.fullmatch(r"[1-9][0-9]{6}", numara) and v.parola_dogrula(int(numara), pw)
+        assert pw not in Y.al(app, f"/m/{numara}", c)[2].decode()
         assert "Bocafe &lt;Göztepe&gt;" in Y.al(app, "/", c)[2].decode()
-        assert v.hareketler(100001)[0]["olay"] == "MUSTERI_ACILDI"
+        assert v.hareketler(int(numara))[0]["olay"] == "MUSTERI_ACILDI"
 
 
 def test_liste_durumlar_sorunlu_ustte_ve_arama():
     with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
-        app, v, saat, c, _ = kur(tmp, {"100002": {"tur": "cihaz", "son_gun": "2026-09-01", "boyut": 2048, "el_sikisma": 1_790_000_000 - 60}})
+        app, v, saat, c, _ = kur(tmp)
         n1, _ = v.musteri_ekle("Sağlam kafe")
         n2, _ = v.musteri_ekle("Gecikmiş kafe")
+        with open(app.durum_yolu, "w", encoding="utf-8") as f:
+            json.dump({"zaman": "", "arsivler": {str(n2): {"tur": "cihaz", "son_gun": "2026-09-01", "boyut": 2048,
+                                                          "el_sikisma": 1_790_000_000 - 60}}}, f)
         cid, _ = v.cihaz_bagla(n2, WG, SSH, "Kafe <B>")
         s = Y.al(app, "/", c)[2].decode()
         assert s.index("Gecikmiş kafe") < s.index("Sağlam kafe")
@@ -92,7 +95,8 @@ def test_parola_sifirla_serbest_birak_uyelik():
         olaylar = [h["olay"] for h in v.hareketler(n)]
         for o in ("PAROLA_SIFIRLANDI", "SERBEST_BIRAKMA_ISTENDI", "CIHAZ_ZORLA_AYRILDI", "UYELIK_BITTI", "UYELIK_ACILDI"):
             assert o in olaylar, o
-        assert Y.al(app, "/m/999999", c)[0] == 404 and Y.al(app, "/m/abc", c)[0] == 404
+        assert Y.al(app, "/m/1234567" if n != 1234567 else "/m/7654321", c)[0] == 404
+        assert Y.al(app, "/m/abc", c)[0] == 404 and Y.al(app, f"/m/{str(n)[:6]}", c)[0] == 404
 
 
 def test_musteri_kayitlari_gerekce_ister():
@@ -104,7 +108,7 @@ def test_musteri_kayitlari_gerekce_ister():
         Y.gun_yaz(tmp, str(n), "2026-09-20", [{"telefon": "5330000001", "ad": "Ayşe"}])
         assert ">9<" in Y.al(app, f"/m/{n}/kayitlar/", c)[2].decode()
         r = Y.al(app, f"/m/{n}/kayitlar/gun/2026-09-20", c)
-        assert r[0] == 303 and "donus=%2Fm%2F100001%2Fkayitlar%2Fgun" in r[1]["Location"]
+        assert r[0] == 303 and f"donus=%2Fm%2F{n}%2Fkayitlar%2Fgun" in r[1]["Location"]
         Y.gerekce_ver(app, c)
         assert "Ayşe" in Y.al(app, f"/m/{n}/kayitlar/gun/2026-09-20", c)[2].decode()
         assert v.hareketler(n)[0]["olay"] == "GORUNTULEME" and v.hareketler(n)[0]["kim"] == "admin"
@@ -113,13 +117,13 @@ def test_musteri_kayitlari_gerekce_ister():
 def test_eski_arsiv_baglama_ve_hesabim():
     with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
         app, v, _, c, _ = kur(tmp, {"bocafe": {"tur": "eski", "son_gun": "2026-09-20", "boyut": 10, "el_sikisma": None},
-                                    "100001": {"tur": "cihaz", "son_gun": None, "boyut": 0, "el_sikisma": None}})
+                                    "1234567": {"tur": "cihaz", "son_gun": None, "boyut": 0, "el_sikisma": None}})
         n, _ = v.musteri_ekle()
         f = Y.al(app, "/eski-arsivler", c)
         s = f[2].decode()
-        assert "<td>bocafe</td>" in s and "<td>100001</td>" not in s  # müşteri arşivi eski arşiv adayı değil
+        assert "<td>bocafe</td>" in s and "<td>1234567</td>" not in s  # müşteri arşivi eski arşiv adayı değil
         assert Y.gonder(app, "/eski-arsivler", c, {"csrf": Y.csrf(f), "ad": "yok-boyle", "musteri": str(n)})[0] == 400
-        assert Y.gonder(app, "/eski-arsivler", c, {"csrf": Y.csrf(f), "ad": "bocafe", "musteri": "999999"})[0] == 400
+        assert Y.gonder(app, "/eski-arsivler", c, {"csrf": Y.csrf(f), "ad": "bocafe", "musteri": "1234567" if n != 1234567 else "7654321"})[0] == 400
         assert Y.gonder(app, "/eski-arsivler", c, {"csrf": Y.csrf(f), "ad": "bocafe", "musteri": str(n)})[0] == 303
         assert v.arsivler(n) == [str(n), "bocafe"]
         h = Y.al(app, "/hesabim", c)

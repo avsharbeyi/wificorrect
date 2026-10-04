@@ -83,7 +83,8 @@ def test_unicode_rakamli_numara_reddedilir():
         app, v, _ = kur(tmp)
         n, pw = v.musteri_ekle()
         assert Y.giris(app, "1\uff100001", pw)[0] == 401
-        assert Y.giris(app, "\u00b2" * 6, pw)[0] == 401
+        assert Y.giris(app, "\u00b2" * 7, pw)[0] == 401
+        assert Y.giris(app, str(n)[:6], pw)[0] == 401  # 6 hane
 
 
 def test_parola_sifirlaninca_eski_oturum_duser():
