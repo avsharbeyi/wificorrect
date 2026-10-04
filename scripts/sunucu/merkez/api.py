@@ -30,6 +30,11 @@ def _parola_alanlari(m):
     return {"tuz": m["tuz"], "ozet": m["ozet"], "yineleme": m["yineleme"]}
 
 
+def _lisans(veri, m):
+    durum, bitis = veri.lisans_durumu(m)
+    return {"lisans": durum, "lisans_bitis": bitis}
+
+
 class Api:
     def __init__(self, veri, saat=time.time, kuyruk_ekle=kuyruk.ekle, kuyruk_bekle=kuyruk.bekle):
         self.veri, self.saat = veri, saat
@@ -82,7 +87,7 @@ class Api:
             return _hata(503, "kayit", "Cihaz kaydı tamamlanamadı, biraz sonra tekrar deneyin.")
         self.veri.cihaz_guncelle(cid, tunel_ip=s["tunel_ip"])
         self.veri.hareket(numara, ip, "CIHAZ_BAGLANDI", m["numara"], f"cihaz={cid} tunel={s['tunel_ip']}")
-        return _json(200, dict(_parola_alanlari(m), cihaz_anahtari=anahtar, tunel_ip=s["tunel_ip"],
+        return _json(200, dict(_parola_alanlari(m), **_lisans(self.veri, m), cihaz_anahtari=anahtar, tunel_ip=s["tunel_ip"],
                                sunucu_pub=s["sunucu_pub"], uc_nokta=s["uc_nokta"],
                                yedek_hedefi=f"wfc-{numara}@{YEDEK_SUNUCU}:"))
 
@@ -98,7 +103,7 @@ class Api:
             return _json(200, {"durum": "serbest"})
         self.veri.eslesme_kaydet(c["id"], _metin(b.get("isletme_adi")), _metin(b.get("unvan")), _metin(b.get("surum")))
         m = self.veri.musteri(c["musteri"])
-        return _json(200, dict(_parola_alanlari(m), durum="bagli", uyelik=m["uyelik"]))
+        return _json(200, dict(_parola_alanlari(m), **_lisans(self.veri, m), durum="bagli", uyelik=m["uyelik"]))
 
     def parola(self, b, ip):
         c = self.veri.cihaz_anahtarla(b.get("cihaz_anahtari"))
@@ -106,6 +111,8 @@ class Api:
             return _hata(401, "taninmadi", "Cihaz tanınmadı.")
         if not self.kilit.attempt(ip, f"cihaz:{c['id']}", self.saat()):
             return _hata(429, "kilit", "Çok fazla deneme. 15 dakika sonra tekrar deneyin.")
+        if not isinstance(b.get("eski"), str) or not isinstance(b.get("yeni"), str):
+            return _hata(400, "gecersiz", "Geçersiz istek.")
         if self.veri.parola_dogrula(c["musteri"], b.get("eski")) is None:
             return _hata(401, "hatali", "Mevcut parola yanlış.")
         try:

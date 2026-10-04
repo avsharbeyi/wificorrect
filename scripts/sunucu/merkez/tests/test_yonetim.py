@@ -52,7 +52,7 @@ def test_yeni_musteri_parola_bir_kez():
         r = Y.gonder(app, "/yeni", c, {"csrf": Y.csrf(f), "not": "Bocafe <Göztepe>"})
         numara, pw = re.findall(r'class="sir">([^<]+)<', r[2].decode())
         assert r[0] == 200 and re.fullmatch(r"[1-9][0-9]{6}", numara) and v.parola_dogrula(int(numara), pw)
-        assert pw not in Y.al(app, f"/m/{numara}", c)[2].decode()
+        assert pw in Y.al(app, f"/m/{numara}", c)[2].decode()  # 2026-10-04: parola yönetimde görünür (kullanıcı isteği)
         assert "Bocafe &lt;Göztepe&gt;" in Y.al(app, "/", c)[2].decode()
         assert v.hareketler(int(numara))[0]["olay"] == "MUSTERI_ACILDI"
 
@@ -162,6 +162,32 @@ def test_parola_yetki_birakilmadan_once_sorulur():
         kod = yonetici.main(["parola", "serkan"], os.path.join(tmp, "y.json"), sor=lambda: sira.append("sor") or PW,
                             sahip="wcpanel", birak=lambda s: sira.append("birak"))
         assert kod == 0 and sira == ["sor", "birak"]  # wcpanel terminale erişemez: parola root iken sorulur
+
+
+def test_parola_gorunur_ve_lisans_yonetimi():
+    with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
+        app, v, _, c, _ = kur(tmp)
+        n, pw = v.musteri_ekle("Göztepe Bilgisayar")
+        s = Y.al(app, f"/m/{n}", c)[2].decode()
+        assert pw in s and "2027-09-21" in s and "Lisans" in s
+        t = Y.csrf(Y.al(app, f"/m/{n}", c))
+        assert Y.gonder(app, f"/m/{n}/lisans", c, {"csrf": t, "islem": "uzat"})[0] == 303
+        assert v.musteri(n)["lisans_bitis"] == "2028-09-20"
+        Y.gonder(app, f"/m/{n}/lisans", c, {"csrf": t, "islem": "askiya"})
+        assert v.musteri(n)["askida"] == 1
+        Y.gonder(app, f"/m/{n}/lisans", c, {"csrf": t, "islem": "ac"})
+        assert v.musteri(n)["askida"] == 0
+        Y.gonder(app, f"/m/{n}/lisans", c, {"csrf": t, "islem": "tarih", "tarih": "2026-09-01"})
+        assert v.musteri(n)["lisans_bitis"] == "2026-09-01"
+        assert Y.gonder(app, f"/m/{n}/lisans", c, {"csrf": t, "islem": "tarih", "tarih": "bozuk"})[0] == 400
+        liste = Y.al(app, "/", c)[2].decode()
+        assert "Lisans" in liste and "süresi doldu" in liste
+        olaylar = [h["olay"] for h in v.hareketler(n)]
+        for o in ("LISANS_UZATILDI", "LISANS_ASKIYA_ALINDI", "LISANS_ACILDI", "LISANS_TARIHI"):
+            assert o in olaylar, o
+        v2, _ = v.musteri_ekle()
+        v.db.execute("UPDATE musteri SET parola_acik = '' WHERE numara = ?", (v2,))
+        assert "bilinmiyor" in Y.al(app, f"/m/{v2}", c)[2].decode()
 
 
 if __name__ == "__main__":

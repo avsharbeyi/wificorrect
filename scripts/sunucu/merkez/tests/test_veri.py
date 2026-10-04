@@ -102,6 +102,48 @@ def test_kalici():
         assert yeni(tmp).parola_dogrula(n, p)
 
 
+def test_parola_acik_ve_lisans():
+    with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
+        v = yeni(tmp)  # saat: 2026-09-21
+        n, p = v.musteri_ekle()
+        m = v.musteri(n)
+        assert m["parola_acik"] == p and m["lisans_bitis"] == "2027-09-21" and m["askida"] == 0
+        v.parola_koy(n, "yeni-parola-1")
+        assert v.musteri(n)["parola_acik"] == "yeni-parola-1"
+        p2 = v.parola_sifirla(n)
+        assert v.musteri(n)["parola_acik"] == p2
+        assert v.lisans_durumu(v.musteri(n)) == ("aktif", "2027-09-21")
+        assert v.lisans_uzat(n) == "2028-09-20"  # bitişin üstüne 1 yıl
+        v.lisans_ayarla(n, "2026-09-01")
+        assert v.lisans_durumu(v.musteri(n)) == ("bitti", "2026-09-01")
+        assert v.lisans_uzat(n) == "2027-09-21"  # süresi geçmişse bugünden 1 yıl
+        v.askiya_al(n, True)
+        assert v.lisans_durumu(v.musteri(n))[0] == "askida"
+        v.askiya_al(n, False)
+        assert v.lisans_durumu(v.musteri(n))[0] == "aktif"
+        try:
+            v.lisans_ayarla(n, "bozuk")
+            assert False
+        except ValueError:
+            pass
+
+
+def test_eski_veritabani_gocu():
+    import sqlite3
+    with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
+        yol = os.path.join(tmp, "m.db")
+        db = sqlite3.connect(yol)
+        db.execute("CREATE TABLE musteri (numara INTEGER PRIMARY KEY, tuz TEXT NOT NULL, ozet TEXT NOT NULL, yineleme INTEGER NOT NULL, "
+                   "not_ TEXT NOT NULL DEFAULT '', uyelik TEXT NOT NULL DEFAULT 'aktif', bitis TEXT NOT NULL DEFAULT '', "
+                   "olusturma TEXT NOT NULL, son_giris TEXT NOT NULL DEFAULT '')")
+        db.execute("INSERT INTO musteri (numara, tuz, ozet, yineleme, olusturma) VALUES (4511643, 't', 'o', 120000, '2026-10-04T17:00:00+03:00')")
+        db.commit()
+        db.close()
+        v = V.Veri(yol, saat=lambda: 1_790_000_000.0)
+        m = v.musteri(4511643)
+        assert (m["lisans_bitis"], m["parola_acik"], m["askida"]) == ("2027-10-04", "", 0)
+
+
 if __name__ == "__main__":
     for _name, _fn in sorted(globals().items()):
         if _name.startswith("test_") and callable(_fn):

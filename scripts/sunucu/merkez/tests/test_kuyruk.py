@@ -143,6 +143,19 @@ def test_isler_yazilis_sirasiyla_islenir():
         assert K.kayit_satiri("1234567", s.kayit) is not None  # önce kapat, sonra ekle: cihaz açık kalır
 
 
+def test_ayni_anahtar_eski_kayitta_ise_once_o_kapanir():
+    with tempfile.TemporaryDirectory() as tmp:
+        s = Sunucu(tmp)
+        with open(s.kayit, "w", encoding="utf-8") as f:
+            f.write(f"cihaz;bocafe-test;10.99.0.10;{WG};wfc-bocafe-test\n")
+        r = K.isle({"islem": "cihaz-ekle", "numara": "1234567", "wg_pub": WG, "ssh_pub": SSH}, s, s.kayit, s.wg)
+        assert r["durum"] == "tamam" and [k[:2] for k in s.komutlar] == [["cihaz-kapat", "bocafe-test"], ["cihaz-ekle", "1234567"]]
+        with open(s.kayit, "a", encoding="utf-8") as f:
+            f.write(f"cihaz;7654321;10.99.0.20;{WG2};wfc-7654321\n")
+        r = K.isle({"islem": "cihaz-ekle", "numara": "2345678", "wg_pub": WG2, "ssh_pub": SSH}, s, s.kayit, s.wg)
+        assert r["durum"] == "hata" and "başka müşteri" in r["hata"]  # başka müşterinin cihazı kapatılmaz
+
+
 if __name__ == "__main__":
     for _name, _fn in sorted(globals().items()):
         if _name.startswith("test_") and callable(_fn):

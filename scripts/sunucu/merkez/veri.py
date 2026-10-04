@@ -1,6 +1,7 @@
 """Yönetim merkezi veritabanı (spec §3): müşteriler, cihazlar, hareketler, eski arşiv bağları.
 SQLite; tek bağlantı + kilit (ThreadingHTTPServer iş parçacıkları için). Yalnızca panel (wcpanel) açar, root açmaz."""
 import contextlib
+import datetime
 import hashlib
 import secrets
 import sqlite3
@@ -15,7 +16,8 @@ SEMA = """
 CREATE TABLE IF NOT EXISTS musteri (
   numara INTEGER PRIMARY KEY, tuz TEXT NOT NULL, ozet TEXT NOT NULL, yineleme INTEGER NOT NULL,
   not_ TEXT NOT NULL DEFAULT '', uyelik TEXT NOT NULL DEFAULT 'aktif', bitis TEXT NOT NULL DEFAULT '',
-  olusturma TEXT NOT NULL, son_giris TEXT NOT NULL DEFAULT '');
+  olusturma TEXT NOT NULL, son_giris TEXT NOT NULL DEFAULT '',
+  parola_acik TEXT NOT NULL DEFAULT '', lisans_bitis TEXT NOT NULL DEFAULT '', askida INTEGER NOT NULL DEFAULT 0);
 CREATE TABLE IF NOT EXISTS cihaz (
   id INTEGER PRIMARY KEY AUTOINCREMENT, musteri INTEGER NOT NULL REFERENCES musteri(numara),
   durum TEXT NOT NULL, tunel_ip TEXT NOT NULL DEFAULT '', wg_pub TEXT NOT NULL, ssh_pub TEXT NOT NULL,
@@ -30,6 +32,14 @@ CREATE INDEX IF NOT EXISTS hareket_musteri ON hareket(musteri, id);
 CREATE TABLE IF NOT EXISTS eski_arsiv (ad TEXT PRIMARY KEY, musteri INTEGER REFERENCES musteri(numara));
 """
 CIHAZ_ALANLARI = {"tunel_ip", "isletme_adi", "unvan", "surum", "son_eslesme"}
+# Sonradan eklenen müşteri sütunları (eski veritabanına ALTER ile eklenir)
+YENI_SUTUNLAR = (("parola_acik", "TEXT NOT NULL DEFAULT ''"), ("lisans_bitis", "TEXT NOT NULL DEFAULT ''"),
+                 ("askida", "INTEGER NOT NULL DEFAULT 0"))
+LISANS_GUN = 365
+
+
+def _yil_sonra(gun):
+    return (gun + datetime.timedelta(days=LISANS_GUN)).isoformat()
 
 
 class BaskaCihaz(Exception):
@@ -48,6 +58,20 @@ class Veri:
         self.db.row_factory = sqlite3.Row
         self.db.execute("PRAGMA foreign_keys = ON")
         self.db.executescript(SEMA)
+        self._gocur()
+
+    def _gocur(self):
+        """Eski veritabanı: eksik sütunlar eklenir; lisansı olmayan müşteriye oluşturmadan 1 yıl verilir."""
+        var = {r[1] for r in self.db.execute("PRAGMA table_info(musteri)")}
+        for ad, tip in YENI_SUTUNLAR:
+            if ad not in var:
+                self.db.execute(f"ALTER TABLE musteri ADD COLUMN {ad} {tip}")
+        for r in self.db.execute("SELECT numara, olusturma FROM musteri WHERE lisans_bitis = ''").fetchall():
+            self.db.execute("UPDATE musteri SET lisans_bitis = ? WHERE numara = ?",
+                            (_yil_sonra(datetime.date.fromisoformat(r["olusturma"][:10])), r["numara"]))
+
+    def bugun(self):
+        return datetime.datetime.fromtimestamp(self.saat(), common.TZ).date()
 
     def _simdi(self):
         return common.now_iso(self.saat())
@@ -81,8 +105,9 @@ class Veri:
                 numara = NUMARA_ARALIGI[0] + secrets.randbelow(NUMARA_ARALIGI[1] - NUMARA_ARALIGI[0] + 1)
                 if db.execute("SELECT 1 FROM musteri WHERE numara = ?", (numara,)).fetchone() is None:
                     break
-            db.execute("INSERT INTO musteri (numara, tuz, ozet, yineleme, not_, olusturma) VALUES (?, ?, ?, ?, ?, ?)",
-                       (numara, tuz, oz, y, (not_ or "").strip()[:200], self._simdi()))
+            db.execute("INSERT INTO musteri (numara, tuz, ozet, yineleme, not_, olusturma, parola_acik, lisans_bitis) "
+                       "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                       (numara, tuz, oz, y, (not_ or "").strip()[:200], self._simdi(), pw, _yil_sonra(self.bugun())))
         return numara, pw
 
     def musteri(self, numara):
@@ -103,7 +128,9 @@ class Veri:
             raise ValueError(f"Parola en az {guvenlik.EN_AZ} karakter olmalı.")
         tuz, oz, y = guvenlik.yeni_kayit(pw)
         with self._islem() as db:
-            db.execute("UPDATE musteri SET tuz = ?, ozet = ?, yineleme = ? WHERE numara = ?", (tuz, oz, y, numara))
+            # ponytail: parola yönetimde gösterilsin diye (kullanıcı kararı 2026-10-04) açık saklanır; veritabanı yalnızca
+            # wcpanel'in (600). Sızarsa müşteri parolaları da sızar — şifreli saklama ya da yalnızca sıfırlama ile değiştirilebilir.
+            db.execute("UPDATE musteri SET tuz = ?, ozet = ?, yineleme = ?, parola_acik = ? WHERE numara = ?", (tuz, oz, y, pw, numara))
         return tuz, oz, y
 
     def parola_sifirla(self, numara):
@@ -121,6 +148,36 @@ class Veri:
         with self._islem() as db:
             db.execute("UPDATE musteri SET uyelik = ?, bitis = ? WHERE numara = ?",
                        (durum, self._simdi() if durum == "bitti" else "", numara))
+
+    # --- lisans (yıllık; ödeme ekranı sonradan lisans_uzat çağırır) ---
+    def lisans_durumu(self, m):
+        """(durum, bitiş): askida | bitti | aktif."""
+        bitis = m["lisans_bitis"]
+        if m["askida"]:
+            return "askida", bitis
+        if bitis and bitis < self.bugun().isoformat():
+            return "bitti", bitis
+        return "aktif", bitis
+
+    def lisans_uzat(self, numara, gun=LISANS_GUN):
+        """Bitişin üstüne (süresi geçmişse bugünden) `gun` gün ekler. Dönen: yeni bitiş."""
+        with self._islem() as db:
+            m = db.execute("SELECT lisans_bitis FROM musteri WHERE numara = ?", (numara,)).fetchone()
+            taban = self.bugun()
+            if m and m["lisans_bitis"]:
+                taban = max(taban, datetime.date.fromisoformat(m["lisans_bitis"]))
+            yeni = (taban + datetime.timedelta(days=gun)).isoformat()
+            db.execute("UPDATE musteri SET lisans_bitis = ? WHERE numara = ?", (yeni, numara))
+        return yeni
+
+    def lisans_ayarla(self, numara, tarih):
+        tarih = datetime.date.fromisoformat(tarih).isoformat()  # ValueError
+        with self._islem() as db:
+            db.execute("UPDATE musteri SET lisans_bitis = ? WHERE numara = ?", (tarih, numara))
+
+    def askiya_al(self, numara, askida):
+        with self._islem() as db:
+            db.execute("UPDATE musteri SET askida = ? WHERE numara = ?", (1 if askida else 0, numara))
 
     # --- cihazlar ---
     def bagli_cihaz(self, numara):

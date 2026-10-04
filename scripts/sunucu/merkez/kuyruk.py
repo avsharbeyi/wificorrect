@@ -85,6 +85,19 @@ def kayit_satiri(ad, kayit=KAYIT):
     return None
 
 
+def anahtar_satiri(wg, kayit=KAYIT):
+    """Bu WireGuard anahtarıyla kayıtlı aktif cihaz satırı (başka adla olabilir) ya da None."""
+    try:
+        with open(kayit, encoding="utf-8") as f:
+            for s in f.read().splitlines():
+                p = s.split(";")
+                if len(p) >= 5 and p[0] == "cihaz" and p[3] == wg:
+                    return p
+    except FileNotFoundError:
+        pass
+    return None
+
+
 def _oku(yol):
     with open(yol, encoding="utf-8") as f:
         return f.read().strip()
@@ -113,6 +126,14 @@ def isle(is_, calistir, kayit=KAYIT, wg_dir=WG_DIR):
     wg, ssh = is_.get("wg_pub"), is_.get("ssh_pub")
     if not (isinstance(wg, str) and WG_RE.fullmatch(wg) and isinstance(ssh, str) and SSH_RE.fullmatch(ssh)):
         return _hata("gecersiz anahtar")
+    eski = anahtar_satiri(wg, kayit)
+    if eski and eski[1] != numara:
+        # aynı cihaz elle eklenmiş eski bir kayıtla (ör. bocafe-test) tünelde: önce o kapanır. Başka müşterinin kaydıysa dokunulmaz.
+        if NUMARA_RE.fullmatch(eski[1]):
+            return _hata(f"anahtar başka müşterinin cihazında ({eski[1]})")
+        kod, _, hata = calistir([SUNUCU, "cihaz-kapat", eski[1]])
+        if kod != 0:
+            return _hata(hata)
     s = kayit_satiri(numara, kayit)
     if s and s[3] != wg:  # müşterinin eski cihazı hâlâ tünelde: önce kapat
         kod, _, hata = calistir([SUNUCU, "cihaz-kapat", numara])

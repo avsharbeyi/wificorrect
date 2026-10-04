@@ -131,6 +131,8 @@ class Yonetim(web.Taban):
                 f'06:00 eşitlemesinden sonra geçerlidir.</p><p><a href="/m/{n}">← Müşteri sayfası</a></p>'), ot))
         if (yontem, alt) == ("POST", "/serbest"):
             return self.serbest(ot, n, form, ip)
+        if (yontem, alt) == ("POST", "/lisans"):
+            return self.lisans(ot, n, form, ip)
         if (yontem, alt) == ("POST", "/uyelik"):
             if form.get("islem") == "bitir":
                 if form.get("onay", "").strip() != str(n):
@@ -165,12 +167,16 @@ class Yonetim(web.Taban):
             sayilar = self.kayitlar.sayilar(self.veri.arsivler(n))[0]
             yedi = " ".join(str(sayilar.get(g, "—")) for g in reversed(gunler))
             uyelik = "Aktif" if m["uyelik"] == "aktif" else f"Bitti {m['bitis'][:10]}"
+            ldurum, lbitis = self.veri.lisans_durumu(m)
+            lisans = {"aktif": e(lbitis), "bitti": f'<b class="kotu">süresi doldu {e(lbitis)}</b>',
+                      "askida": f'<b class="kotu">askıda</b> {e(lbitis)}'}[ldurum]
+            sorunlu = sorunlu or ldurum != "aktif"
             satirlar.append((not sorunlu, n,
                              f'<tr><td><a href="/m/{n}">{n}</a></td><td>{e(ad or "—")}<br><span class="alt">{e(m["not_"])}</span></td>'
-                             f'<td>{e(cihaz)}</td><td>{son}</td><td>{e(yedi)}</td><td>{e(uyelik)}</td></tr>'))
+                             f'<td>{e(cihaz)}</td><td>{son}</td><td>{e(yedi)}</td><td>{lisans}</td><td>{e(uyelik)}</td></tr>'))
         satirlar.sort()
         tablo = ('<div class="kaydir"><table class="detay"><tr><th>No</th><th>İşletme / not</th><th>Cihaz</th>'
-                 '<th>Son gelen gün</th><th>Son 7 gün</th><th>Üyelik</th></tr>' + "".join(s[2] for s in satirlar)
+                 '<th>Son gelen gün</th><th>Son 7 gün</th><th>Lisans</th><th>Üyelik</th></tr>' + "".join(s[2] for s in satirlar)
                  + "</table></div>") if satirlar else '<p class="alt">Müşteri yok.</p>'
         ara = (f'<form class="ara" method="get" action="/"><input name="q" value="{e(q)}" placeholder="Numara, işletme adı ya da not">'
                '<button>Ara</button></form>')
@@ -187,13 +193,19 @@ class Yonetim(web.Taban):
         self.veri.hareket("admin", ip, "MUSTERI_ACILDI", n)
         return yanit_html(self.sayfa("Müşteri açıldı", kart(
             f'<h1>Müşteri açıldı</h1><p>Müşteri numarası</p><p class="sir">{n}</p><p>Parola</p><p class="sir">{e(pw)}</p>'
-            '<p class="alt">Parola yalnızca şimdi gösterilir; müşteriye iletin. Müşteri cihazın giriş ekranına bu numara ve '
+            f'<p>Lisans bitişi: {e(self.veri.musteri(n)["lisans_bitis"])}</p>'
+            '<p class="alt">Parolayı müşteriye iletin (müşteri sayfasında da görünür). Müşteri cihazın giriş ekranına bu numara ve '
             f'parolayla girer.</p><p><a href="/m/{n}">Müşteri sayfası →</a></p>'), ot))
 
     def musteri_sayfasi(self, ot, n):
         m, c, d = self.veri.musteri(n), self.veri.bagli_cihaz(n), self._durum().get(str(n), {})
         cs = e(ot["csrf"])
-        bilgi = bilgi_tablosu([("Numara", str(n)), ("Not", e(m["not_"] or "—")), ("Oluşturma", e(m["olusturma"][:16])),
+        ldurum, lbitis = self.veri.lisans_durumu(m)
+        parola = (f'<span class="sir">{e(m["parola_acik"])}</span>' if m["parola_acik"]
+                  else '<span class="bos">bilinmiyor (bu özellikten önce belirlendi) — parolayı sıfırlayın</span>')
+        lisans_metni = {"aktif": "Aktif", "bitti": '<b class="kotu">Süresi doldu</b>', "askida": '<b class="kotu">Askıda</b>'}[ldurum]
+        bilgi = bilgi_tablosu([("Numara", str(n)), ("Parola", parola), ("Lisans", f"{lisans_metni} · bitiş {e(lbitis or '—')}"),
+                               ("Not", e(m["not_"] or "—")), ("Oluşturma", e(m["olusturma"][:16])),
                                ("Son giriş (panel)", e(m["son_giris"][:16] or "—")),
                                ("Üyelik", "Aktif" if m["uyelik"] == "aktif" else f"Bitti {e(m['bitis'][:10])}")])
         if c is None:
@@ -214,7 +226,18 @@ class Yonetim(web.Taban):
                       'Cihazda kalmış gönderilmemiş günler kaybolabilir.</label>'
                       '<button class="tehlike">Cihazı serbest bırak</button></form>')
         uyelik_dugme = ("bitir", "Üyeliği bitir", "tehlike") if m["uyelik"] == "aktif" else ("ac", "Üyeliği yeniden aç", "")
-        islemler = (f'<form method="post" action="/m/{n}/parola-sifirla"><input type="hidden" name="csrf" value="{cs}">'
+        askida = ldurum == "askida"
+        islemler = (f'<form method="post" action="/m/{n}/lisans"><input type="hidden" name="csrf" value="{cs}">'
+                    '<input type="hidden" name="islem" value="uzat"><button>Lisansı 1 yıl uzat</button></form>'
+                    f'<form method="post" action="/m/{n}/lisans"><input type="hidden" name="csrf" value="{cs}">'
+                    f'<input type="hidden" name="islem" value="{"ac" if askida else "askiya"}">'
+                    f'<button class="{"" if askida else "tehlike"}">{"Askıdan çıkar (cihazı aç)" if askida else "Askıya al (cihazı kapat)"}</button></form>'
+                    f'<form method="post" action="/m/{n}/lisans" class="ara"><input type="hidden" name="csrf" value="{cs}">'
+                    '<input type="hidden" name="islem" value="tarih"><input name="tarih" type="date" required aria-label="Lisans bitiş tarihi">'
+                    '<button>Bitişi ayarla</button></form>'
+                    '<p class="alt">Lisansı biten ya da askıya alınan cihaz misafirlere internet vermez; cihaz bunu bitiş tarihinde '
+                    'kendisi uygular, askıya alma/uzatma en geç 30 dakikada (askıdayken) ya da ertesi 06:00\'da cihaza iner.</p>'
+                    f'<form method="post" action="/m/{n}/parola-sifirla"><input type="hidden" name="csrf" value="{cs}">'
                     '<button>Parola sıfırla</button></form>'
                     f'<form method="post" action="/m/{n}/uyelik"><input type="hidden" name="csrf" value="{cs}">'
                     f'<input type="hidden" name="islem" value="{uyelik_dugme[0]}">'
@@ -227,6 +250,24 @@ class Yonetim(web.Taban):
                                    for x in self.veri.cihaz_gecmisi(n)], "Henüz cihaz yok.")
         return yanit_html(self.sayfa(f"Müşteri {n}", kart(f"<h1>Müşteri {n}</h1>{bilgi}") + kart(f"<h2>Cihaz</h2>{cihaz}")
                                      + kart(f"<h2>İşlemler</h2>{islemler}") + kart(f"<h2>Cihaz geçmişi</h2>{gecmis}"), ot, genis=True))
+
+    def lisans(self, ot, n, form, ip):
+        islem = form.get("islem")
+        if islem == "uzat":
+            self.veri.hareket("admin", ip, "LISANS_UZATILDI", n, f"bitis={self.veri.lisans_uzat(n)}")
+        elif islem == "askiya":
+            self.veri.askiya_al(n, True)
+            self.veri.hareket("admin", ip, "LISANS_ASKIYA_ALINDI", n)
+        elif islem == "ac":
+            self.veri.askiya_al(n, False)
+            self.veri.hareket("admin", ip, "LISANS_ACILDI", n)
+        elif islem == "tarih":
+            try:
+                self.veri.lisans_ayarla(n, form.get("tarih", ""))
+            except ValueError:
+                return yanit_html(self.mesaj(ot, "Geçersiz tarih", "Tarih YYYY-AA-GG biçiminde olmalı."), 400)
+            self.veri.hareket("admin", ip, "LISANS_TARIHI", n, f"bitis={form.get('tarih')}")
+        return yonlendir(f"/m/{n}")
 
     def serbest(self, ot, n, form, ip):
         if form.get("onay", "").strip() != str(n):

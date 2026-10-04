@@ -150,6 +150,22 @@ def test_unicode_rakam_kilidi_atlatamaz():
         assert d == 400 and j["kod"] == "gecersiz" and q.isler == []
 
 
+def test_lisans_bilgisi_ve_parola_tipi():
+    with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
+        api, v, _, _ = kur(tmp)
+        n, pw = v.musteri_ekle()
+        d, j = giris(api, n, pw)
+        assert d == 200 and (j["lisans"], j["lisans_bitis"]) == ("aktif", "2027-09-21")
+        a = j["cihaz_anahtari"]
+        v.askiya_al(n, True)
+        j = post(api, "/api/eslesme", {"cihaz_anahtari": a})[1]
+        assert (j["durum"], j["lisans"]) == ("bagli", "askida")
+        assert post(api, "/api/parola", {"cihaz_anahtari": a, "eski": 5, "yeni": "yeni-parola-1"})[0] == 400
+        assert v.musteri(n)["parola_acik"] == pw
+        post(api, "/api/parola", {"cihaz_anahtari": a, "eski": pw, "yeni": "yeni-parola-1"})
+        assert v.musteri(n)["parola_acik"] == "yeni-parola-1"  # cihazdan değişen parola da yönetimde görünür
+
+
 if __name__ == "__main__":
     for _name, _fn in sorted(globals().items()):
         if _name.startswith("test_") and callable(_fn):
