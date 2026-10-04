@@ -134,7 +134,6 @@ mod tests {
         let cfg = Config::parse(&text).unwrap();
         let h = Hesaplar::new(root.join("hesaplar.json"));
         h.set_admin("admin-parola-123").unwrap();
-        h.setup("mudur", "sahip-parola-12").unwrap();
         let mut ses = ortak::Sessions::new();
         ses.insert("aa:bb:cc:dd:ee:01".into(), ortak::Session {
             phone: "905334553132".into(), ad: "Ayşe".into(), soyad: "Yılmaz".into(), ip: "10.50.0.23".into(),
@@ -163,7 +162,7 @@ mod tests {
         let fail = |c: &[String]| c[0] != "rsync";
         let r = fabrika(&cfg, &cfg_path.to_string_lossy(), &root.join("hesaplar.json").to_string_lossy(), &root.join("yasak.conf"), &y, 1_791_000_000.0, &fail);
         assert!(r.unwrap_err().contains("gönderilemedi"));
-        assert!(root.join("5651/gunluk/2026-10-01").exists() && h.load().unwrap().len() == 2);
+        assert!(root.join("5651/gunluk/2026-10-01").exists() && h.load().unwrap().len() == 1);
         assert_eq!(Config::load(&cfg_path.to_string_lossy()).unwrap().main.site_name, "Bocafe");
         // gönderilince: kayıtlar mühürlü + yedeklendi işaretli olarak sunucuya, sonra cihazdan silinir
         let errs = fabrika(&cfg, &cfg_path.to_string_lossy(), &root.join("hesaplar.json").to_string_lossy(), &root.join("yasak.conf"), &y, 1_791_000_000.0, &runner).unwrap();
@@ -180,7 +179,7 @@ mod tests {
         // yalnızca admin kaldı → kurulum ekranı
         let m = h.load().unwrap();
         assert_eq!((m.len(), m.get(ADMIN).map(|x| x.rol)), (1, Some(Rol::Hizmet)));
-        assert!(h.needs_setup() && h.verify(ADMIN, "admin-parola-123").is_some());
+        assert!(h.verify(ADMIN, "admin-parola-123").is_some());
         // oturum kapandı (OTURUM_BITIS sunucuya giden kayda girdi)
         assert!(ortak::load_sessions(&root.join("state").to_string_lossy()).is_empty());
         // portlar varsayılan, ağ yeniden kuruldu

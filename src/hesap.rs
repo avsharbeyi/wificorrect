@@ -55,14 +55,6 @@ pub fn password_problem(pw: &str) -> Option<&'static str> {
     (pw.chars().count() < 10).then_some("Parola en az 10 karakter olmalı.")
 }
 
-pub fn username_problem(u: &str) -> Option<&'static str> {
-    if u == ADMIN {
-        return Some("Bu kullanıcı adı ayrılmış, başka bir ad seçin.");
-    }
-    let ok = (3..=32).contains(&u.len()) && u.bytes().all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b"._-".contains(&b));
-    (!ok).then_some("Kullanıcı adı 3-32 karakter olmalı; yalnızca küçük harf, rakam, nokta, alt çizgi, tire.")
-}
-
 pub struct Hesaplar {
     path: PathBuf,
     lock: Mutex<()>,
@@ -80,11 +72,6 @@ impl Hesaplar {
             Err(e) => Err(format!("hesap dosyası okunamadı: {e}")),
             Ok(b) => serde_json::from_slice(&b).map_err(|e| format!("hesap dosyası bozuk: {e}")),
         }
-    }
-
-    /// Kurulum gerekli mi (kafe sahibi hesabı yok). Bozuk dosya kurulum açmaz.
-    pub fn needs_setup(&self) -> bool {
-        self.load().map(|m| !m.values().any(|h| h.rol == Rol::Sahip)).unwrap_or(false)
     }
 
     fn save(&self, m: &BTreeMap<String, Hesap>) -> Result<(), String> {
@@ -109,35 +96,11 @@ impl Hesaplar {
         }
     }
 
-    /// İlk kurulum: kafe sahibi hesabı, yalnızca henüz hiç sahip hesabı yokken.
-    pub fn setup(&self, user: &str, pw: &str) -> Result<(), String> {
-        let _g = self.lock.lock().unwrap_or_else(|e| e.into_inner());
-        let mut m = self.load()?;
-        if m.values().any(|h| h.rol == Rol::Sahip) {
-            return Err("Kurulum zaten yapılmış.".into());
-        }
-        if let Some(e) = username_problem(user) {
-            return Err(e.into());
-        }
-        m.insert(user.into(), Self::new_hesap(Rol::Sahip, pw));
-        self.save(&m)
-    }
-
     /// `admin` parolasını koyar ya da değiştirir (cihaz konsolundan, hizmet sağlayıcı).
     pub fn set_admin(&self, pw: &str) -> Result<(), String> {
         let _g = self.lock.lock().unwrap_or_else(|e| e.into_inner());
         let mut m = self.load()?;
         m.insert(ADMIN.into(), Self::new_hesap(Rol::Hizmet, pw));
-        self.save(&m)
-    }
-
-    pub fn add(&self, user: &str, rol: Rol, pw: &str) -> Result<(), String> {
-        let _g = self.lock.lock().unwrap_or_else(|e| e.into_inner());
-        let mut m = self.load()?;
-        if m.contains_key(user) {
-            return Err("Bu kullanıcı adı zaten var.".into());
-        }
-        m.insert(user.into(), Self::new_hesap(rol, pw));
         self.save(&m)
     }
 
@@ -157,16 +120,6 @@ impl Hesaplar {
         self.save(&m)
     }
 
-    /// `admin` silinemez (cihaz yönetilemez kalır).
-    pub fn remove(&self, user: &str) -> Result<(), String> {
-        let _g = self.lock.lock().unwrap_or_else(|e| e.into_inner());
-        let mut m = self.load()?;
-        if user == ADMIN {
-            return Err("admin hesabı silinemez.".into());
-        }
-        m.remove(user).ok_or("Kullanıcı bulunamadı.")?;
-        self.save(&m)
-    }
 }
 
 /// Giriş kilidi: 15 dk içinde 5 hata → IP de kullanıcı adı da kilitlenir.
@@ -212,6 +165,8 @@ pub struct Oturum {
     expires: f64,
     /// Kafe sahibinin kişisel veriye bakma gerekçesi ve geçerlilik sonu (panel/gerekce.rs)
     pub gerekce: Option<(String, f64)>,
+    /// Sahip oturumunda girişteki merkez parola özeti; merkezde değişince (eşitleme) oturum düşer
+    pub surum: String,
 }
 
 /// Bellekte oturumlar (panel yeniden başlayınca herkes yeniden girer). 12 saat geçerli.
@@ -221,9 +176,9 @@ pub struct Oturumlar(Mutex<HashMap<String, Oturum>>);
 impl Oturumlar {
     const TTL: f64 = 12.0 * 3600.0;
 
-    pub fn create(&self, user: &str, rol: Rol, now: f64) -> String {
+    pub fn create(&self, user: &str, rol: Rol, now: f64, surum: &str) -> String {
         let token = ortak::random_hex(32);
-        let o = Oturum { user: user.into(), rol, csrf: ortak::random_hex(16), expires: now + Self::TTL, gerekce: None };
+        let o = Oturum { user: user.into(), rol, csrf: ortak::random_hex(16), expires: now + Self::TTL, gerekce: None, surum: surum.into() };
         let mut m = self.0.lock().unwrap_or_else(|e| e.into_inner());
         m.retain(|_, v| v.expires > now);
         m.insert(token.clone(), o);
@@ -263,30 +218,19 @@ mod tests {
     }
 
     #[test]
-    fn setup_verify_and_manage() {
+    fn admin_verify_and_password() {
         let h = Hesaplar::new(tmp());
-        assert!(h.needs_setup());
+        assert_eq!(h.verify(ADMIN, "hizmet-parola-1"), None);
         h.set_admin("hizmet-parola-1").unwrap();
-        assert!(h.needs_setup()); // admin varken de kafe sahibi kurulumu açık
-        assert!(h.setup(ADMIN, "sahip-parola-12").is_err()); // admin adı alınamaz
-        h.setup("mudur", "sahip-parola-12").unwrap();
-        assert!(!h.needs_setup());
-        assert!(h.setup("baska", "sahip-parola-12").is_err()); // ikinci kurulum yok
         assert_eq!(h.verify(ADMIN, "hizmet-parola-1"), Some(Rol::Hizmet));
-        assert_eq!(h.verify("mudur", "sahip-parola-12"), Some(Rol::Sahip));
-        assert_eq!(h.verify("mudur", "yanlis-parola"), None);
-        assert_eq!(h.verify("yok", "sahip-parola-12"), None);
-        h.set_password("mudur", "yeni-parola-123").unwrap();
-        assert_eq!(h.verify("mudur", "yeni-parola-123"), Some(Rol::Sahip));
-        assert!(h.remove(ADMIN).is_err());
-        h.add("teknik", Rol::Hizmet, "teknik-parola-1").unwrap();
-        h.remove("teknik").unwrap();
-        h.set_admin("yeni-admin-parola").unwrap();
+        assert_eq!(h.verify(ADMIN, "yanlis-parola"), None);
+        assert_eq!(h.verify("yok", "hizmet-parola-1"), None);
+        h.set_password(ADMIN, "yeni-admin-parola").unwrap();
         assert_eq!(h.verify(ADMIN, "yeni-admin-parola"), Some(Rol::Hizmet));
-        assert_eq!(h.verify("mudur", "yeni-parola-123"), Some(Rol::Sahip)); // diğer hesaplar durur
-        assert!(h.add("mudur", Rol::Sahip, "x".repeat(12).as_str()).is_err()); // aynı ad
+        h.keep_only_admin().unwrap();
+        assert_eq!(h.load().unwrap().len(), 1);
         let raw = std::fs::read_to_string(&h.path).unwrap();
-        assert!(!raw.contains("yeni-parola-123")); // parola düz metin saklanmaz
+        assert!(!raw.contains("yeni-admin-parola")); // parola düz metin saklanmaz
     }
 
     #[test]
@@ -295,15 +239,13 @@ mod tests {
         std::fs::create_dir_all(p.parent().unwrap()).unwrap();
         std::fs::write(&p, "{bozuk").unwrap();
         let h = Hesaplar::new(&p);
-        assert!(!h.needs_setup());
-        assert!(h.setup("mudur", "sahip-parola-12").is_err());
+        assert!(h.load().is_err() && h.set_admin("x".repeat(12).as_str()).is_err()); // bozuk dosya ezilmez
         assert_eq!(h.verify(ADMIN, "hizmet-parola-1"), None);
     }
 
     #[test]
     fn rules_guard_sessions() {
         assert!(password_problem("kisa").is_some() && password_problem("onkarakter").is_none());
-        assert!(username_problem(ADMIN).is_some() && username_problem("Mudur").is_some() && username_problem("ab").is_some() && username_problem("mudur.1").is_none());
         let g = LoginGuard::default();
         for _ in 0..5 {
             assert!(g.allowed("1.1.1.1", "mudur", 10.0));
@@ -313,9 +255,10 @@ mod tests {
         assert!(!g.allowed("2.2.2.2", "mudur", 10.0)); // kullanıcı kilitli
         assert!(g.allowed("1.1.1.1", "mudur", 10.0 + 901.0)); // 15 dk sonra açılır
         let s = Oturumlar::default();
-        let t1 = s.create("mudur", Rol::Sahip, 0.0);
-        let t2 = s.create("mudur", Rol::Sahip, 0.0);
+        let t1 = s.create("mudur", Rol::Sahip, 0.0, "ozet-1");
+        let t2 = s.create("mudur", Rol::Sahip, 0.0, "ozet-1");
         assert_eq!(s.get(&t1, 1.0).unwrap().rol, Rol::Sahip);
+        assert_eq!(s.get(&t1, 1.0).unwrap().surum, "ozet-1");
         assert!(s.get(&t1, 13.0 * 3600.0).is_none()); // süresi doldu
         s.remove_user("mudur", Some(&t2));
         assert!(s.get(&t1, 1.0).is_none() && s.get(&t2, 1.0).is_some());

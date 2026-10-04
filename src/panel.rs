@@ -342,6 +342,10 @@ pub struct Panel {
     uzak_key: std::path::PathBuf,
     /// Yedek SSH anahtarı (testte geçici)
     yedek_key: std::path::PathBuf,
+    /// Yönetim merkezi bağı (testte geçici)
+    pub merkez_path: std::path::PathBuf,
+    /// Yönetim merkezi HTTP istemcisi (testte sahte)
+    pub http: Box<crate::merkez::Http>,
 }
 
 const MENU: &[(&str, &str, bool)] = &[
@@ -358,7 +362,6 @@ const MENU: &[(&str, &str, bool)] = &[
     ("/portlar", "Portlar", false),
     ("/admin-ayarlari", "Admin ayarları", true),
     ("/sistem", "Sistem", false),
-    ("/hesaplar", "Hesaplar", false),
     ("/panel-hareketleri", "Panel hareketleri", true),
     ("/sifre", "Şifremi değiştir", false),
 ];
@@ -377,6 +380,8 @@ impl Panel {
             filtre_conf: crate::filtre::DNSMASQ_CONF.into(),
             uzak_key: crate::uzak::KEY.into(),
             yedek_key: crate::uzak::YEDEK_KEY.into(),
+            merkez_path: crate::merkez::PATH.into(),
+            http: Box::new(crate::merkez::curl),
         }
     }
 
@@ -407,8 +412,8 @@ impl Panel {
         });
         let mut v: HashMap<&str, String> = HashMap::new();
         v.insert("baslik", h(title));
-        // kurulum bitmeden kafe adı yok (eski/örnek ayardaki ad görünmesin)
-        v.insert("site", h(if self.hesaplar.needs_setup() { "WifiCorrect" } else { &cfg.main.site_name }));
+        // cihaz bir müşteriye bağlanmadan işletme adı yok (eski/örnek ayardaki ad görünmesin)
+        v.insert("site", h(if crate::merkez::oku(&self.merkez_path).is_none() { "WifiCorrect" } else { &cfg.main.site_name }));
         v.insert("govde", if o.is_some() { String::new() } else { "yalin".into() });
         v.insert("menu_html", menu);
         v.insert("mesaj_html", msg.unwrap_or_default());
@@ -436,19 +441,22 @@ impl Panel {
             return text(403, "Yasak"); // müşteri ağından panel yok
         }
         let now = (self.clock)();
-        // Kafe sahibi hesabı yokken giriş yapmamış herkes kurulum ekranına; admin yine /giris'ten girebilir.
-        let setup = self.hesaplar.needs_setup();
+        // Kurulum ekranı yok (2026-10-04): müşteri numarasıyla ilk giriş cihazı yönetim merkezine bağlar.
         match (req.method.as_str(), req.path.as_str()) {
             ("GET", "/giris") => return self.giris(&cfg, req, ""),
             ("POST", "/giris") => return self.giris_post(&cfg, req, now),
-            ("GET", "/kurulum") if setup => return self.kurulum(&cfg, req, &HashMap::new()),
-            ("POST", "/kurulum") if setup => return self.kurulum_post(cfg, req),
-            ("GET" | "POST", "/kurulum") => return redirect("/giris", None),
+            (_, "/kurulum") => return text(404, "Sayfa bulunamadı"),
             _ => {}
         }
         let Some(o) = req.token.as_deref().and_then(|t| self.oturumlar.get(t, now)) else {
-            return redirect(if setup { "/kurulum" } else { "/giris" }, None);
+            return redirect("/giris", None);
         };
+        if o.rol == Rol::Sahip && !self.sahip_oturumu_gecerli(&o) {
+            if let Some(t) = &req.token {
+                self.oturumlar.remove(t);
+            }
+            return redirect("/giris", None);
+        }
         if req.method == "POST" && !hesap::ct_eq(req.form.get("csrf").map_or("", String::as_str), &o.csrf) {
             return text(403, "Geçersiz form (CSRF). Sayfayı yenileyip tekrar deneyin.");
         }
@@ -522,76 +530,20 @@ impl Panel {
             }
             ("GET", "/sifre") => self.sifre(&cfg, req, &o, ""),
             ("POST", "/sifre") => self.sifre_post(&cfg, req, &o),
-            ("GET", "/hesaplar") => self.hesaplar_sayfa(&cfg, req, &o),
-            ("POST", "/hesaplar/ekle") => self.hesap_ekle(&cfg, req, &o),
-            ("POST", "/hesaplar/sil") => self.hesap_sil(&cfg, req, &o),
-            ("POST", "/hesaplar/sifirla") => self.hesap_sifirla(&cfg, req, &o),
             _ => text(404, "Sayfa bulunamadı"),
         }
     }
 
-    // --- kurulum ve giriş
-    fn kurulum(&self, cfg: &Config, req: &Req, errors: &HashMap<&str, String>) -> Resp {
-        let err = |k: &str| errors.get(k).map_or(String::new(), |e| format!("<div class=\"hata\">{}</div>", h(e)));
-        let field = |k: &str, label: &str, kind: &str| {
-            let val = if kind == "password" { String::new() } else { h(req.form.get(k).map_or("", String::as_str)) };
-            format!("<label for=\"{k}\">{}</label><input type=\"{kind}\" id=\"{k}\" name=\"{k}\" value=\"{val}\" autocomplete=\"off\" required>{}", h(label), err(k))
-        };
-        let body = format!(
-            "<div class=\"kart dar\"><p class=\"not\">Cihaz ilk kez açıldı. İşletme bilgilerini yazın ve yönetim hesabınızı oluşturun (parola en az 10 karakter).</p>{}<form method=\"post\" action=\"/kurulum\">{}{}<p class=\"not\" style=\"margin:4px 0 0\">Vergi levhasındaki unvan yazılmalıdır. Müşterilerin açık rıza onayında bu unvan geçer.</p>{}{}{}<div style=\"margin-top:24px\"><button>Kurulumu tamamla</button></div></form></div>",
-            err("genel"),
-            field("site_name", "İşletme adı", "text"),
-            field("unvan", "İşletme unvanı", "text"),
-            field("kullanici", "Kullanıcı adı", "text"),
-            field("parola", "Parola", "password"),
-            field("parola2", "Parola (tekrar)", "password"),
-        );
-        self.page(cfg, req, None, "Kurulum", &body)
-    }
-
-    fn kurulum_post(&self, mut cfg: Config, req: &Req) -> Resp {
-        let g = |k: &str| req.form.get(k).map_or("", String::as_str).trim().to_string();
-        let mut errors: HashMap<&str, String> = HashMap::new();
-        let (site, unvan, user) = (g("site_name"), g("unvan"), g("kullanici"));
-        let pw = req.form.get("parola").cloned().unwrap_or_default();
-        if !ALANLAR[0].tur_ok(&site) {
-            errors.insert("site_name", "İşletme adı 1-40 karakter olmalı (harf, rakam, boşluk, . - ' &).".into());
-        }
-        if !unvan_ok(&unvan) {
-            errors.insert("unvan", "Unvan 2-200 karakter olmalı (vergi levhasındaki gibi).".into());
-        }
-        if let Some(e) = hesap::username_problem(&user) {
-            errors.insert("kullanici", e.into());
-        }
-        if let Some(e) = hesap::password_problem(&pw) {
-            errors.insert("parola", e.into());
-        } else if req.form.get("parola2") != Some(&pw) {
-            errors.insert("parola2", "Parolalar aynı değil.".into());
-        }
-        if errors.is_empty() {
-            match self.hesaplar.setup(&user, &pw) {
-                Ok(()) => {
-                    cfg.main.site_name = site;
-                    cfg.main.unvan = unvan.split_whitespace().collect::<Vec<_>>().join(" ");
-                    if let Err(e) = cfg.save(&self.cfg_path) {
-                        eprintln!("panel: {e}");
-                    }
-                    (self.runner)(&cmd(&["systemctl", "restart", "wificorrect-portal"]));
-                    self.audit(&cfg, req, None, "PANEL_KURULUM", &format!("sahip={user}"));
-                    return redirect("/giris", Some(("Kurulum tamamlandı. Giriş yapabilirsiniz.", false)));
-                }
-                Err(e) => {
-                    errors.insert("genel", e);
-                }
-            }
-        }
-        self.kurulum(&cfg, req, &errors)
+    // --- giriş
+    /// Sahip oturumu: cihaz hâlâ bu numaraya bağlı ve parola özeti girişteki gibi (merkezden sıfırlanmadı).
+    fn sahip_oturumu_gecerli(&self, o: &Oturum) -> bool {
+        crate::merkez::oku(&self.merkez_path).is_some_and(|m| m.numara == o.user && hesap::ct_eq(&m.ozet, &o.surum))
     }
 
     fn giris(&self, cfg: &Config, req: &Req, err: &str) -> Resp {
         let err = if err.is_empty() { String::new() } else { format!("<p class=\"hata\">{}</p>", h(err)) };
         let body = format!(
-            "<div class=\"kart dar\">{err}<form method=\"post\" action=\"/giris\"><label for=\"k\">Kullanıcı adı</label>\
+            "<div class=\"kart dar\">{err}<form method=\"post\" action=\"/giris\"><label for=\"k\">Kullanıcı adı / müşteri numarası</label>\
              <input type=\"text\" id=\"k\" name=\"kullanici\" autocomplete=\"username\" required autofocus>\
              <label for=\"p\">Parola</label><input type=\"password\" id=\"p\" name=\"parola\" autocomplete=\"current-password\" required>\
              <div style=\"margin-top:20px\"><button>Giriş</button></div></form></div>"
@@ -606,18 +558,63 @@ impl Panel {
             self.audit(cfg, req, None, "PANEL_GIRIS_KILIT", &format!("kullanici_adi={user}"));
             return self.giris(cfg, req, "Çok fazla hatalı deneme. 15 dakika sonra tekrar deneyin.");
         }
-        let Some(rol) = self.hesaplar.verify(&user, pw) else {
+        let hatali = |e: &str| {
             self.guard.failed(&req.ip, &user, now);
             self.audit(cfg, req, None, "PANEL_GIRIS_HATA", &format!("kullanici_adi={user}"));
-            return self.giris(cfg, req, "Kullanıcı adı veya parola hatalı.");
+            self.giris(cfg, req, e)
+        };
+        let (rol, surum) = if user == hesap::ADMIN {
+            match self.hesaplar.verify(&user, pw) {
+                Some(r) => (r, String::new()),
+                None => return hatali("Kullanıcı adı veya parola hatalı."),
+            }
+        } else if let Some(m) = crate::merkez::oku(&self.merkez_path) {
+            if user != m.numara {
+                return hatali(if crate::merkez::numara_gecerli(&user) { "Bu cihaz başka bir müşteriye ait." } else { "Kullanıcı adı veya parola hatalı." });
+            }
+            if !crate::merkez::dogrula(&m, pw) {
+                return hatali("Kullanıcı adı veya parola hatalı.");
+            }
+            (Rol::Sahip, m.ozet)
+        } else if !crate::merkez::numara_gecerli(&user) {
+            return hatali("Kullanıcı adı veya parola hatalı.");
+        } else {
+            match self.merkeze_baglan(cfg, req, &user, pw, now) {
+                Ok(ozet) => (Rol::Sahip, ozet),
+                Err((mesaj, kilit)) => return if kilit { hatali(&mesaj) } else { self.giris(cfg, req, &mesaj) },
+            }
         };
         self.guard.succeeded(&req.ip, &user);
-        let token = self.oturumlar.create(&user, rol, now);
+        let token = self.oturumlar.create(&user, rol, now, &surum);
         let o = self.oturumlar.get(&token, now);
         self.audit(cfg, req, o.as_ref(), "PANEL_GIRIS", "");
         let mut r = redirect("/", None);
         r.headers.push(("Set-Cookie".into(), format!("wfc={token}; Path=/; Secure; HttpOnly; SameSite=Strict")));
         r
+    }
+
+    /// Bağlı olmayan cihazda ilk müşteri girişi: merkez parolayı doğrular, cihazı bağlar; tünel ve yedek ayarlanır.
+    /// Dönen: parola özeti (oturum sürümü) ya da (mesaj, kilit sayacına yazılsın mı).
+    fn merkeze_baglan(&self, cfg: &Config, req: &Req, numara: &str, pw: &str, now: f64) -> Result<String, (String, bool)> {
+        let wg = crate::uzak::ensure_key(&self.uzak_key).and_then(|k| crate::uzak::public_key(&k));
+        let ssh = crate::uzak::yedek_anahtari(&self.yedek_key);
+        let (wg, ssh) = match (wg, ssh) {
+            (Ok(w), Ok(s)) => (w, s),
+            (Err(e), _) | (_, Err(e)) => return Err((format!("Cihaz anahtarı üretilemedi: {e}"), false)),
+        };
+        let g = match crate::merkez::giris(numara, pw, &wg, &ssh, &cfg.main.site_name, &cfg.main.unvan, &*self.http, now) {
+            Ok(g) => g,
+            Err(crate::merkez::GirisHata::Baglanti) => return Err(("Merkeze ulaşılamadı, internet bağlantısını kontrol edin.".into(), false)),
+            Err(crate::merkez::GirisHata::Mesaj(m, kilit)) => return Err((m, kilit)),
+        };
+        crate::merkez::kaydet(&self.merkez_path, &g.merkez).map_err(|e| (e, false))?;
+        let mut yeni = cfg.clone();
+        crate::merkez::uygula(&mut yeni, &g);
+        yeni.save(&self.cfg_path).map_err(|e| (e, false))?;
+        let unit = format!("wfc-uzak-{}", now as u64);
+        (self.runner)(&cmd(&["systemd-run", "--unit", &unit, "--on-active", "1s", "/usr/local/bin/wificorrect", "ctl", "uzak-uygula"]));
+        self.audit(&yeni, req, None, "PANEL_MERKEZ_BAGLANDI", &format!("numara={numara} tunel={}", g.tunel_ip));
+        Ok(g.merkez.ozet)
     }
 
     // --- özet ve oturumlar
@@ -1021,6 +1018,31 @@ impl Panel {
 
     fn sifre_post(&self, cfg: &Config, req: &Req, o: &Oturum) -> Resp {
         let g = |k: &str| req.form.get(k).cloned().unwrap_or_default();
+        if o.rol == Rol::Sahip {
+            // müşteri parolası merkezde: değişiklik merkeze gider, yeni özet cihaza yazılır (internetsiz değişmez)
+            let Some(mut m) = crate::merkez::oku(&self.merkez_path) else { return redirect("/giris", None) };
+            if !crate::merkez::dogrula(&m, &g("eski")) {
+                return self.sifre(cfg, req, o, "Şu anki parola hatalı.");
+            }
+            if let Some(e) = hesap::password_problem(&g("yeni")) {
+                return self.sifre(cfg, req, o, e);
+            }
+            if g("yeni") != g("yeni2") {
+                return self.sifre(cfg, req, o, "Yeni parolalar aynı değil.");
+            }
+            if let Err(e) = crate::merkez::parola(&mut m, &g("eski"), &g("yeni"), &*self.http) {
+                return self.sifre(cfg, req, o, &e);
+            }
+            if let Err(e) = crate::merkez::kaydet(&self.merkez_path, &m) {
+                return self.sifre(cfg, req, o, &e);
+            }
+            self.oturumlar.remove_user(&o.user, None);
+            let token = self.oturumlar.create(&o.user, Rol::Sahip, (self.clock)(), &m.ozet);
+            self.audit(cfg, req, Some(o), "PANEL_SIFRE", "merkez");
+            let mut r = redirect("/sifre", Some(("Parola değiştirildi.", false)));
+            r.headers.push(("Set-Cookie".into(), format!("wfc={token}; Path=/; Secure; HttpOnly; SameSite=Strict")));
+            return r;
+        }
         if self.hesaplar.verify(&o.user, &g("eski")).is_none() {
             return self.sifre(cfg, req, o, "Şu anki parola hatalı.");
         }
@@ -1036,114 +1058,6 @@ impl Panel {
         self.oturumlar.remove_user(&o.user, req.token.as_deref()); // diğer cihazlardaki oturumlar kapanır
         self.audit(cfg, req, Some(o), "PANEL_SIFRE", "");
         redirect("/sifre", Some(("Parola değiştirildi.", false)))
-    }
-
-    fn hesaplar_sayfa(&self, cfg: &Config, req: &Req, o: &Oturum) -> Resp {
-        let list = self.hesaplar.load().unwrap_or_default();
-        let rows: Vec<Vec<String>> = list
-            .iter()
-            .map(|(u, a)| {
-                let actions = if *u == o.user || self.may_manage(o, u).is_err() {
-                    String::new()
-                } else {
-                    format!(
-                        "<form class=\"ic\" method=\"post\" action=\"/hesaplar/sifirla\">{}<input type=\"hidden\" name=\"kullanici\" value=\"{}\">\
-                         <input class=\"kisa\" type=\"password\" name=\"parola\" placeholder=\"yeni parola\" autocomplete=\"new-password\" required>\
-                         <button class=\"ikincil\">Parolayı sıfırla</button></form> {}",
-                        csrf_input(o),
-                        h(u),
-                        post_button(o, "/hesaplar/sil", "Sil", &[("kullanici", u)], "tehlike")
-                    )
-                };
-                vec![h(u), h(a.rol.ad()), actions]
-            })
-            .collect();
-        let body = format!(
-            "<form class=\"satir kart\" method=\"post\" action=\"/hesaplar/ekle\">{}\
-             <div><label for=\"k\">Kullanıcı adı</label><input type=\"text\" id=\"k\" name=\"kullanici\" required></div>\
-             {}<div><label for=\"p\">Parola</label><input type=\"password\" id=\"p\" name=\"parola\" autocomplete=\"new-password\" required></div><button>Hesap ekle</button></form>{}",
-            csrf_input(o),
-            // API yetkili hesabı yalnızca admin açabilir
-            if o.rol == Rol::Hizmet {
-                "<div><label for=\"r\">Rol</label><select id=\"r\" name=\"rol\"><option value=\"sahip\">İşletme sahibi</option><option value=\"hizmet\">Hizmet sağlayıcı</option></select></div>"
-            } else {
-                ""
-            },
-            table(&["Kullanıcı", "Rol", ""], &rows, "Hesap yok")
-        );
-        self.page(cfg, req, Some(o), "Hesaplar", &body)
-    }
-
-    /// admin'e panelden kimse dokunamaz (parolası konsoldan ya da kendi "Şifremi değiştir"inden);
-    /// kafe sahibi API yetkili (hizmet sağlayıcı) hesapları yönetemez.
-    fn may_manage(&self, o: &Oturum, user: &str) -> Result<(), &'static str> {
-        if user == hesap::ADMIN {
-            return Err("admin hesabı panelden değiştirilemez.");
-        }
-        let target = self.hesaplar.load().ok().and_then(|m| m.get(user).map(|h| h.rol));
-        if o.rol == Rol::Sahip && target == Some(Rol::Hizmet) {
-            return Err("Bu hesabı yalnızca admin yönetebilir.");
-        }
-        Ok(())
-    }
-
-    fn hesap_ekle(&self, cfg: &Config, req: &Req, o: &Oturum) -> Resp {
-        let user = req.form.get("kullanici").map_or("", String::as_str).trim().to_lowercase();
-        let pw = req.form.get("parola").cloned().unwrap_or_default();
-        let rol = if o.rol == Rol::Hizmet && req.form.get("rol").is_some_and(|r| r == "hizmet") { Rol::Hizmet } else { Rol::Sahip };
-        if let Some(e) = hesap::username_problem(&user).or_else(|| hesap::password_problem(&pw)) {
-            return redirect("/hesaplar", Some((e, true)));
-        }
-        match self.hesaplar.add(&user, rol, &pw) {
-            Ok(()) => {
-                self.audit(cfg, req, Some(o), "PANEL_HESAP_EKLE", &format!("hesap={user} rol={}", rol.ad()));
-                redirect("/hesaplar", Some(("Hesap eklendi.", false)))
-            }
-            Err(e) => redirect("/hesaplar", Some((&e, true))),
-        }
-    }
-
-    fn hesap_sil(&self, cfg: &Config, req: &Req, o: &Oturum) -> Resp {
-        let user = req.form.get("kullanici").cloned().unwrap_or_default();
-        if user == o.user {
-            return redirect("/hesaplar", Some(("Kendi hesabınızı silemezsiniz.", true)));
-        }
-        if let Err(e) = self.may_manage(o, &user) {
-            return redirect("/hesaplar", Some((e, true)));
-        }
-        match self.hesaplar.remove(&user) {
-            Ok(()) => {
-                self.oturumlar.remove_user(&user, None);
-                self.audit(cfg, req, Some(o), "PANEL_HESAP_SIL", &format!("hesap={user}"));
-                redirect("/hesaplar", Some(("Hesap silindi.", false)))
-            }
-            Err(e) => redirect("/hesaplar", Some((&e, true))),
-        }
-    }
-
-    fn hesap_sifirla(&self, cfg: &Config, req: &Req, o: &Oturum) -> Resp {
-        let user = req.form.get("kullanici").cloned().unwrap_or_default();
-        let pw = req.form.get("parola").cloned().unwrap_or_default();
-        if let Some(e) = hesap::password_problem(&pw).or_else(|| self.may_manage(o, &user).err()) {
-            return redirect("/hesaplar", Some((e, true)));
-        }
-        match self.hesaplar.set_password(&user, &pw) {
-            Ok(()) => {
-                self.oturumlar.remove_user(&user, req.token.as_deref().filter(|_| user == o.user));
-                self.audit(cfg, req, Some(o), "PANEL_SIFRE_SIFIRLA", &format!("hesap={user}"));
-                redirect("/hesaplar", Some(("Parola sıfırlandı.", false)))
-            }
-            Err(e) => redirect("/hesaplar", Some((&e, true))),
-        }
-    }
-}
-
-impl Alan {
-    fn tur_ok(&self, v: &str) -> bool {
-        match self.tur {
-            Tur::Metin(f) | Tur::Gizli(f) => f(v),
-            _ => true,
-        }
     }
 }
 
@@ -1241,7 +1155,7 @@ pub fn run(cfg_path: &str) -> ExitCode {
         }
     };
     let panel = Arc::new(Panel::new(cfg_path, hesap::PATH, Box::new(|c: &[String]| ortak::run(c)), Box::new(ortak::wall)));
-    eprintln!("panel: https://0.0.0.0:8443 dinleniyor{}", if panel.hesaplar.needs_setup() { " (kurulum bekleniyor)" } else { "" });
+    eprintln!("panel: https://0.0.0.0:8443 dinleniyor{}", if crate::merkez::oku(std::path::Path::new(crate::merkez::PATH)).is_none() { " (müşteri girişi bekleniyor)" } else { "" });
     let workers: Vec<_> = (0..4)
         .map(|_| {
             let (server, panel) = (server.clone(), panel.clone());
@@ -1302,6 +1216,8 @@ mod tests {
         p.uzak_key = root.join("wg.key"); // testler gerçek anahtarlara dokunmasın
         p.yedek_key = root.join("yedek_anahtar");
         p.filtre_conf = root.join("yasak.conf");
+        p.merkez_path = root.join("merkez.json");
+        p.http = merkez_yok();
         Env { p, calls, root }
     }
 
@@ -1320,14 +1236,26 @@ mod tests {
         r.headers.iter().find(|(k, _)| k == "Location").map_or("", |(_, v)| v.as_str())
     }
 
+    const MUSTERI: &str = "4511643";
+
+    /// Sahte merkez: yalnızca bağ testlerinde çağrılır; varsayılan "ulaşılamadı".
+    fn merkez_yok() -> Box<crate::merkez::Http> {
+        Box::new(|_: &str, _: &str| Err("ağ yok".into()))
+    }
+
+    /// Cihaz müşteriye bağlı (merkez.json) ve admin parolası kurulu; `user` "mudur" ise müşteri numarasıyla girer.
     fn setup_and_login(e: &Env, user: &str, pw: &str) -> (String, String) {
-        if e.p.hesaplar.needs_setup() {
+        if crate::merkez::oku(&e.p.merkez_path).is_none() {
             e.p.hesaplar.set_admin("hizmet-parola-1").unwrap();
-            let r = e.p.handle(&req("POST", "/kurulum", &[
-                ("site_name", "Bocafe Göztepe"), ("unvan", "Boca Gıda Tic. Ltd. Şti."), ("kullanici", "mudur"), ("parola", "sahip-parola-12"), ("parola2", "sahip-parola-12"),
-            ], None));
-            assert_eq!((r.status, loc(&r).starts_with("/giris")), (303, true));
+            let tuz = "0011aabb".to_string();
+            let m = crate::merkez::Merkez { numara: MUSTERI.into(), ozet: crate::hesap::digest("sahip-parola-12", &tuz, 120_000), tuz,
+                                            yineleme: 120_000, cihaz_anahtari: "k".into(), son_eslesme: 1_790_705_134.0, deneme: 0.0 };
+            crate::merkez::kaydet(&e.p.merkez_path, &m).unwrap();
+            let mut c = Config::load(&e.p.cfg_path).unwrap();
+            (c.main.site_name, c.main.unvan) = ("Bocafe Göztepe".into(), "Boca Gıda Tic. Ltd. Şti.".into());
+            c.save(&e.p.cfg_path).unwrap();
         }
+        let user = if user == "mudur" { MUSTERI } else { user };
         let r = e.p.handle(&req("POST", "/giris", &[("kullanici", user), ("parola", pw)], None));
         let cookie = r.headers.iter().find(|(k, _)| k == "Set-Cookie").map(|(_, v)| v.clone()).expect("çerez");
         let token = cookie.trim_start_matches("wfc=").split(';').next().unwrap().to_string();
@@ -1336,38 +1264,74 @@ mod tests {
         (token, csrf)
     }
 
-    fn setup_and_login_admin_only(e: &Env) -> (String, String) {
-        assert!(e.p.hesaplar.needs_setup());
-        let r = e.p.handle(&req("POST", "/giris", &[("kullanici", "admin"), ("parola", "hizmet-parola-1")], None));
-        let cookie = r.headers.iter().find(|(k, _)| k == "Set-Cookie").map(|(_, v)| v.clone()).expect("çerez");
-        (cookie.trim_start_matches("wfc=").split(';').next().unwrap().to_string(), String::new())
-    }
+
 
     #[test]
-    fn setup_then_login_lock_and_customer_network_denied() {
-        let e = env();
-        assert_eq!(loc(&e.p.handle(&req("GET", "/", &[], None))), "/kurulum");
-        let page = e.p.handle(&req("GET", "/kurulum", &[], None)).body;
-        assert!(!page.contains("Bocafe") && !page.contains("Hizmet sağlayıcı")); // kafe adı boş, yalnızca sahip hesabı
-        let r = e.p.handle(&req("POST", "/kurulum", &[("site_name", "Bocafe"), ("kullanici", "admin"), ("parola", "kisa")], None));
-        assert!(r.status == 200 && r.body.contains("en az 10 karakter") && r.body.contains("ayrılmış"));
-        assert!(e.p.hesaplar.needs_setup());
+    fn giris_ekrani_ilk_giris_merkezden() {
+        let mut e = env();
         e.p.hesaplar.set_admin("hizmet-parola-1").unwrap();
-        let (tok, _) = setup_and_login_admin_only(&e); // admin kurulumdan önce de girebilir
-        assert_eq!(e.p.handle(&req("GET", "/", &[], Some(&tok))).status, 200);
-        setup_and_login(&e, "admin", "hizmet-parola-1");
+        assert_eq!(loc(&e.p.handle(&req("GET", "/", &[], None))), "/giris"); // kurulum ekranı yok
+        assert_eq!(e.p.handle(&req("GET", "/kurulum", &[], None)).status, 404);
+        let page = e.p.handle(&req("GET", "/giris", &[], None)).body;
+        assert!(page.contains("WifiCorrect") && !page.contains("müşteriye bağlanmadı"));
+        // merkeze ulaşılamıyor: müşteri giremez, admin girer
+        let r = e.p.handle(&req("POST", "/giris", &[("kullanici", MUSTERI), ("parola", "sahip-parola-12")], None));
+        assert!(r.body.contains("Merkeze ulaşılamadı"));
+        assert_eq!(e.p.handle(&req("POST", "/giris", &[("kullanici", "admin"), ("parola", "hizmet-parola-1")], None)).status, 303);
+        // numara biçimsizse merkeze sorulmaz
+        assert!(e.p.handle(&req("POST", "/giris", &[("kullanici", "mudur"), ("parola", "x")], None)).body.contains("hatalı"));
+        // merkez: önce hatalı parola, sonra başarı
+        let cagri = Arc::new(Mutex::new(0));
+        let c2 = cagri.clone();
+        e.p.http = Box::new(move |yol: &str, _: &str| {
+            assert_eq!(yol, "/api/giris");
+            *c2.lock().unwrap() += 1;
+            let n = *c2.lock().unwrap();
+            Ok(if n == 1 {
+                (401, r#"{"hata":"Müşteri numarası veya parola hatalı.","kod":"hatali"}"#.to_string())
+            } else {
+                (200, format!(r#"{{"tuz":"0011aabb","ozet":"{}","yineleme":120000,"cihaz_anahtari":"k-1","tunel_ip":"10.99.0.12","sunucu_pub":"S","uc_nokta":"vpn.wificorrect.com:51820","yedek_hedefi":"wfc-{MUSTERI}@10.99.0.1:"}}"#,
+                              crate::hesap::digest("sahip-parola-12", "0011aabb", 120_000)))
+            })
+        });
+        assert!(e.p.handle(&req("POST", "/giris", &[("kullanici", MUSTERI), ("parola", "yanlis-parola")], None)).body.contains("hatalı"));
+        let r = e.p.handle(&req("POST", "/giris", &[("kullanici", MUSTERI), ("parola", "sahip-parola-12")], None));
+        assert_eq!(r.status, 303);
+        let m = crate::merkez::oku(&e.p.merkez_path).unwrap();
+        assert_eq!((m.numara.as_str(), m.cihaz_anahtari.as_str()), (MUSTERI, "k-1"));
         let c = Config::load(&e.p.cfg_path).unwrap();
-        assert_eq!((c.main.site_name.as_str(), c.main.unvan.as_str()), ("Bocafe Göztepe", "Boca Gıda Tic. Ltd. Şti."));
-        assert_eq!(loc(&e.p.handle(&req("GET", "/kurulum", &[], None))), "/giris"); // kurulum bir kez
+        assert!(c.uzak.enabled && c.uzak.adres == "10.99.0.12" && c.backup.target == format!("wfc-{MUSTERI}@10.99.0.1:"));
+        assert!(e.calls.lock().unwrap().iter().any(|c| c.join(" ").contains("ctl uzak-uygula")));
+        // bağlandıktan sonra: merkez çağrılmaz, yerel doğrulama; başka numara reddedilir
+        e.p.http = merkez_yok();
+        assert_eq!(e.p.handle(&req("POST", "/giris", &[("kullanici", MUSTERI), ("parola", "sahip-parola-12")], None)).status, 303);
+        assert!(e.p.handle(&req("POST", "/giris", &[("kullanici", "7654321"), ("parola", "sahip-parola-12")], None)).body.contains("başka bir müşteriye ait"));
+        // kilit ve müşteri ağı
         for _ in 0..5 {
-            assert!(e.p.handle(&req("POST", "/giris", &[("kullanici", "mudur"), ("parola", "yanlis-parola")], None)).body.contains("hatalı"));
+            e.p.handle(&req("POST", "/giris", &[("kullanici", MUSTERI), ("parola", "yanlis-parola")], None));
         }
-        assert!(e.p.handle(&req("POST", "/giris", &[("kullanici", "mudur"), ("parola", "sahip-parola-12")], None)).body.contains("Çok fazla"));
+        assert!(e.p.handle(&req("POST", "/giris", &[("kullanici", MUSTERI), ("parola", "sahip-parola-12")], None)).body.contains("Çok fazla"));
         let mut r = req("GET", "/giris", &[], None);
         r.ip = "10.50.0.23".into();
         assert_eq!(e.p.handle(&r).status, 403);
         let audit = std::fs::read_to_string(e.root.join("5651/gunluk/2026-09-29/denetim.csv")).unwrap();
-        assert!(audit.contains("PANEL_KURULUM") && audit.contains("PANEL_GIRIS_HATA") && audit.contains("PANEL_GIRIS_KILIT"));
+        assert!(audit.contains("PANEL_MERKEZ_BAGLANDI") && audit.contains("PANEL_GIRIS_HATA") && audit.contains("PANEL_GIRIS_KILIT"));
+        assert!(!audit.contains("k-1")); // cihaz anahtarı denetime yazılmaz
+    }
+
+    #[test]
+    fn merkezden_yeni_ozet_gelince_eski_oturum_duser() {
+        let e = env();
+        let (tok, _) = setup_and_login(&e, "mudur", "sahip-parola-12");
+        assert_eq!(e.p.handle(&req("GET", "/", &[], Some(&tok))).status, 200);
+        let mut m = crate::merkez::oku(&e.p.merkez_path).unwrap();
+        m.ozet = crate::hesap::digest("baska-parola-1", &m.tuz, m.yineleme); // 06:00 eşitlemesi sıfırlanmış parolayı getirdi
+        crate::merkez::kaydet(&e.p.merkez_path, &m).unwrap();
+        assert_eq!(loc(&e.p.handle(&req("GET", "/", &[], Some(&tok)))), "/giris");
+        crate::merkez::sil(&e.p.merkez_path); // fabrika: bağ silindi
+        let (tok2, _) = setup_and_login(&e, "mudur", "sahip-parola-12");
+        crate::merkez::sil(&e.p.merkez_path);
+        assert_eq!(loc(&e.p.handle(&req("GET", "/", &[], Some(&tok2)))), "/giris");
     }
 
     #[test]
@@ -1378,13 +1342,8 @@ mod tests {
         assert_eq!(e.p.handle(&req("GET", "/admin-ayarlari", &[], Some(&tok))).status, 403); // Admin ayarları yalnızca admin
         assert_eq!(e.p.handle(&req("POST", "/admin-ayarlari", &[("csrf", &csrf), ("sms.mock", "0")], Some(&tok))).status, 403);
         let page = e.p.handle(&req("GET", "/", &[], Some(&tok))).body;
-        assert!(!page.contains("href=\"/admin-ayarlari\"") && page.contains("href=\"/hesaplar\""));
-        let page = e.p.handle(&req("GET", "/hesaplar", &[], Some(&tok))).body;
-        assert!(page.contains(">admin<") && !page.contains("name=\"rol\"") && page.matches(">Sil<").count() == 0);
-        let r = e.p.handle(&req("POST", "/hesaplar/sifirla", &[("csrf", &csrf), ("kullanici", "admin"), ("parola", "ele-gecirme-1")], Some(&tok)));
-        assert!(loc(&r).contains("e=1") && e.p.hesaplar.verify("admin", "ele-gecirme-1").is_none()); // admin'e dokunulamaz
-        e.p.handle(&req("POST", "/hesaplar/ekle", &[("csrf", &csrf), ("kullanici", "garson"), ("rol", "hizmet"), ("parola", "garson-parola-1")], Some(&tok)));
-        assert_eq!(e.p.hesaplar.verify("garson", "garson-parola-1"), Some(Rol::Sahip)); // sahip API yetkisi veremez
+        assert!(!page.contains("href=\"/admin-ayarlari\"") && !page.contains("href=\"/hesaplar\""));
+        assert_eq!(e.p.handle(&req("GET", "/hesaplar", &[], Some(&tok))).status, 404); // yerel ek hesap yok
         let page = e.p.handle(&req("GET", "/ayarlar", &[], Some(&tok))).body;
         for gizli in ["netgsm", "NetGSM", "Twilio", "twilio", "sms.mock", "backup.target", "Yedek", "sms_global_day", "Fabrika"] {
             assert!(!page.contains(gizli), "{gizli}"); // işletme sahibi sağlayıcı / sunucu / sınır görmez
@@ -1402,9 +1361,6 @@ mod tests {
     fn provider_sets_secrets_write_only_and_validates() {
         let e = env();
         let (tok, csrf) = setup_and_login(&e, "admin", "hizmet-parola-1");
-        let page = e.p.handle(&req("GET", "/hesaplar", &[], Some(&tok))).body;
-        assert!(page.contains(">admin<") && page.matches(">Sil<").count() == 1); // admin silinemez, sahip silinebilir
-        assert!(e.p.handle(&req("POST", "/hesaplar/sil", &[("csrf", &csrf), ("kullanici", "admin")], Some(&tok))).headers.iter().any(|(_, v)| v.contains("e=1")));
         let page = e.p.handle(&req("GET", "/admin-ayarlari", &[], Some(&tok))).body;
         assert!(page.contains("name=\"netgsm.password\"") && page.contains("sms.mock") && !page.contains("main.session_minutes"));
         let r = e.p.handle(&req("POST", "/admin-ayarlari", &[("csrf", &csrf), ("netgsm.password", "gizli-sifre-1"), ("netgsm.usercode", "8503027084"), ("sms.mock", "1"), ("netgsm.msgheader", "COK-UZUN-BASLIK-OLMAZ")], Some(&tok)));
@@ -1446,15 +1402,33 @@ mod tests {
     }
 
     #[test]
-    fn password_change_logs_out_other_sessions() {
-        let e = env();
+    fn password_change_via_center_logs_out_other_sessions() {
+        let mut e = env();
         let (t1, csrf) = setup_and_login(&e, "mudur", "sahip-parola-12");
         let (t2, _) = setup_and_login(&e, "mudur", "sahip-parola-12");
-        let r = e.p.handle(&req("POST", "/sifre", &[("csrf", &csrf), ("eski", "sahip-parola-12"), ("yeni", "yepyeni-parola"), ("yeni2", "yepyeni-parola")], Some(&t1)));
+        let post = |e: &Env, eski: &str| {
+            e.p.handle(&req("POST", "/sifre", &[("csrf", &csrf), ("eski", eski), ("yeni", "yepyeni-parola"), ("yeni2", "yepyeni-parola")], Some(&t1)))
+        };
+        assert!(post(&e, "yanlis-parola").body.contains("hatalı")); // yerel kontrol, merkeze gitmez
+        assert!(post(&e, "sahip-parola-12").body.contains("internet gerekli")); // merkez yok
+        let yeni = crate::hesap::digest("yepyeni-parola", "cc", 120_000);
+        e.p.http = Box::new(move |yol: &str, govde: &str| {
+            assert!(yol == "/api/parola" && govde.contains("\"eski\":\"sahip-parola-12\""));
+            Ok((200, format!(r#"{{"tuz":"cc","ozet":"{yeni}","yineleme":120000}}"#)))
+        });
+        let r = post(&e, "sahip-parola-12");
         assert_eq!(r.status, 303);
-        assert_eq!(e.p.handle(&req("GET", "/", &[], Some(&t1))).status, 200);
-        assert_eq!(loc(&e.p.handle(&req("GET", "/", &[], Some(&t2)))), "/giris");
-        assert!(e.p.hesaplar.verify("mudur", "yepyeni-parola").is_some());
+        assert!(crate::merkez::dogrula(&crate::merkez::oku(&e.p.merkez_path).unwrap(), "yepyeni-parola"));
+        assert_eq!(loc(&e.p.handle(&req("GET", "/", &[], Some(&t2)))), "/giris"); // diğer oturum düştü
+        let cookie = r.headers.iter().find(|(k, _)| k == "Set-Cookie").map(|(_, v)| v.clone()).expect("yeni çerez");
+        let t3 = cookie.trim_start_matches("wfc=").split(';').next().unwrap().to_string();
+        assert_eq!(e.p.handle(&req("GET", "/", &[], Some(&t3))).status, 200); // değiştiren yeni oturumla devam eder
+        // admin parolası yerel değişir
+        e.p.http = merkez_yok();
+        let (a1, acsrf) = setup_and_login(&e, "admin", "hizmet-parola-1");
+        let r = e.p.handle(&req("POST", "/sifre", &[("csrf", &acsrf), ("eski", "hizmet-parola-1"), ("yeni", "yeni-admin-12"), ("yeni2", "yeni-admin-12")], Some(&a1)));
+        assert_eq!(r.status, 303);
+        assert!(e.p.hesaplar.verify("admin", "yeni-admin-12").is_some());
     }
 
     fn get(path: &str, query: &[(&str, &str)], token: &str) -> Req {
@@ -1619,13 +1593,13 @@ mod tests {
         assert!(!e.p.handle(&get("/", &[], &tok)).body.contains("/panel-hareketleri"));
         e.p.handle(&req("POST", "/cikis", &[("csrf", &csrf)], Some(&tok)));
         let (atok, _) = setup_and_login(&e, "admin", "hizmet-parola-1");
-        let page = e.p.handle(&get("/panel-hareketleri", &[("kim", "mudur"), ("kisisel", "1")], &atok)).body;
+        let page = e.p.handle(&get("/panel-hareketleri", &[("kim", MUSTERI), ("kisisel", "1")], &atok)).body;
         assert!(page.contains("Bağlı cihazlara baktı") && page.contains("Kullanıcı listesine baktı") && page.contains("ara=ayşe"));
         assert!(!page.contains(">Giriş<")); // yalnızca kişisel veri filtresi
         let page = e.p.handle(&get("/panel-hareketleri", &[], &atok)).body;
-        assert!(page.contains("İşletme sahibi") && page.contains(">4<") && page.contains("Çıkış")); // mudur: 4 kişisel veri bakışı (bağlı cihazlar + 2 liste + arama)
+        assert!(page.contains("İşletme sahibi") && page.contains(">4<") && page.contains("Çıkış")); // müşteri: 4 kişisel veri bakışı (bağlı cihazlar + 2 liste + arama)
         let audit = std::fs::read_to_string(e.root.join("5651/gunluk/2026-09-29/denetim.csv")).unwrap();
-        assert!(audit.contains("kullanici=mudur rol=sahip ip="));
+        assert!(audit.contains(&format!("kullanici={MUSTERI} rol=sahip ip=")));
     }
 
     fn give_reason(e: &Env, tok: &str, csrf: &str) {
