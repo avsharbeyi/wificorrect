@@ -1,0 +1,10 @@
+[Unit]
+Description=Kafe paneli sayıları: 02:30 (cihazlar 02:00'de gönderir) ve 12:30 (geç gelenler)
+
+[Timer]
+OnCalendar=*-*-* 02:30:00
+OnCalendar=*-*-* 12:30:00
+Persistent=true
+
+[Install]
+WantedBy=timers.target
