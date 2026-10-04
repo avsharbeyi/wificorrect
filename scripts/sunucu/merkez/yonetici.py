@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Kullanım: wc-yonetici parola <kullanıcı-adı>
 Yönetim merkezi (yonetim.wificorrect.com) yönetici hesabını açar ya da parolasını değiştirir (tek hesap).
-Root çalıştırılır; dosyaya dokunmadan önce wcpanel'e iner (klasör onun: root olarak yazmak sembolik bağ izleyebilirdi)."""
+Root çalıştırılır; parolayı sorduktan sonra, dosyaya dokunmadan önce wcpanel'e iner (klasör onun: root olarak yazmak sembolik bağ izleyebilirdi)."""
 import getpass
 import json
 import os
@@ -55,9 +55,9 @@ def main(argv, yol=YONETICI, sor=sor, sahip="wcpanel", birak=birak):
     if len(argv) != 2 or argv[0] != "parola" or not KUL_RE.fullmatch(argv[1]):
         print(__doc__.splitlines()[0], file=sys.stderr)
         return 2
+    pw = sor()  # önce: wcpanel'e indikten sonra terminale (/dev/tty) erişilemez, parola ekranda görünürdü
     if sahip:
         birak(sahip)
-    pw = sor()
     if pw is None:
         print("Parolalar aynı değil.", file=sys.stderr)
         return 1

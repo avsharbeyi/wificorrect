@@ -152,6 +152,14 @@ def test_uyelik_bitir_onay_ister_yeniden_acma_serbest_birakmayi_geri_alir():
         assert v.musteri(n)["uyelik"] == "aktif" and v.bagli_cihaz(n)["durum"] == "bagli"
 
 
+def test_parola_yetki_birakilmadan_once_sorulur():
+    with tempfile.TemporaryDirectory() as tmp:
+        sira = []
+        kod = yonetici.main(["parola", "serkan"], os.path.join(tmp, "y.json"), sor=lambda: sira.append("sor") or PW,
+                            sahip="wcpanel", birak=lambda s: sira.append("birak"))
+        assert kod == 0 and sira == ["sor", "birak"]  # wcpanel terminale erişemez: parola root iken sorulur
+
+
 if __name__ == "__main__":
     for _name, _fn in sorted(globals().items()):
         if _name.startswith("test_") and callable(_fn):
