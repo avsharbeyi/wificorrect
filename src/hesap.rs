@@ -65,7 +65,7 @@ impl Hesaplar {
         Hesaplar { path: path.into(), lock: Mutex::new(()) }
     }
 
-    /// Dosya yoksa boş. Bozuksa hata: boş sayılsaydı kurulum ekranı açılır, cihaz ele geçirilebilirdi.
+    /// Dosya yoksa boş. Bozuksa hata: boş sayılsaydı admin parolası yeniden belirlenebilir, cihaz ele geçirilebilirdi.
     pub fn load(&self) -> Result<BTreeMap<String, Hesap>, String> {
         match std::fs::read(&self.path) {
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(BTreeMap::new()),
@@ -112,7 +112,7 @@ impl Hesaplar {
         self.save(&m)
     }
 
-    /// Fabrika ayarı: admin dışındaki bütün hesaplar silinir (kurulum ekranı yeniden açılır).
+    /// Fabrika ayarı: admin dışındaki bütün hesaplar silinir.
     pub fn keep_only_admin(&self) -> Result<(), String> {
         let _g = self.lock.lock().unwrap_or_else(|e| e.into_inner());
         let mut m = self.load()?;

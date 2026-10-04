@@ -180,6 +180,8 @@ pub struct Kaydedici {
     /// Yönetim merkezi bağı (testte geçici) ve son eşitleme başlatma zamanı
     pub merkez_path: std::path::PathBuf,
     merkez_son: f64,
+    /// son bilinen hizmet durumu (lisans); değişince misafir oturumları kapanır / denetime yazılır
+    lisans_acik: Option<bool>,
 }
 
 impl Kaydedici {
@@ -201,6 +203,7 @@ impl Kaydedici {
             uzak_last_fix: f64::NEG_INFINITY,
             merkez_path: crate::merkez::PATH.into(),
             merkez_son: f64::NEG_INFINITY,
+            lisans_acik: None,
         }
     }
 
@@ -370,6 +373,7 @@ impl Kaydedici {
         self.check_wan(now);
         self.check_uzak(now);
         self.check_merkez(now);
+        self.check_lisans(now);
     }
 
     /// Uzak erişim açıkken tünel yoksa ya da sunucuyla 10 dk'dır el sıkışılmadıysa (açılışta ad çözülemedi, sunucu IP'si
@@ -393,6 +397,34 @@ impl Kaydedici {
         ortak::audit(&self.cfg.main.log_root, row);
     }
 
+    /// Lisans kapanınca (bitiş günü geçti, askıya alındı ya da cihaz bağlı değil) açık misafir oturumları kapanır;
+    /// portal zaten yenisini kabul etmez. Açılınca yalnızca denetime yazılır (misafirler yeniden girer).
+    fn check_lisans(&mut self, now: f64) {
+        let acik = crate::merkez::hizmet_acik(&self.merkez_path, now);
+        let onceki = self.lisans_acik.replace(acik);
+        if onceki == Some(acik) {
+            return;
+        }
+        let root = self.cfg.main.log_root.clone();
+        if acik {
+            if onceki.is_some() {
+                ortak::audit(&root, Row::new("LISANS_ACIK", &ortak::now_iso(now)));
+            }
+            return;
+        }
+        let state = self.cfg.main.state_root.clone();
+        let Ok(_g) = ortak::state_lock(&state) else { return };
+        let mut ses = ortak::load_sessions(&state);
+        let macs: Vec<String> = ses.keys().cloned().collect();
+        for mac in &macs {
+            ortak::close_session(&root, &mut ses, mac, "lisans", now, &*self.runner);
+        }
+        if let Err(e) = ortak::save_sessions(&state, &ses) {
+            eprintln!("kaydedici: oturum dosyası yazılamadı: {e}");
+        }
+        ortak::audit(&root, Row::new("LISANS_KAPALI", &ortak::now_iso(now)).set("ek", format!("kapanan_oturum={}", macs.len())));
+    }
+
     /// Yönetim merkezi eşitlemesi: zamanı geldiyse (her gün 06:00 sonrası, hatada 30 dk sonra) arka planda
     /// `ctl merkez-eslesme` başlatılır (ağ çağrısı kaydediciyi bekletmesin). En çok dakikada bir.
     fn check_merkez(&mut self, now: f64) {
@@ -405,7 +437,7 @@ impl Kaydedici {
         }
         self.merkez_son = now;
         let unit = format!("wfc-merkez-eslesme-{}", now as u64);
-        let c: Vec<String> = ["systemd-run", "--unit", &unit, "--on-active", "1s", "/usr/local/bin/wificorrect", "ctl", "merkez-eslesme"]
+        let c: Vec<String> = ["systemd-run", "--collect", "--unit", &unit, "--on-active", "1s", "/usr/local/bin/wificorrect", "ctl", "merkez-eslesme"]
             .iter()
             .map(|s| s.to_string())
             .collect();
@@ -601,6 +633,9 @@ mod tests {
         let ok = Arc::new(Mutex::new(true));
         let ok2 = ok.clone();
         let mut k = Kaydedici::new(Config::parse(&text).unwrap(), Box::new(move |_c: &[String]| *ok2.lock().unwrap()));
+        std::fs::create_dir_all(&root).unwrap();
+        k.merkez_path = root.join("merkez.json"); // bağlı, lisansı açık cihaz
+        crate::merkez::kaydet(&k.merkez_path, &crate::merkez::Merkez { numara: "4511643".into(), son_eslesme: 9e9, ..Default::default() }).unwrap();
         k.by_ip.insert("10.50.0.23".into(), (M1.into(), sess("5334553132", "10.50.0.23", 9e9, "s1")));
         k.leases = [("10.50.0.40", "aa:bb:cc:dd:ee:40"), ("10.50.0.2", "aa:bb:cc:dd:ee:99")]
             .into_iter()
@@ -832,12 +867,13 @@ mod tests {
             true
         });
         k.merkez_path = root.join("merkez.json");
+        crate::merkez::sil(&k.merkez_path);
         let n = |calls: &Arc<Mutex<Vec<String>>>| calls.lock().unwrap().iter().filter(|x| x.contains("ctl merkez-eslesme")).count();
         let gun = 1_791_072_000.0; // 2026-10-04 00:00 UTC
         let tr = |saat: f64| gun + (saat - 3.0) * 3600.0;
         k.check_merkez(tr(7.0));
         assert_eq!(n(&calls), 0); // bağ yok
-        let m = crate::merkez::Merkez { numara: "4511643".into(), tuz: "t".into(), ozet: "o".into(), yineleme: 120_000, cihaz_anahtari: "k".into(), son_eslesme: tr(5.0), deneme: 0.0 };
+        let m = crate::merkez::Merkez { numara: "4511643".into(), tuz: "t".into(), ozet: "o".into(), yineleme: 120_000, cihaz_anahtari: "k".into(), son_eslesme: tr(5.0), deneme: 0.0, ..Default::default() };
         std::fs::create_dir_all(&root).unwrap();
         crate::merkez::kaydet(&k.merkez_path, &m).unwrap();
         k.check_merkez(tr(5.5));
@@ -846,6 +882,42 @@ mod tests {
         assert_eq!(n(&calls), 1);
         k.check_merkez(tr(6.11));
         assert_eq!(n(&calls), 1); // aynı dakikada ikinci kez başlatılmaz
+    }
+
+
+    #[test]
+    fn lisans_kapaninca_misafir_oturumlari_kapanir() {
+        let (mut k, root, _) = setup();
+        let calls = Arc::new(Mutex::new(Vec::<String>::new()));
+        let c2 = calls.clone();
+        k.runner = Box::new(move |c: &[String]| {
+            c2.lock().unwrap().push(c.join(" "));
+            true
+        });
+        k.merkez_path = root.join("merkez.json");
+        std::fs::create_dir_all(root.join("state")).unwrap();
+        let state = k.cfg.main.state_root.clone();
+        let mut ses = ortak::Sessions::new();
+        ses.insert(M1.into(), sess("5334553132", "10.50.0.23", 9e9, "s1"));
+        ortak::save_sessions(&state, &ses).unwrap();
+        let mut m = crate::merkez::Merkez { numara: "4511643".into(), tuz: "t".into(), ozet: "o".into(), yineleme: 120_000, cihaz_anahtari: "k".into(),
+                                            son_eslesme: 0.0, deneme: 0.0, ..Default::default() };
+        crate::merkez::kaydet(&k.merkez_path, &m).unwrap();
+        k.check_lisans(1000.0);
+        assert_eq!(ortak::load_sessions(&state).len(), 1); // lisans açık: dokunulmaz
+        m.lisans = "askida".into();
+        crate::merkez::kaydet(&k.merkez_path, &m).unwrap();
+        k.check_lisans(1010.0);
+        assert!(ortak::load_sessions(&state).is_empty());
+        assert!(calls.lock().unwrap().iter().any(|c| c.starts_with("nft delete element")));
+        let n = calls.lock().unwrap().len();
+        k.check_lisans(1020.0);
+        assert_eq!(calls.lock().unwrap().len(), n); // bir kez
+        m.lisans = "aktif".into();
+        crate::merkez::kaydet(&k.merkez_path, &m).unwrap();
+        k.check_lisans(1030.0);
+        let audit = std::fs::read_to_string(root.join(format!("5651/gunluk/{}/denetim.csv", ortak::day_of(&ortak::now_iso(1010.0))))).unwrap();
+        assert!(audit.contains("LISANS_KAPALI") && audit.contains("LISANS_ACIK"));
     }
 
 }

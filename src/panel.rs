@@ -346,6 +346,8 @@ pub struct Panel {
     pub merkez_path: std::path::PathBuf,
     /// Yönetim merkezi HTTP istemcisi (testte sahte)
     pub http: Box<crate::merkez::Http>,
+    /// İlk bağlanma tek seferde (iki eşzamanlı giriş iki ayrı cihaz anahtarı almasın)
+    baglan_kilit: std::sync::Mutex<()>,
 }
 
 const MENU: &[(&str, &str, bool)] = &[
@@ -382,6 +384,7 @@ impl Panel {
             yedek_key: crate::uzak::YEDEK_KEY.into(),
             merkez_path: crate::merkez::PATH.into(),
             http: Box::new(crate::merkez::curl),
+            baglan_kilit: std::sync::Mutex::new(()),
         }
     }
 
@@ -416,7 +419,22 @@ impl Panel {
         v.insert("site", h(if crate::merkez::oku(&self.merkez_path).is_none() { "WifiCorrect" } else { &cfg.main.site_name }));
         v.insert("govde", if o.is_some() { String::new() } else { "yalin".into() });
         v.insert("menu_html", menu);
-        v.insert("mesaj_html", msg.unwrap_or_default());
+        let mut uyari = String::new();
+        if o.is_some() {
+            let now = (self.clock)();
+            match crate::merkez::oku(&self.merkez_path) {
+                None => uyari.push_str("<div class=\"mesaj hata\">Cihaz bir müşteriye bağlı değil: misafirlere internet verilmiyor. Müşteri numarasıyla giriş yapılınca açılır.</div>"),
+                Some(m) if !crate::merkez::lisans_aktif(&m, now) => uyari.push_str(&format!(
+                    "<div class=\"mesaj hata\">{}: misafirlere internet verilmiyor. Hizmet sağlayıcınıza başvurun.</div>",
+                    if m.lisans == "askida" { "Lisans askıya alındı".to_string() } else { format!("Lisans süresi doldu ({})", h(&m.lisans_bitis)) }
+                )),
+                Some(_) => {}
+            }
+            if cfg.main.unvan.trim().is_empty() && crate::merkez::oku(&self.merkez_path).is_some() {
+                uyari.push_str("<div class=\"mesaj hata\">Unvan girilmemiş: misafirlerin gördüğü açık rıza metninde yer tutucu görünüyor. Ayarlar'dan işletme unvanını girin.</div>");
+            }
+        }
+        v.insert("mesaj_html", uyari + &msg.unwrap_or_default());
         v.insert("icerik_html", body.into());
         Resp { status: 200, body: substitute(TPL, &v), headers: vec![("Content-Type".into(), "text/html; charset=utf-8".into())], file: None }
     }
@@ -568,20 +586,24 @@ impl Panel {
                 Some(r) => (r, String::new()),
                 None => return hatali("Kullanıcı adı veya parola hatalı."),
             }
-        } else if let Some(m) = crate::merkez::oku(&self.merkez_path) {
-            if user != m.numara {
-                return hatali(if crate::merkez::numara_gecerli(&user) { "Bu cihaz başka bir müşteriye ait." } else { "Kullanıcı adı veya parola hatalı." });
-            }
-            if !crate::merkez::dogrula(&m, pw) {
-                return hatali("Kullanıcı adı veya parola hatalı.");
-            }
-            (Rol::Sahip, m.ozet)
-        } else if !crate::merkez::numara_gecerli(&user) {
-            return hatali("Kullanıcı adı veya parola hatalı.");
         } else {
-            match self.merkeze_baglan(cfg, req, &user, pw, now) {
-                Ok(ozet) => (Rol::Sahip, ozet),
-                Err((mesaj, kilit)) => return if kilit { hatali(&mesaj) } else { self.giris(cfg, req, &mesaj) },
+            // bağ kontrolü ve ilk bağlanma kilit altında: aynı anda iki giriş iki ayrı cihaz anahtarı almasın
+            let _k = self.baglan_kilit.lock().unwrap_or_else(|e| e.into_inner());
+            match crate::merkez::oku(&self.merkez_path) {
+                Some(m) => {
+                    if user != m.numara {
+                        return hatali(if crate::merkez::numara_gecerli(&user) { "Bu cihaz başka bir müşteriye ait." } else { "Kullanıcı adı veya parola hatalı." });
+                    }
+                    if !crate::merkez::dogrula(&m, pw) {
+                        return hatali("Kullanıcı adı veya parola hatalı.");
+                    }
+                    (Rol::Sahip, m.ozet)
+                }
+                None if !crate::merkez::numara_gecerli(&user) => return hatali("Kullanıcı adı veya parola hatalı."),
+                None => match self.merkeze_baglan(cfg, req, &user, pw, now) {
+                    Ok(ozet) => (Rol::Sahip, ozet),
+                    Err((mesaj, kilit)) => return if kilit { hatali(&mesaj) } else { self.giris(cfg, req, &mesaj) },
+                },
             }
         };
         self.guard.succeeded(&req.ip, &user);
@@ -607,12 +629,17 @@ impl Panel {
             Err(crate::merkez::GirisHata::Baglanti) => return Err(("Merkeze ulaşılamadı, internet bağlantısını kontrol edin.".into(), false)),
             Err(crate::merkez::GirisHata::Mesaj(m, kilit)) => return Err((m, kilit)),
         };
-        crate::merkez::kaydet(&self.merkez_path, &g.merkez).map_err(|e| (e, false))?;
+        // önce ayarlar (tünel + yedek), sonra bağ: ayar yazılamazsa cihaz "bağlı ama tünelsiz" kalmasın
         let mut yeni = cfg.clone();
         crate::merkez::uygula(&mut yeni, &g);
         yeni.save(&self.cfg_path).map_err(|e| (e, false))?;
-        let unit = format!("wfc-uzak-{}", now as u64);
-        (self.runner)(&cmd(&["systemd-run", "--unit", &unit, "--on-active", "1s", "/usr/local/bin/wificorrect", "ctl", "uzak-uygula"]));
+        crate::merkez::kaydet(&self.merkez_path, &g.merkez).map_err(|e| (e, false))?;
+        // güncellenen eski cihazdaki yerel sahip hesapları artık geçersiz: yalnızca admin kalır
+        if let Err(e) = self.hesaplar.keep_only_admin() {
+            eprintln!("panel: {e}");
+        }
+        let unit = format!("wfc-uzak-{}", ortak::random_hex(4));
+        (self.runner)(&cmd(&["systemd-run", "--collect", "--unit", &unit, "--on-active", "1s", "/usr/local/bin/wificorrect", "ctl", "uzak-uygula"]));
         self.audit(&yeni, req, None, "PANEL_MERKEZ_BAGLANDI", &format!("numara={numara} tunel={}", g.tunel_ip));
         Ok(g.merkez.ozet)
     }
@@ -861,7 +888,7 @@ impl Panel {
             body.push_str(&format!(
                 "<section class=\"kart\" style=\"margin-top:48px\"><h2>Fabrika ayarları</h2><p class=\"not\">Cihazı ISO'dan kurulduktan hemen \
                  sonraki haline döndürür: bütün ayarlar (işletme adı ve unvanı, SMS bilgileri, yedek, metinler, yasaklı listeler) ürün \
-                 varsayılanına döner, admin dışındaki hesaplar silinir ve açılışta kurulum ekranı gelir, portlar varsayılana döner \
+                 varsayılanına döner, admin dışındaki hesaplar silinir ve açılışta giriş ekranı gelir, portlar varsayılana döner \
                  (Ethernet 1 internet alır, Ethernet 2 verir, Wi-Fi kapalı), bağlı müşterilerin oturumları kapanır. 5651 kayıtları önce \
                  (bugün dahil) mühürlenip uzak sunucuya gönderilir, sonra cihazdan silinir; işletme sahibi kayıtlarını sunucudaki panelden \
                  görmeye devam eder. Uzak yedek kapalıysa ya da bir gün gönderilemezse işlem iptal olur ve hiçbir şey silinmez. \
@@ -927,6 +954,12 @@ impl Panel {
         if let Some(e) = crate::fabrika::engel(cfg) {
             return redirect("/admin-ayarlari", Some((e, true)));
         }
+        if crate::merkez::oku(&self.merkez_path).is_some() {
+            return redirect("/admin-ayarlari", Some((
+                "Cihaz bir müşteriye bağlı. Fabrika ayarına dönmek için önce yönetim merkezinden cihazı serbest bırakın; cihaz kayıtlarını teslim edip kendini temizler.",
+                true,
+            )));
+        }
         self.audit(cfg, req, Some(o), "PANEL_FABRIKA", "");
         // yanıt tarayıcıya ulaşsın diye 2 sn sonra, panelden bağımsız işte (panel ve ağ yeniden başlar)
         let unit = format!("wfc-fabrika-{}", ortak::random_hex(4));
@@ -934,7 +967,7 @@ impl Panel {
             return redirect("/admin-ayarlari", Some(("Fabrika ayarları başlatılamadı.", true)));
         }
         let body = "<div class=\"kart\"><p>Cihaz fabrika ayarlarına dönüyor: önce kayıtlar sunucuya gönderiliyor (birkaç dakika \
-                    sürebilir), sonra ağ ve panel yeniden başlıyor. Biraz sonra bu adresi yenileyin; kurulum ekranı açılmışsa işlem tamamdır. \
+                    sürebilir), sonra ağ ve panel yeniden başlıyor. Biraz sonra bu adresi yenileyin; giriş ekranı gelip menüde işletme adı yerine WifiCorrect yazıyorsa işlem tamamdır. \
                     Panel açılıp ayarlar yerindeyse kayıtlar gönderilemediği için işlem iptal olmuştur (Panel hareketleri / denetim: \
                     FABRIKA_IPTAL). İnternet kablosu Ethernet 1'de (sağ) değilse oraya takın.</p></div>";
         self.page(cfg, req, None, "Fabrika ayarları", body)
@@ -1249,7 +1282,7 @@ mod tests {
             e.p.hesaplar.set_admin("hizmet-parola-1").unwrap();
             let tuz = "0011aabb".to_string();
             let m = crate::merkez::Merkez { numara: MUSTERI.into(), ozet: crate::hesap::digest("sahip-parola-12", &tuz, 120_000), tuz,
-                                            yineleme: 120_000, cihaz_anahtari: "k".into(), son_eslesme: 1_790_705_134.0, deneme: 0.0 };
+                                            yineleme: 120_000, cihaz_anahtari: "k".into(), son_eslesme: 1_790_705_134.0, deneme: 0.0, ..Default::default() };
             crate::merkez::kaydet(&e.p.merkez_path, &m).unwrap();
             let mut c = Config::load(&e.p.cfg_path).unwrap();
             (c.main.site_name, c.main.unvan) = ("Bocafe Göztepe".into(), "Boca Gıda Tic. Ltd. Şti.".into());
@@ -1270,6 +1303,13 @@ mod tests {
     fn giris_ekrani_ilk_giris_merkezden() {
         let mut e = env();
         e.p.hesaplar.set_admin("hizmet-parola-1").unwrap();
+        // güncellenen eski cihaz: hesaplar.json'da eski yerel sahip hesabı kalmış
+        let ham = std::fs::read_to_string(e.root.join("hesaplar.json")).unwrap();
+        let mut j: serde_json::Value = serde_json::from_str(&ham).unwrap();
+        let mut eski = j["admin"].clone();
+        eski["rol"] = "sahip".into();
+        j["mudur"] = eski;
+        std::fs::write(e.root.join("hesaplar.json"), j.to_string()).unwrap();
         assert_eq!(loc(&e.p.handle(&req("GET", "/", &[], None))), "/giris"); // kurulum ekranı yok
         assert_eq!(e.p.handle(&req("GET", "/kurulum", &[], None)).status, 404);
         let page = e.p.handle(&req("GET", "/giris", &[], None)).body;
@@ -1301,7 +1341,8 @@ mod tests {
         assert_eq!((m.numara.as_str(), m.cihaz_anahtari.as_str()), (MUSTERI, "k-1"));
         let c = Config::load(&e.p.cfg_path).unwrap();
         assert!(c.uzak.enabled && c.uzak.adres == "10.99.0.12" && c.backup.target == format!("wfc-{MUSTERI}@10.99.0.1:"));
-        assert!(e.calls.lock().unwrap().iter().any(|c| c.join(" ").contains("ctl uzak-uygula")));
+        assert!(e.calls.lock().unwrap().iter().any(|c| c.join(" ").contains("ctl uzak-uygula") && c.contains(&"--collect".to_string())));
+        assert_eq!(e.p.hesaplar.load().unwrap().len(), 1); // eski yerel sahip hesabı silindi
         // bağlandıktan sonra: merkez çağrılmaz, yerel doğrulama; başka numara reddedilir
         e.p.http = merkez_yok();
         assert_eq!(e.p.handle(&req("POST", "/giris", &[("kullanici", MUSTERI), ("parola", "sahip-parola-12")], None)).status, 303);
@@ -1687,6 +1728,10 @@ mod tests {
         c.backup.enabled = true;
         c.backup.target = "kafe-x@sunucu:".into();
         c.save(&e.p.cfg_path).unwrap();
+        // cihaz müşteriye bağlıyken elle fabrika yok (merkezde sahipsiz bağlı kalırdı): önce serbest bırakılır
+        let r = fab("hizmet-parola-1", "1");
+        assert!(loc(&r).contains("e=1") && !e.calls.lock().unwrap().iter().any(|c| c.join(" ").contains("ctl fabrika")));
+        crate::merkez::sil(&e.p.merkez_path);
         assert!(fab("hizmet-parola-1", "1").body.contains("fabrika ayarlarına dönüyor"));
         assert!(e.p.handle(&get("/admin-ayarlari", &[], &tok)).body.contains("kayıtlar sunucuya gönderiliyor")); // sürüyor
         assert!(!loc(&e.p.handle(&req("POST", "/admin-ayarlari/yedekle", &[("csrf", &csrf)], Some(&tok)))).contains("e=1"));
@@ -1720,4 +1765,22 @@ mod tests {
         assert!(c.uzak.enabled && c.uzak.adres == "10.99.0.17");
         assert!(e.calls.lock().unwrap().iter().any(|c| c.join(" ").ends_with("wificorrect ctl uzak-uygula")));
     }
+
+    #[test]
+    fn lisans_ve_unvan_uyarisi() {
+        let e = env();
+        let (tok, _) = setup_and_login(&e, "mudur", "sahip-parola-12");
+        let page = e.p.handle(&req("GET", "/", &[], Some(&tok))).body;
+        assert!(!page.contains("Lisans askıya") && !page.contains("Unvan girilmemiş"));
+        let mut m = crate::merkez::oku(&e.p.merkez_path).unwrap();
+        m.lisans = "askida".into();
+        crate::merkez::kaydet(&e.p.merkez_path, &m).unwrap();
+        let page = e.p.handle(&req("GET", "/", &[], Some(&tok))).body;
+        assert!(page.contains("Lisans askıya alındı") && page.contains("misafirlere internet verilmiyor"));
+        let mut c = Config::load(&e.p.cfg_path).unwrap();
+        c.main.unvan = String::new();
+        c.save(&e.p.cfg_path).unwrap();
+        assert!(e.p.handle(&req("GET", "/", &[], Some(&tok))).body.contains("Unvan girilmemiş"));
+    }
+
 }

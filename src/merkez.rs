@@ -14,7 +14,7 @@ pub const API: &str = "https://api.wificorrect.com";
 const TR: f64 = 3.0 * 3600.0; // Türkiye UTC+3, yaz saati yok
 const YENIDEN_SN: f64 = 30.0 * 60.0;
 
-#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Default)]
 pub struct Merkez {
     pub numara: String,
     pub tuz: String,
@@ -27,16 +27,30 @@ pub struct Merkez {
     /// son eşitleme denemesi (epoch) — başarısızsa 30 dk sonra yeniden
     #[serde(default)]
     pub deneme: f64,
+    /// yıllık lisans: "aktif" | "bitti" | "askida" (boş = eski bağ, açık sayılır)
+    #[serde(default)]
+    pub lisans: String,
+    /// lisans bitiş günü (YYYY-AA-GG, TR): cihaz bu günden sonra misafirlere internet vermez (eşitleme beklemeden)
+    #[serde(default)]
+    pub lisans_bitis: String,
 }
 
 /// (yol, JSON gövde) → (HTTP durumu, gövde). Err: merkeze ulaşılamadı.
 pub type Http = dyn Fn(&str, &str) -> Result<(u16, String), String> + Send + Sync;
 
 /// Gerçek istemci: curl, sertifika doğrulanır, gövde standart girdiden (parola komut satırında görünmez).
+/// curl argümanları: gövde (parola, cihaz anahtarı) standart girdiden gelir, komut satırında görünmez.
+/// Bağlanma 10 sn, toplam 25 sn (merkez ilk girişte kuyruğu en çok 15 sn bekler); panelin işçileri uzun bloklanmasın.
+pub fn curl_args(url: &str) -> Vec<String> {
+    ["-s", "--connect-timeout", "10", "--max-time", "25", "-X", "POST", "-H", "Content-Type: application/json", "--data-binary", "@-", "-w", "\n%{http_code}", url]
+        .iter()
+        .map(|s| s.to_string())
+        .collect()
+}
+
 pub fn curl(yol: &str, govde: &str) -> Result<(u16, String), String> {
     let mut c = Command::new("curl")
-        .args(["-s", "--max-time", "40", "-X", "POST", "-H", "Content-Type: application/json", "--data-binary", "@-", "-w", "\n%{http_code}"])
-        .arg(format!("{API}{yol}"))
+        .args(curl_args(&format!("{API}{yol}")))
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::null())
@@ -127,7 +141,8 @@ pub fn giris(numara: &str, pw: &str, wg_pub: &str, ssh_pub: &str, isletme_adi: &
     let alanlar = (|| {
         let (tuz, ozet, yineleme) = ozet_alanlari(&v)?;
         Some(Giris {
-            merkez: Merkez { numara: numara.into(), tuz, ozet, yineleme, cihaz_anahtari: metin(&v, "cihaz_anahtari")?, son_eslesme: now, deneme: 0.0 },
+            merkez: Merkez { numara: numara.into(), tuz, ozet, yineleme, cihaz_anahtari: metin(&v, "cihaz_anahtari")?, son_eslesme: now, deneme: 0.0,
+                             lisans: metin(&v, "lisans").unwrap_or_default(), lisans_bitis: metin(&v, "lisans_bitis").unwrap_or_default() },
             tunel_ip: metin(&v, "tunel_ip")?,
             sunucu_pub: metin(&v, "sunucu_pub")?,
             uc_nokta: metin(&v, "uc_nokta")?,
@@ -171,6 +186,12 @@ pub fn eslesme(m: &mut Merkez, isletme_adi: &str, unvan: &str, temizlendi: bool,
         Some("bagli") => {
             let (tuz, ozet, yineleme) = ozet_alanlari(&v).ok_or("merkez yanıtında parola özeti yok")?;
             (m.tuz, m.ozet, m.yineleme, m.son_eslesme) = (tuz, ozet, yineleme, now);
+            if let Some(l) = metin(&v, "lisans") {
+                m.lisans = l;
+            }
+            if let Some(b) = metin(&v, "lisans_bitis") {
+                m.lisans_bitis = b;
+            }
             Ok(Eslesme::Bagli { uyelik: metin(&v, "uyelik").unwrap_or_default() })
         }
         _ => Err("merkezden geçersiz yanıt".into()),
@@ -188,14 +209,54 @@ pub fn parola(m: &mut Merkez, eski: &str, yeni: &str, http: &Http) -> Result<(),
     Ok(())
 }
 
-/// Son başarılı eşitlemeden sonraki ilk 06:00 (TR) geçtiyse ve son denemenin üzerinden 30 dk geçtiyse.
+/// Eşitleme zamanı: son başarılı eşitlemeden sonraki ilk 06:00 (TR) geçtiyse ve son denemenin üzerinden 30 dk geçtiyse.
+/// Lisans kapalıyken 06:00 beklenmez (ödeme/askıdan çıkarma 30 dk içinde cihaza insin). Saat geri gittiyse (deneme
+/// gelecekte) beklenmez.
 pub fn zamani_geldi(m: &Merkez, now: f64) -> bool {
-    let yerel = m.son_eslesme + TR;
+    if m.deneme > now + 60.0 {
+        return true;
+    }
+    if now - m.deneme < YENIDEN_SN {
+        return false;
+    }
+    if !lisans_aktif(m, now) {
+        return true;
+    }
+    let yerel = m.son_eslesme.min(now) + TR;
     let mut alti = (yerel / 86_400.0).floor() * 86_400.0 + 6.0 * 3600.0;
     if yerel >= alti {
         alti += 86_400.0;
     }
-    now >= alti - TR && now - m.deneme >= YENIDEN_SN
+    now >= alti - TR
+}
+
+/// Lisans açık mı: askıda/bitti değil ve bitiş günü (TR) geçmemiş. Eski bağ (alan yok) açık sayılır.
+pub fn lisans_aktif(m: &Merkez, now: f64) -> bool {
+    let bugun = crate::ortak::now_iso(now);
+    let bugun = crate::ortak::day_of(&bugun);
+    m.lisans != "askida" && m.lisans != "bitti" && (m.lisans_bitis.is_empty() || bugun <= m.lisans_bitis.as_str())
+}
+
+/// Misafirlere internet verilir mi: cihaz bir müşteriye bağlı ve lisansı açık.
+pub fn hizmet_acik(path: &Path, now: f64) -> bool {
+    oku(path).is_some_and(|m| lisans_aktif(&m, now))
+}
+
+/// Fabrika dönüşünde merkeze "temizlendi" bildirimi. Yalnızca merkez cihazı serbest bırakmışsa (ya da zaten tanımıyorsa —
+/// önceki bildirim ulaşmış / zorla ayrılmış) tamam; "bağlı" derse hata (bağ silinmesin). Ağ hatasında `deneme` kez dener.
+pub fn temizlendi_bildir(m: &Merkez, http: &Http, deneme: u32, bekle: &dyn Fn()) -> Result<(), String> {
+    let mut son = String::new();
+    for i in 0..deneme {
+        if i > 0 {
+            bekle();
+        }
+        match eslesme(&mut m.clone(), "", "", true, http, 0.0) {
+            Ok(Eslesme::Serbest) | Ok(Eslesme::Taninmadi) => return Ok(()),
+            Ok(Eslesme::Bagli { .. }) => return Err("merkez cihazı serbest bırakmadı".into()),
+            Err(e) => son = e,
+        }
+    }
+    Err(son)
 }
 
 #[cfg(test)]
@@ -229,11 +290,11 @@ mod tests {
     fn ornek() -> Merkez {
         let tuz = "a1b2c3d4".to_string();
         Merkez { numara: N.into(), ozet: crate::hesap::digest("parola-12345", &tuz, 120_000), tuz, yineleme: 120_000,
-                 cihaz_anahtari: "gizli-anahtar".into(), son_eslesme: 0.0, deneme: 0.0 }
+                 cihaz_anahtari: "gizli-anahtar".into(), son_eslesme: 0.0, deneme: 0.0, ..Default::default() }
     }
 
     const GIRIS_OK: &str = r#"{"tuz":"a1b2c3d4","ozet":"ee38d08b3d6573ecc281263ad6259d2e7ee39f37d6b8958b3180906580a44495","yineleme":120000,
-        "cihaz_anahtari":"k-123","tunel_ip":"10.99.0.12","sunucu_pub":"S","uc_nokta":"vpn.wificorrect.com:51820","yedek_hedefi":"wfc-4511643@10.99.0.1:"}"#;
+        "cihaz_anahtari":"k-123","tunel_ip":"10.99.0.12","sunucu_pub":"S","uc_nokta":"vpn.wificorrect.com:51820","yedek_hedefi":"wfc-4511643@10.99.0.1:","lisans":"aktif","lisans_bitis":"2027-10-04"}"#;
 
     #[test]
     fn numara_ozet_ve_dosya() {
@@ -331,4 +392,72 @@ mod tests {
         m.deneme = tr(30.0); // 06:00 denemesi başarısız
         assert!(!zamani_geldi(&m, tr(30.4)) && zamani_geldi(&m, tr(30.5)));
     }
+
+    #[test]
+    fn lisans_ve_hizmet() {
+        let gun = 1_791_072_000.0; // 2026-10-04 00:00 UTC (TR 03:00)
+        let (h, _) = sahte(vec![Ok((200, GIRIS_OK))]);
+        let g = giris(N, "parola-12345", "W", "S", "", "", &*h, gun).unwrap();
+        assert_eq!((g.merkez.lisans.as_str(), g.merkez.lisans_bitis.as_str()), ("aktif", "2027-10-04"));
+        let mut m = ornek();
+        assert!(lisans_aktif(&m, gun)); // eski bağ: alan yok → açık
+        m.lisans_bitis = "2026-10-04".into();
+        assert!(lisans_aktif(&m, gun + 20.0 * 3600.0)); // bitiş günü (TR 23:00) hâlâ açık
+        assert!(!lisans_aktif(&m, gun + 21.5 * 3600.0)); // TR ertesi gün
+        m.lisans_bitis = "2027-01-01".into();
+        m.lisans = "askida".into();
+        assert!(!lisans_aktif(&m, gun));
+        m.lisans = "bitti".into();
+        assert!(!lisans_aktif(&m, gun));
+        let p = tmp("hizmet").join("merkez.json");
+        assert!(!hizmet_acik(&p, gun)); // bağlı değil: kapalı
+        m.lisans = "aktif".into();
+        kaydet(&p, &m).unwrap();
+        assert!(hizmet_acik(&p, gun));
+        // eşitleme lisansı günceller
+        let (h, _) = sahte(vec![Ok((200, r#"{"durum":"bagli","tuz":"a1b2c3d4","ozet":"x","yineleme":120000,"uyelik":"aktif","lisans":"askida","lisans_bitis":"2027-01-01"}"#))]);
+        eslesme(&mut m, "", "", false, &*h, gun).unwrap();
+        assert_eq!((m.lisans.as_str(), m.lisans_bitis.as_str()), ("askida", "2027-01-01"));
+    }
+
+    #[test]
+    fn kapaliyken_30_dk_da_bir_ve_saat_geri_giderse() {
+        let gun = 1_791_072_000.0;
+        let tr = |saat: f64| gun + (saat - 3.0) * 3600.0;
+        let mut m = ornek();
+        m.son_eslesme = tr(6.5);
+        m.lisans = "askida".into();
+        assert!(zamani_geldi(&m, tr(12.0))); // askıda: 06:00 beklenmez (ödeme gelince çabuk açılsın)
+        m.deneme = tr(12.0);
+        assert!(!zamani_geldi(&m, tr(12.4)) && zamani_geldi(&m, tr(12.5)));
+        m.lisans = "aktif".into();
+        m.deneme = tr(40.0); // saat ileri sıçramıştı, sonra geri geldi
+        assert!(zamani_geldi(&m, tr(30.5)));
+    }
+
+    #[test]
+    fn curl_parolayi_komut_satirina_koymaz() {
+        let a = curl_args("https://api.wificorrect.com/api/giris");
+        assert!(a.iter().any(|x| x == "@-") && a.windows(2).any(|w| w[0] == "--connect-timeout" && w[1] == "10"));
+        assert!(a.windows(2).any(|w| w[0] == "--max-time" && w[1] == "25") && !a.iter().any(|x| x.contains("parola")));
+    }
+
+    #[test]
+    fn temizlendi_bildirimi_yalnizca_serbest_ya_da_taninmadi_ise_tamam() {
+        let m = ornek();
+        let say = std::sync::atomic::AtomicUsize::new(0);
+        let bekle = || {
+            say.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        };
+        let (h, _) = sahte(vec![Ok((200, r#"{"durum":"bagli","tuz":"t","ozet":"o","yineleme":120000,"uyelik":"aktif"}"#))]);
+        assert!(temizlendi_bildir(&m, &*h, 3, &bekle).is_err()); // merkez serbest bırakmamış: bağ silinmesin
+        let (h, _) = sahte(vec![Err("ağ"), Ok((200, r#"{"durum":"serbest"}"#))]);
+        assert!(temizlendi_bildir(&m, &*h, 3, &bekle).is_ok());
+        assert_eq!(say.load(std::sync::atomic::Ordering::SeqCst), 1); // bir kez beklendi, yeniden denendi
+        let (h, _) = sahte(vec![Ok((401, r#"{"hata":"Cihaz tanınmadı.","kod":"taninmadi"}"#))]);
+        assert!(temizlendi_bildir(&m, &*h, 3, &bekle).is_ok()); // önceki bildirim ulaşmış ya da zorla ayrılmış
+        let (h, _) = sahte(vec![Err("ağ"), Err("ağ"), Err("ağ")]);
+        assert!(temizlendi_bildir(&m, &*h, 3, &bekle).is_err());
+    }
+
 }

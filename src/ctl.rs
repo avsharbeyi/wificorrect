@@ -142,11 +142,15 @@ fn admin_parola(path: &str) -> ExitCode {
 }
 
 /// Fabrika dönüşü (panel ya da merkezin serbest bırakması): kayıtlar teslim edilince merkeze `temizlendi` bildirilir.
-fn fabrika_calistir(cfg: &Config, now: f64, runner: &Runner) -> ExitCode {
+/// Müşteriye bağlı cihaz elle sıfırlanmaz (merkezde sahipsiz bağlı kalırdı): önce yönetim merkezinden serbest bırakılır.
+fn fabrika_calistir(cfg: &Config, now: f64, runner: &Runner, serbest: bool) -> ExitCode {
+    if !serbest && crate::merkez::oku(std::path::Path::new(crate::merkez::PATH)).is_some() {
+        eprintln!("Cihaz bir müşteriye bağlı: fabrika ayarına dönmek için önce yönetim merkezinden serbest bırakın.");
+        return ExitCode::from(1);
+    }
     let path = std::env::var("WFC_AYAR").unwrap_or_else(|_| crate::ayar::PATH.to_string());
     let bildir = |m: &crate::merkez::Merkez| {
-        let mut m = m.clone();
-        crate::merkez::eslesme(&mut m, "", "", true, &crate::merkez::curl, now).map(|_| ())
+        crate::merkez::temizlendi_bildir(m, &crate::merkez::curl, 3, &|| std::thread::sleep(std::time::Duration::from_secs(5)))
     };
     match crate::fabrika::fabrika(
         cfg,
@@ -210,7 +214,7 @@ pub fn run(cfg: Config, args: &[String]) -> ExitCode {
         }
         Some("admin-parola") => admin_parola(crate::hesap::PATH),
         // Panel → Admin ayarları → Fabrika ayarları (ayrı systemd işinde; ağ yeniden kurulur)
-        Some("fabrika") => fabrika_calistir(&cfg, now, &runner),
+        Some("fabrika") => fabrika_calistir(&cfg, now, &runner, false),
         // Kaydedici zamanı gelince başlatır (her gün 06:00 sonrası; hata olursa 30 dk sonra yeniden)
         Some("merkez-eslesme") => {
             let p = std::path::Path::new(crate::merkez::PATH);
@@ -232,7 +236,7 @@ pub fn run(cfg: Config, args: &[String]) -> ExitCode {
                 }
                 Ok(crate::merkez::Eslesme::Serbest) => {
                     denetim("MERKEZ_SERBEST", "fabrika=basladi".into());
-                    fabrika_calistir(&cfg, now, &runner) // teslim olmazsa bağ kalır, 30 dk sonra yeniden denenir
+                    fabrika_calistir(&cfg, now, &runner, true) // teslim olmazsa bağ kalır, 30 dk sonra yeniden denenir
                 }
                 Ok(crate::merkez::Eslesme::Taninmadi) => {
                     // cihaz silinmez: merkezdeki bir hata bütün cihazları sıfırlamasın; admin yönetim merkezinden bakar
