@@ -1,4 +1,4 @@
-# v* etiketi itilince: testler + cihaz ikilisi (x86_64, Debian 13 uyumlu) + kurulum dosyaları → GitHub release.
+# v* etiketi itilince: testler + cihaz ikilisi + .deb + kurulum ISO'su (QEMU duman testiyle) + sunucu → GitHub release.
 name: release
 on:
   push:
@@ -21,17 +21,24 @@ jobs:
           python-version: "3.13"
       - run: sh scripts/sunucu/merkez/tests/hepsi.sh python
       - run: cargo build --release --locked
+      - run: sudo apt-get install -y -q xorriso debian-keyring qemu-system-x86 qemu-utils ovmf
       - name: Paketle
+        env:
+          WFC_SSH_PUB: ${{ vars.WFC_SSH_PUB }}
         run: |
-          s="${GITHUB_REF_NAME}"
+          s="${GITHUB_REF_NAME#v}"
           mkdir -p dist
           install -m 755 target/release/wificorrect dist/wificorrect
-          tar -czf "dist/wificorrect-cihaz-${s}-x86_64.tar.gz" -C dist wificorrect -C .. deploy
-          tar -czf "dist/wificorrect-sunucu-${s}.tar.gz" --exclude=__pycache__ -C scripts sunucu
-          (cd dist && sha256sum wificorrect *.tar.gz > SHA256SUMS)
+          sh scripts/paket.sh target/release/wificorrect "$s" dist
+          sh scripts/paket-test.sh "dist/wificorrect_${s}_amd64.deb"
+          sh scripts/iso.sh "dist/wificorrect_${s}_amd64.deb" "$s" dist
+          sudo chmod 666 /dev/kvm || true
+          sh scripts/iso-test.sh "dist/wificorrect-kurulum-${s}.iso"
+          tar -czf "dist/wificorrect-sunucu-${GITHUB_REF_NAME}.tar.gz" --exclude=__pycache__ -C scripts sunucu
+          (cd dist && sha256sum wificorrect *.deb *.iso *.tar.gz > SHA256SUMS)
       - name: Release
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          gh release create "${GITHUB_REF_NAME}" dist/wificorrect dist/*.tar.gz dist/SHA256SUMS \
+          gh release create "${GITHUB_REF_NAME}" dist/wificorrect dist/*.deb dist/*.iso dist/*.tar.gz dist/SHA256SUMS \
             --title "WifiCorrect ${GITHUB_REF_NAME}" --generate-notes
