@@ -226,7 +226,7 @@ pub fn run(cfg: Config, args: &[String]) -> ExitCode {
             let _ = crate::merkez::kaydet(p, &m);
             let denetim = |olay: &str, ek: String| ortak::audit(&cfg.main.log_root, Row::new(olay, &ortak::now_iso(now)).set("ek", ek));
             match crate::merkez::eslesme(&mut m, &cfg.main.site_name, &cfg.main.unvan, false, &crate::merkez::curl, now) {
-                Ok(crate::merkez::Eslesme::Bagli { uyelik }) => {
+                Ok(crate::merkez::Eslesme::Bagli { uyelik, .. }) => {
                     if let Err(e) = crate::merkez::kaydet(p, &m) {
                         eprintln!("{e}");
                         return ExitCode::from(1);

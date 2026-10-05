@@ -106,6 +106,7 @@ pub struct Giris {
     pub sunucu_pub: String,
     pub uc_nokta: String,
     pub yedek_hedefi: String,
+    pub ek: Ek,
 }
 
 fn metin(v: &Value, k: &str) -> Option<String> {
@@ -115,6 +116,54 @@ fn metin(v: &Value, k: &str) -> Option<String> {
 /// Yanıttan özet alanları (tuz, ozet, yineleme).
 fn ozet_alanlari(v: &Value) -> Option<(String, String, u32)> {
     Some((metin(v, "tuz")?, metin(v, "ozet")?, u32::try_from(v.get("yineleme")?.as_u64()?).ok()?))
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct SmsAyari {
+    pub mock: bool,
+    pub usercode: String,
+    pub password: String,
+    pub msgheader: String,
+    pub appkey: String,
+}
+
+/// Merkezin bağlı cihaza gönderdiği ekler (spec 2026-10-05 §5-6). Eski merkez göndermezse boş.
+#[derive(Debug, Clone, PartialEq, Default)]
+pub struct Ek {
+    pub admin: Option<(String, String, u32)>,
+    pub sms: Option<SmsAyari>,
+}
+
+fn ek(v: &Value) -> Ek {
+    let sms = v.get("sms").and_then(|s| {
+        let n = s.get("netgsm")?;
+        Some(SmsAyari { mock: s.get("mock")?.as_bool()?, usercode: metin(n, "usercode")?, password: metin(n, "password")?,
+                        msgheader: metin(n, "msgheader")?, appkey: metin(n, "appkey").unwrap_or_default() })
+    });
+    Ek { admin: v.get("admin").and_then(ozet_alanlari), sms }
+}
+
+/// Bağlanırken ve her eşitlemede: admin özeti hesaplara, SMS ayarı `cfg`'ye (kaydetmek çağıranın işi).
+/// Deneme modu kapalı ama zorunlu alan eksik SMS ayarı uygulanmaz (portal eksik ayarla açılmaz).
+pub fn ek_uygula(cfg: &mut Config, hesaplar: &crate::hesap::Hesaplar, ek: &Ek) -> Result<(bool, bool), String> {
+    let admin = match &ek.admin {
+        Some((tuz, ozet, y)) => hesaplar.set_admin_ozet(tuz, ozet, *y)?,
+        None => false,
+    };
+    let Some(s) = &ek.sms else { return Ok((admin, false)) };
+    if !s.mock && (s.usercode.is_empty() || s.password.is_empty() || s.msgheader.is_empty()) {
+        return Err("merkezden gelen SMS ayarı eksik (deneme modu kapalı); uygulanmadı".into());
+    }
+    let once = (cfg.sms.clone(), cfg.netgsm.usercode.clone(), cfg.netgsm.password.clone(), cfg.netgsm.msgheader.clone(), cfg.netgsm.appkey.clone());
+    cfg.sms.mock = s.mock;
+    cfg.sms.provider = "netgsm".into();
+    cfg.sms.merkez = true;
+    cfg.netgsm.usercode.clone_from(&s.usercode);
+    cfg.netgsm.password.clone_from(&s.password);
+    cfg.netgsm.msgheader.clone_from(&s.msgheader);
+    cfg.netgsm.appkey.clone_from(&s.appkey);
+    let sonra = (cfg.sms.clone(), cfg.netgsm.usercode.clone(), cfg.netgsm.password.clone(), cfg.netgsm.msgheader.clone(), cfg.netgsm.appkey.clone());
+    Ok((admin, once != sonra))
 }
 
 /// Hata yanıtı ise (mesaj, kod).
@@ -147,6 +196,7 @@ pub fn giris(numara: &str, pw: &str, wg_pub: &str, ssh_pub: &str, isletme_adi: &
             sunucu_pub: metin(&v, "sunucu_pub")?,
             uc_nokta: metin(&v, "uc_nokta")?,
             yedek_hedefi: metin(&v, "yedek_hedefi")?,
+            ek: ek(&v),
         })
     })();
     alanlar.ok_or(GirisHata::Baglanti)
@@ -164,7 +214,7 @@ pub fn uygula(cfg: &mut Config, g: &Giris) {
 
 #[derive(Debug)]
 pub enum Eslesme {
-    Bagli { uyelik: String },
+    Bagli { uyelik: String, ek: Ek },
     Serbest,
     Taninmadi,
 }
@@ -192,7 +242,7 @@ pub fn eslesme(m: &mut Merkez, isletme_adi: &str, unvan: &str, temizlendi: bool,
             if let Some(b) = metin(&v, "lisans_bitis") {
                 m.lisans_bitis = b;
             }
-            Ok(Eslesme::Bagli { uyelik: metin(&v, "uyelik").unwrap_or_default() })
+            Ok(Eslesme::Bagli { uyelik: metin(&v, "uyelik").unwrap_or_default(), ek: ek(&v) })
         }
         _ => Err("merkezden geçersiz yanıt".into()),
     }
@@ -296,6 +346,54 @@ mod tests {
     const GIRIS_OK: &str = r#"{"tuz":"a1b2c3d4","ozet":"ee38d08b3d6573ecc281263ad6259d2e7ee39f37d6b8958b3180906580a44495","yineleme":120000,
         "cihaz_anahtari":"k-123","tunel_ip":"10.99.0.12","sunucu_pub":"S","uc_nokta":"vpn.wificorrect.com:51820","yedek_hedefi":"wfc-4511643@10.99.0.1:","lisans":"aktif","lisans_bitis":"2027-10-04"}"#;
 
+    const EK: &str = r#""admin":{"tuz":"ab12","ozet":"OZET","yineleme":120000},
+        "sms":{"mock":false,"provider":"netgsm","netgsm":{"usercode":"8503027084","password":"gizli-1","msgheader":"gztp.blgsyr","appkey":""}}"#;
+
+    fn ekli(govde: &str, admin_ozet: &str) -> &'static str {
+        let g = govde.trim_end_matches('}').to_string() + "," + &EK.replace("OZET", admin_ozet) + "}";
+        Box::leak(g.into_boxed_str())
+    }
+
+    #[test]
+    fn giris_ve_eslesme_ekleri() {
+        let oz = crate::hesap::digest("merkez-parola-1", "ab12", 120_000);
+        let (h, _) = sahte(vec![Ok((200, ekli(GIRIS_OK, &oz)))]);
+        let g = giris(N, "parola-12345", "W", "S", "", "", &*h, 0.0).unwrap();
+        assert_eq!(g.ek.admin, Some(("ab12".into(), oz.clone(), 120_000)));
+        assert_eq!(g.ek.sms.as_ref().map(|s| (s.mock, s.msgheader.as_str())), Some((false, "gztp.blgsyr")));
+        let (h, _) = sahte(vec![Ok((200, GIRIS_OK))]); // eski merkez: ek yok
+        assert_eq!(giris(N, "parola-12345", "W", "S", "", "", &*h, 0.0).unwrap().ek, Ek::default());
+        let mut m = ornek();
+        let b = ekli(r#"{"durum":"bagli","tuz":"a1b2c3d4","ozet":"ee38d08b3d6573ecc281263ad6259d2e7ee39f37d6b8958b3180906580a44495","yineleme":120000,"uyelik":"aktif"}"#, &oz);
+        let (h, _) = sahte(vec![Ok((200, b))]);
+        assert!(matches!(eslesme(&mut m, "", "", false, &*h, 1.0), Ok(Eslesme::Bagli { ek, .. }) if ek.admin.is_some() && ek.sms.is_some()));
+    }
+
+    #[test]
+    fn ek_uygula_sms_ve_admin() {
+        let d = tmp("ek");
+        let hs = crate::hesap::Hesaplar::new(d.join("hesaplar.json"));
+        let oz = crate::hesap::digest("merkez-parola-1", "ab12", 120_000);
+        let ek = Ek { admin: Some(("ab12".into(), oz, 120_000)),
+                      sms: Some(SmsAyari { mock: false, usercode: "8503027084".into(), password: "gizli-1".into(), msgheader: "gztp.blgsyr".into(), appkey: String::new() }) };
+        let mut cfg = Config::default();
+        assert_eq!(ek_uygula(&mut cfg, &hs, &ek).unwrap(), (true, true));
+        assert!(!cfg.sms.mock && cfg.sms.merkez && cfg.netgsm.password == "gizli-1" && cfg.sms.provider == "netgsm");
+        assert!(cfg.sms_missing().is_empty());
+        assert_eq!(ek_uygula(&mut cfg, &hs, &ek).unwrap(), (false, false)); // aynı değerler: dokunulmaz
+    }
+
+    #[test]
+    fn ek_eksik_sms_uygulanmaz() {
+        // deneme modu kapalı ama başlık yok: uygulanırsa portal açılmaz (2026-10-05)
+        let d = tmp("ek-eksik");
+        let hs = crate::hesap::Hesaplar::new(d.join("hesaplar.json"));
+        let ek = Ek { admin: None, sms: Some(SmsAyari { mock: false, usercode: "850".into(), password: "x".into(), msgheader: String::new(), appkey: String::new() }) };
+        let mut cfg = Config::default();
+        assert!(ek_uygula(&mut cfg, &hs, &ek).is_err());
+        assert!(cfg.sms.mock && !cfg.sms.merkez);
+    }
+
     #[test]
     fn numara_ozet_ve_dosya() {
         assert!(numara_gecerli(N) && !numara_gecerli("451164") && !numara_gecerli("0451164") && !numara_gecerli("45116434") && !numara_gecerli("45116٤3"));
@@ -355,7 +453,7 @@ mod tests {
         let yeni = crate::hesap::digest("yeni-parola-1", "ff", 120_000);
         let govde: &'static str = Box::leak(format!(r#"{{"durum":"bagli","tuz":"ff","ozet":"{yeni}","yineleme":120000,"uyelik":"aktif"}}"#).into_boxed_str());
         let (h, c) = sahte(vec![Ok((200, govde)), Ok((200, r#"{"durum":"serbest"}"#)), Ok((401, r#"{"hata":"Cihaz tanınmadı.","kod":"taninmadi"}"#)), Err("yok")]);
-        assert!(matches!(eslesme(&mut m, "Bocafe", "Ltd", false, &*h, 5000.0), Ok(Eslesme::Bagli { uyelik }) if uyelik == "aktif"));
+        assert!(matches!(eslesme(&mut m, "Bocafe", "Ltd", false, &*h, 5000.0), Ok(Eslesme::Bagli { uyelik, .. }) if uyelik == "aktif"));
         assert!(dogrula(&m, "yeni-parola-1") && m.son_eslesme == 5000.0);
         let g = c.lock().unwrap()[0].1.clone(); // kopya: kilit tutulursa sonraki sahte çağrı kilitlenir
         assert_eq!((g["cihaz_anahtari"].as_str(), g["isletme_adi"].as_str(), g.get("temizlendi")), (Some("gizli-anahtar"), Some("Bocafe"), None));

@@ -96,6 +96,25 @@ impl Hesaplar {
         }
     }
 
+    /// Merkezden gelen admin özeti. Dönen: değişti mi (aynıysa dosyaya dokunulmaz, oturumlar düşmez).
+    pub fn set_admin_ozet(&self, tuz: &str, ozet: &str, yineleme: u32) -> Result<bool, String> {
+        if tuz.is_empty() || ozet.len() != 64 || !ozet.bytes().all(|b| b.is_ascii_hexdigit()) || yineleme < 10_000 {
+            return Err("merkezden gelen admin özeti geçersiz".into());
+        }
+        let _g = self.lock.lock().unwrap_or_else(|e| e.into_inner());
+        let mut m = self.load()?;
+        if m.get(ADMIN).is_some_and(|h| h.tuz == tuz && h.ozet == ozet && h.yineleme == yineleme) {
+            return Ok(false);
+        }
+        m.insert(ADMIN.into(), Hesap { rol: Rol::Hizmet, tuz: tuz.into(), ozet: ozet.into(), yineleme });
+        self.save(&m)?;
+        Ok(true)
+    }
+
+    pub fn ozet(&self, user: &str) -> Option<String> {
+        self.load().ok()?.get(user).map(|h| h.ozet.clone())
+    }
+
     /// `admin` parolasını koyar ya da değiştirir (cihaz konsolundan, hizmet sağlayıcı).
     pub fn set_admin(&self, pw: &str) -> Result<(), String> {
         let _g = self.lock.lock().unwrap_or_else(|e| e.into_inner());
@@ -215,6 +234,17 @@ mod tests {
         let d = std::env::temp_dir().join(format!("wfc-hesap-{}-{}", std::process::id(), N.fetch_add(1, Ordering::SeqCst)));
         let _ = std::fs::remove_dir_all(&d);
         d.join("hesaplar.json")
+    }
+
+    #[test]
+    fn admin_ozeti_merkezden() {
+        let h = Hesaplar::new(tmp());
+        let oz = digest("merkez-parola-1", "ab12", 120_000);
+        assert!(h.set_admin_ozet("ab12", &oz, 120_000).unwrap());
+        assert!(!h.set_admin_ozet("ab12", &oz, 120_000).unwrap()); // aynı: değişmedi
+        assert_eq!(h.verify(ADMIN, "merkez-parola-1"), Some(Rol::Hizmet));
+        assert_eq!(h.ozet(ADMIN), Some(oz));
+        assert!(h.set_admin_ozet("", "zz", 120_000).is_err() && h.set_admin_ozet("ab", "ab", 10).is_err()); // bozuk özet yazılmaz
     }
 
     #[test]
