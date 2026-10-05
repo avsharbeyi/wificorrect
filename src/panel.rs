@@ -988,6 +988,13 @@ impl Panel {
         for (k, _, new) in &changes {
             set_field(&mut cfg, k, new);
         }
+        if !cfg.sms.mock {
+            let eksik = cfg.sms_missing();
+            if !eksik.is_empty() {
+                // portal eksik ayarla açılmaz; misafirler giriş sayfasını hiç göremezdi
+                return redirect(back, Some((&format!("SMS deneme modunu kapatmak için şu alanlar gerekli: {}; hiçbir şey kaydedilmedi.", eksik.join(", ")), true)));
+            }
+        }
         if cfg.uzak.enabled {
             if let Some(e) = crate::uzak::eksik(&cfg) {
                 return redirect(back, Some((&format!("Uzak erişimi açmak için {e} gerekli; hiçbir şey kaydedilmedi."), true)));
@@ -1416,6 +1423,24 @@ mod tests {
         assert_eq!(Config::load(&e.p.cfg_path).unwrap().netgsm.password, "gizli-sifre-1");
         let audit = std::fs::read_to_string(e.root.join("5651/gunluk/2026-09-29/denetim.csv")).unwrap();
         assert!(audit.contains("netgsm.password: *** → ***") && !audit.contains("gizli-sifre-1"));
+    }
+
+    #[test]
+    fn mock_cannot_be_turned_off_with_missing_sms_settings() {
+        // eksik ayarla deneme modu kapanırsa portal açılmaz (çöker-yeniden başlar), misafirler giriş sayfasını göremez
+        let e = env();
+        let (tok, csrf) = setup_and_login(&e, "admin", "hizmet-parola-1");
+        let f = |extra: &[(&str, &str)]| {
+            let mut v = vec![("csrf", csrf.as_str()), ("netgsm.usercode", "8503027084"), ("netgsm.password", "gizli-sifre-1")];
+            v.extend_from_slice(extra);
+            e.p.handle(&req("POST", "/admin-ayarlari", &v, Some(&tok)))
+        };
+        let r = f(&[("sms.mock", "0")]);
+        assert!(r.headers.iter().any(|(_, v)| v.contains("msgheader")) || r.body.contains("msgheader"));
+        let c = Config::load(&e.p.cfg_path).unwrap();
+        assert!(c.sms.mock && c.netgsm.password.is_empty()); // hiçbir şey kaydedilmedi
+        f(&[("sms.mock", "0"), ("netgsm.msgheader", "GOZTEPE")]);
+        assert!(!Config::load(&e.p.cfg_path).unwrap().sms.mock);
     }
 
     #[test]
