@@ -174,3 +174,17 @@ iner; o zamana kadar cihazda eski parola geçerlidir.
   parola değişimi; `curl` komutunda parolanın argümanda olmaması.
 - Uçtan uca: yönetimde müşteri aç → cihazda giriş → tünel ve yedek kendiliğinden → ertesi sabah eşitleme →
   merkezi panelde kayıtlar → serbest bırak → cihaz temizlenip giriş ekranına döner.
+
+## 12. Ek (2026-10-05, kullanıcı kararları): lisans ve parola görme
+
+- **Müşteri parolası yönetimde görünür.** Sunucu müşteri parolasını (`parola_acik`) özetle birlikte açık saklar; yalnızca
+  yönetim ekranındaki müşteri sayfasında gösterilir (müşteri panelinde, API'de, hareket kaydında yok). Veritabanı `wcpanel`
+  600, `secure_delete` açık. Bu özellikten önce açılmış müşterilerde "bilinmiyor — sıfırlayın".
+- **Yıllık lisans.** Her müşterinin `lisans_bitis` (YYYY-AA-GG) ve `askida` alanı var; yeni müşteriye 1 yıl verilir.
+  Yönetim: "Lisansı 1 yıl uzat" (bitişin üstüne, geçmişse bugünden), "Askıya al / Askıdan çıkar", "Bitişi ayarla".
+  API `giris`/`eslesme` yanıtları `lisans` (aktif|bitti|askida) ve `lisans_bitis` döner. Ödeme ekranı sonradan
+  `veri.lisans_uzat` çağırır.
+- **Cihazda uygulama.** Lisans açık = durum "aktif" ve bitiş günü (TR) geçmemiş. Kapalıysa ya da cihaz bir müşteriye bağlı
+  değilse portal misafire internet vermez, açık misafir oturumları kapanır (kapalıyken her turda). Bitiş tarihini cihaz
+  kendisi uygular (internetsiz de). Lisans kapalıyken merkezle 30 dk'da bir eşitlenir (ödeme/askıdan çıkarma en geç
+  30 dk'da cihaza iner); açıkken her gün 06:00. Sahip ve admin panele girmeye devam eder; panelde uyarı görünür.

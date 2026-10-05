@@ -219,7 +219,7 @@ cihaz-kapat)
 	[ $# -eq 2 ] || kullanim
 	# eski (elle eklenmiş) kayıtlarda büyük harf olabilir: yalnızca harf/rakam/tire/nokta/alt çizgi; satır kayıtta olmalı
 	printf '%s' "$2" | grep -Eq '^[A-Za-z0-9][A-Za-z0-9._-]{0,40}$' || { echo "geçersiz ad: $2" >&2; exit 2; }
-	satir=$(grep "^cihaz;$2;" "$KAYIT") || { echo "$2 aktif bir cihaz değil" >&2; exit 1; }
+	satir=$(awk -F';' -v a="$2" '$1=="cihaz" && $2==a {print; exit}' "$KAYIT"); [ -n "$satir" ] || { echo "$2 aktif bir cihaz değil" >&2; exit 1; }
 	pub=$(printf '%s' "$satir" | cut -d';' -f4)
 	u=$(printf '%s' "$satir" | cut -d';' -f5)
 	# WireGuard eşi: "# cihaz <ad>" satırı ve ardından gelen [Peer] / PublicKey / AllowedIPs satırları çıkar

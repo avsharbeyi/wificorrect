@@ -230,11 +230,11 @@ pub fn zamani_geldi(m: &Merkez, now: f64) -> bool {
     now >= alti - TR
 }
 
-/// Lisans açık mı: askıda/bitti değil ve bitiş günü (TR) geçmemiş. Eski bağ (alan yok) açık sayılır.
+/// Lisans açık mı: durum "aktif" (ya da eski bağda boş) ve bitiş günü (TR) geçmemiş. Bilinmeyen durum kapalı sayılır.
 pub fn lisans_aktif(m: &Merkez, now: f64) -> bool {
     let bugun = crate::ortak::now_iso(now);
     let bugun = crate::ortak::day_of(&bugun);
-    m.lisans != "askida" && m.lisans != "bitti" && (m.lisans_bitis.is_empty() || bugun <= m.lisans_bitis.as_str())
+    (m.lisans.is_empty() || m.lisans == "aktif") && (m.lisans_bitis.is_empty() || bugun <= m.lisans_bitis.as_str())
 }
 
 /// Misafirlere internet verilir mi: cihaz bir müşteriye bağlı ve lisansı açık.
@@ -408,6 +408,8 @@ mod tests {
         m.lisans = "askida".into();
         assert!(!lisans_aktif(&m, gun));
         m.lisans = "bitti".into();
+        assert!(!lisans_aktif(&m, gun));
+        m.lisans = "beklemede".into(); // bilinmeyen durum (merkezde yeni bir değer) açık sayılmaz
         assert!(!lisans_aktif(&m, gun));
         let p = tmp("hizmet").join("merkez.json");
         assert!(!hizmet_acik(&p, gun)); // bağlı değil: kapalı

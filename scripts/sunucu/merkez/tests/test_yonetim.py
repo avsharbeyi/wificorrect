@@ -190,6 +190,18 @@ def test_parola_gorunur_ve_lisans_yonetimi():
         assert "bilinmiyor" in Y.al(app, f"/m/{v2}", c)[2].decode()
 
 
+def test_sifirlama_sayfasi_ve_lisans_tarihi_kaydi():
+    with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
+        app, v, _, c, _ = kur(tmp)
+        n, _ = v.musteri_ekle()
+        t = Y.csrf(Y.al(app, f"/m/{n}", c))
+        s = Y.gonder(app, f"/m/{n}/parola-sifirla", c, {"csrf": t})[2].decode()
+        assert "yalnızca şimdi" not in s and "müşteri sayfasında" in s
+        Y.gonder(app, f"/m/{n}/lisans", c, {"csrf": t, "islem": "tarih", "tarih": "20270101"})
+        assert v.hareketler(n)[0]["ayrinti"] == "bitis=2027-01-01"  # girilen değil, kaydedilen tarih
+        assert "gününden sonra" in Y.al(app, f"/m/{n}", c)[2].decode()
+
+
 if __name__ == "__main__":
     for _name, _fn in sorted(globals().items()):
         if _name.startswith("test_") and callable(_fn):

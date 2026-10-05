@@ -397,32 +397,36 @@ impl Kaydedici {
         ortak::audit(&self.cfg.main.log_root, row);
     }
 
-    /// Lisans kapanınca (bitiş günü geçti, askıya alındı ya da cihaz bağlı değil) açık misafir oturumları kapanır;
-    /// portal zaten yenisini kabul etmez. Açılınca yalnızca denetime yazılır (misafirler yeniden girer).
+    /// Lisans kapalıyken (bitiş günü geçti, askıya alındı ya da cihaz bağlı değil) açık misafir oturumları her turda
+    /// kapanır: kapanış anında doğrulanmakta olan bir oturum sonradan açılsa da kalmaz. Portal zaten yenisini kabul etmez.
+    /// Denetime yalnızca gerçek geçişte ya da oturum kapandığında yazılır (boş turlarda satır yok).
     fn check_lisans(&mut self, now: f64) {
         let acik = crate::merkez::hizmet_acik(&self.merkez_path, now);
-        let onceki = self.lisans_acik.replace(acik);
-        if onceki == Some(acik) {
-            return;
-        }
+        let onceki = self.lisans_acik;
         let root = self.cfg.main.log_root.clone();
         if acik {
-            if onceki.is_some() {
+            if onceki == Some(false) {
                 ortak::audit(&root, Row::new("LISANS_ACIK", &ortak::now_iso(now)));
             }
+            self.lisans_acik = Some(true);
             return;
         }
         let state = self.cfg.main.state_root.clone();
-        let Ok(_g) = ortak::state_lock(&state) else { return };
+        let Ok(_g) = ortak::state_lock(&state) else { return }; // kilit alınamazsa sonraki turda yeniden
         let mut ses = ortak::load_sessions(&state);
         let macs: Vec<String> = ses.keys().cloned().collect();
         for mac in &macs {
             ortak::close_session(&root, &mut ses, mac, "lisans", now, &*self.runner);
         }
-        if let Err(e) = ortak::save_sessions(&state, &ses) {
-            eprintln!("kaydedici: oturum dosyası yazılamadı: {e}");
+        if !macs.is_empty() {
+            if let Err(e) = ortak::save_sessions(&state, &ses) {
+                eprintln!("kaydedici: oturum dosyası yazılamadı: {e}");
+            }
         }
-        ortak::audit(&root, Row::new("LISANS_KAPALI", &ortak::now_iso(now)).set("ek", format!("kapanan_oturum={}", macs.len())));
+        if !macs.is_empty() || onceki == Some(true) {
+            ortak::audit(&root, Row::new("LISANS_KAPALI", &ortak::now_iso(now)).set("ek", format!("kapanan_oturum={}", macs.len())));
+        }
+        self.lisans_acik = Some(false);
     }
 
     /// Yönetim merkezi eşitlemesi: zamanı geldiyse (her gün 06:00 sonrası, hatada 30 dk sonra) arka planda
@@ -912,12 +916,19 @@ mod tests {
         assert!(calls.lock().unwrap().iter().any(|c| c.starts_with("nft delete element")));
         let n = calls.lock().unwrap().len();
         k.check_lisans(1020.0);
-        assert_eq!(calls.lock().unwrap().len(), n); // bir kez
+        assert_eq!(calls.lock().unwrap().len(), n); // açık oturum yok: bir şey yapılmaz
+        // yarış: lisans kapanırken doğrulanan misafir oturumu sonradan açıldı → bir sonraki turda o da kapanır
+        let mut ses = ortak::load_sessions(&state);
+        ses.insert(M1.into(), sess("5334553132", "10.50.0.23", 9e9, "s2"));
+        ortak::save_sessions(&state, &ses).unwrap();
+        k.check_lisans(1025.0);
+        assert!(ortak::load_sessions(&state).is_empty());
         m.lisans = "aktif".into();
         crate::merkez::kaydet(&k.merkez_path, &m).unwrap();
         k.check_lisans(1030.0);
         let audit = std::fs::read_to_string(root.join(format!("5651/gunluk/{}/denetim.csv", ortak::day_of(&ortak::now_iso(1010.0))))).unwrap();
         assert!(audit.contains("LISANS_KAPALI") && audit.contains("LISANS_ACIK"));
+        assert_eq!(audit.matches("LISANS_KAPALI").count(), 2); // geçişte + yarışta kapanan oturum; boş turlarda satır yok
     }
 
 }

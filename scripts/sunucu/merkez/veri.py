@@ -57,6 +57,7 @@ class Veri:
         self.db = sqlite3.connect(yol, check_same_thread=False, isolation_level=None)
         self.db.row_factory = sqlite3.Row
         self.db.execute("PRAGMA foreign_keys = ON")
+        self.db.execute("PRAGMA secure_delete = ON")  # değişen açık parolalar dosyanın boş sayfalarında kalmasın
         self.db.executescript(SEMA)
         self._gocur()
 
@@ -171,9 +172,11 @@ class Veri:
         return yeni
 
     def lisans_ayarla(self, numara, tarih):
-        tarih = datetime.date.fromisoformat(tarih).isoformat()  # ValueError
+        """Dönen: kaydedilen tarih (YYYY-AA-GG). Geçersizse ValueError."""
+        tarih = datetime.date.fromisoformat(tarih).isoformat()
         with self._islem() as db:
             db.execute("UPDATE musteri SET lisans_bitis = ? WHERE numara = ?", (tarih, numara))
+        return tarih
 
     def askiya_al(self, numara, askida):
         with self._islem() as db:

@@ -127,7 +127,7 @@ class Yonetim(web.Taban):
             self.veri.hareket("admin", ip, "PAROLA_SIFIRLANDI", n)
             return yanit_html(self.sayfa("Parola sıfırlandı", kart(
                 f'<h1>Müşteri {n}: yeni parola</h1><p>Parola</p><p class="sir">{e(pw)}</p>'
-                '<p class="alt">Bu parola yalnızca şimdi gösterilir. Merkezi panelde hemen, cihazda ertesi sabah '
+                '<p class="alt">Parola müşteri sayfasında da görünür. Merkezi panelde hemen, cihazda ertesi sabah '
                 f'06:00 eşitlemesinden sonra geçerlidir.</p><p><a href="/m/{n}">← Müşteri sayfası</a></p>'), ot))
         if (yontem, alt) == ("POST", "/serbest"):
             return self.serbest(ot, n, form, ip)
@@ -235,7 +235,7 @@ class Yonetim(web.Taban):
                     f'<form method="post" action="/m/{n}/lisans" class="ara"><input type="hidden" name="csrf" value="{cs}">'
                     '<input type="hidden" name="islem" value="tarih"><input name="tarih" type="date" required aria-label="Lisans bitiş tarihi">'
                     '<button>Bitişi ayarla</button></form>'
-                    '<p class="alt">Lisansı biten ya da askıya alınan cihaz misafirlere internet vermez; cihaz bunu bitiş tarihinde '
+                    '<p class="alt">Lisansı biten ya da askıya alınan cihaz misafirlere internet vermez; cihaz bunu bitiş gününden sonra '
                     'kendisi uygular, askıya alma/uzatma en geç 30 dakikada (askıdayken) ya da ertesi 06:00\'da cihaza iner.</p>'
                     f'<form method="post" action="/m/{n}/parola-sifirla"><input type="hidden" name="csrf" value="{cs}">'
                     '<button>Parola sıfırla</button></form>'
@@ -263,10 +263,10 @@ class Yonetim(web.Taban):
             self.veri.hareket("admin", ip, "LISANS_ACILDI", n)
         elif islem == "tarih":
             try:
-                self.veri.lisans_ayarla(n, form.get("tarih", ""))
+                tarih = self.veri.lisans_ayarla(n, form.get("tarih", ""))
             except ValueError:
                 return yanit_html(self.mesaj(ot, "Geçersiz tarih", "Tarih YYYY-AA-GG biçiminde olmalı."), 400)
-            self.veri.hareket("admin", ip, "LISANS_TARIHI", n, f"bitis={form.get('tarih')}")
+            self.veri.hareket("admin", ip, "LISANS_TARIHI", n, f"bitis={tarih}")
         return yonlendir(f"/m/{n}")
 
     def serbest(self, ot, n, form, ip):

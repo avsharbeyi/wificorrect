@@ -144,6 +144,12 @@ def test_eski_veritabani_gocu():
         assert (m["lisans_bitis"], m["parola_acik"], m["askida"]) == ("2027-10-04", "", 0)
 
 
+def test_silinen_veri_sayfalarda_kalmaz():
+    with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
+        v = yeni(tmp)
+        assert v.db.execute("PRAGMA secure_delete").fetchone()[0] == 1  # eski açık parolalar dosyada kalmasın
+
+
 if __name__ == "__main__":
     for _name, _fn in sorted(globals().items()):
         if _name.startswith("test_") and callable(_fn):
