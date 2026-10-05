@@ -100,6 +100,8 @@ pub struct Portal {
     nonce: AtomicU64,
     pub host: String,
     pub base_url: String,
+    /// Yönetim merkezi bağı: bağlı değilse ya da lisans kapalıysa misafire internet verilmez (testte geçici)
+    pub merkez_path: std::path::PathBuf,
 }
 
 fn template(name: &str) -> &'static str {
@@ -278,6 +280,7 @@ impl Portal {
             send_sms,
             check_sms,
             nonce: AtomicU64::new(1),
+            merkez_path: crate::merkez::PATH.into(),
         }
     }
 
@@ -378,7 +381,16 @@ impl Portal {
     }
 
     // --- akış
+    /// Lisans kapalı / cihaz bağlı değil: misafir giremez (yeni kod gönderilmez).
+    fn hizmet_kapali(&self) -> Option<Page> {
+        (!crate::merkez::hizmet_acik(&self.merkez_path, (self.wall)()))
+            .then(|| self.error_page("Bu işletmenin misafir internet hizmeti şu an kapalı. Lütfen işletme görevlisine başvurun."))
+    }
+
     pub fn home(&self, ip: &str, mac: Option<&str>, dst: &str) -> Page {
+        if let Some(pg) = self.hizmet_kapali() {
+            return pg;
+        }
         let Some(mac) = mac else { return self.error_page(NO_MAC) };
         if self.session_for(ip, mac) || self.rehome(ip, mac) {
             self.success_page(dst)
@@ -426,6 +438,9 @@ impl Portal {
     }
 
     pub fn send_code(&self, ip: &str, mac: Option<&str>, form: &Form) -> Page {
+        if let Some(pg) = self.hizmet_kapali() {
+            return pg;
+        }
         let get = |k: &str| form.get(k).map(String::as_str).unwrap_or("");
         let dst = safe_dst(get("dst"));
         let Some(mac) = mac else { return self.error_page(NO_MAC) };
@@ -510,6 +525,9 @@ impl Portal {
     }
 
     pub fn resend(&self, ip: &str, mac: Option<&str>) -> Page {
+        if let Some(pg) = self.hizmet_kapali() {
+            return pg;
+        }
         let p = mac.and_then(|m| lock(&self.pending).get(m).cloned());
         let Some(p) = p else {
             return self.form_page(&Form::new(), vec![("hata_genel", "Kod bulunamadı, lütfen bilgilerinizi yeniden girin.".into())], "");
@@ -518,6 +536,9 @@ impl Portal {
     }
 
     pub fn verify(&self, ip: &str, mac: Option<&str>, form: &Form) -> Page {
+        if let Some(pg) = self.hizmet_kapali() {
+            return pg;
+        }
         let Some(mac) = mac else { return self.error_page(NO_MAC) };
         let now = (self.clock)();
         let fail_lock = self.cfg.limits.verify_fail_lock_min * 60;
@@ -857,6 +878,10 @@ mod tests {
                 _ => (false, None),
             }),
         );
+        let mut p = p;
+        p.merkez_path = root.join("merkez.json");
+        std::fs::create_dir_all(&root).unwrap();
+        crate::merkez::kaydet(&p.merkez_path, &crate::merkez::Merkez { numara: "4511643".into(), ..Default::default() }).unwrap();
         T { p, mono, wall, calls, sms: sms_log, root }
     }
 
@@ -1138,4 +1163,20 @@ mod tests {
         assert_eq!(isletme_yerlestir("Göztepe Kafe’ye", "X"), "Göztepe Kafe’ye"); // başka kelimeye dokunmaz
         assert_eq!((ek("Hilton Otel", 'y'), ek("Starbucks", 'y'), ek("Kahvecim", 'y'), ek("Boca", 'y')), ("e".into(), "a".into(), "e".into(), "ya".into()));
     }
+
+    #[test]
+    fn lisans_kapaliyken_portal_internet_vermez() {
+        let t = setup(|_| {});
+        let mut m = crate::merkez::oku(&t.p.merkez_path).unwrap();
+        m.lisans = "askida".into();
+        crate::merkez::kaydet(&t.p.merkez_path, &m).unwrap();
+        let pg = t.p.home(IP, Some(MAC), "");
+        assert_eq!(pg.tpl, "hata");
+        assert!(t.p.render(&pg).contains("internet hizmeti şu an kapalı"));
+        assert_eq!(t.p.send_code(IP, Some(MAC), &good("5334553132")).tpl, "hata");
+        assert_eq!(t.sms_count(), 0);
+        crate::merkez::sil(&t.p.merkez_path); // bağlı değil: kapalı
+        assert_eq!(t.p.home(IP, Some(MAC), "").tpl, "hata");
+    }
+
 }

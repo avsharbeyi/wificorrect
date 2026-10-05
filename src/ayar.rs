@@ -10,7 +10,7 @@ pub const PATH: &str = "/etc/wificorrect/ayarlar.toml";
 pub struct Main {
     /// İşletme adı (giriş sayfası, sözleşmedeki İŞLETMECİ)
     pub site_name: String,
-    /// Vergi levhasındaki unvan (açık rıza metnindeki [vergi levhası unvanı]); kurulumda girilir
+    /// Vergi levhasındaki unvan (açık rıza metnindeki [vergi levhası unvanı]); işletme sahibi Ayarlar'da girer
     pub unvan: String,
     pub iface: String,
     pub router_ip: String,

@@ -1,0 +1,12 @@
+#!/bin/bash
+# /etc/cron.daily: 5651 saklama süresi (730 gün, cihazdaki retention_days ile aynı) dolan gün klasörleri silinir.
+sinir=$(date -d '730 days ago' +%F)
+for d in /srv/hotspot-arsiv/*/gunluk/????-??-?? /srv/wificorrect-arsiv/*/veri/gunluk/????-??-??; do
+  [[ -d $d && ${d##*/} < $sinir ]] && rm -rf -- "$d"
+done
+# Panel özetleri de arşivle aynı sürede silinir (kisiler.json'u wc-istatistik uzlaştırır)
+for f in /var/lib/wificorrect/detay/*/????-??-??.json; do
+  g=${f##*/}
+  [[ -f $f && ${g%.json} < $sinir ]] && rm -f -- "$f"
+done
+exit 0

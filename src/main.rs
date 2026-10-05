@@ -8,6 +8,7 @@ mod filtre;
 mod hesap;
 mod kayit;
 mod kaydedici;
+mod merkez;
 mod muhur;
 mod ortak;
 mod panel;

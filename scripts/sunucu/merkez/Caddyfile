@@ -1,0 +1,7 @@
+yonetim.wificorrect.com, panel.wificorrect.com, api.wificorrect.com {
+	reverse_proxy 127.0.0.1:8081
+	header {
+		Strict-Transport-Security "max-age=31536000"
+		-Server
+	}
+}

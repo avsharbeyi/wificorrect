@@ -1,0 +1,9 @@
+[Unit]
+Description=WifiCorrect yönetim merkezi durumu, 5 dakikada bir
+
+[Timer]
+OnBootSec=1min
+OnUnitActiveSec=5min
+
+[Install]
+WantedBy=timers.target
