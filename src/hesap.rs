@@ -98,7 +98,7 @@ impl Hesaplar {
 
     /// Merkezden gelen admin özeti. Dönen: değişti mi (aynıysa dosyaya dokunulmaz, oturumlar düşmez).
     pub fn set_admin_ozet(&self, tuz: &str, ozet: &str, yineleme: u32) -> Result<bool, String> {
-        if tuz.is_empty() || ozet.len() != 64 || !ozet.bytes().all(|b| b.is_ascii_hexdigit()) || yineleme < 10_000 {
+        if tuz.is_empty() || ozet.len() != 64 || !ozet.bytes().all(|b| matches!(b, b'0'..=b'9' | b'a'..=b'f')) || yineleme < 10_000 {
             return Err("merkezden gelen admin özeti geçersiz".into());
         }
         let _g = self.lock.lock().unwrap_or_else(|e| e.into_inner());
@@ -243,7 +243,8 @@ mod tests {
         assert!(h.set_admin_ozet("ab12", &oz, 120_000).unwrap());
         assert!(!h.set_admin_ozet("ab12", &oz, 120_000).unwrap()); // aynı: değişmedi
         assert_eq!(h.verify(ADMIN, "merkez-parola-1"), Some(Rol::Hizmet));
-        assert_eq!(h.ozet(ADMIN), Some(oz));
+        assert_eq!(h.ozet(ADMIN), Some(oz.clone()));
+        assert!(h.set_admin_ozet("ab12", &oz.to_uppercase(), 120_000).is_err()); // büyük harf: verify küçük harfle karşılaştırır, admin kilitlenirdi
         assert!(h.set_admin_ozet("", "zz", 120_000).is_err() && h.set_admin_ozet("ab", "ab", 10).is_err()); // bozuk özet yazılmaz
     }
 

@@ -89,7 +89,7 @@ impl Default for Twilio {
     }
 }
 
-#[derive(Serialize, Deserialize, Clone, Debug)]
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
 #[serde(default)]
 pub struct Netgsm {
     pub url: String,
