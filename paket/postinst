@@ -1,0 +1,19 @@
+#!/bin/sh
+# Kurulum ve güncelleme. Panelin ürettiği dosyalar (ağ, Wi-Fi, yasaklı siteler) ve ayarlar pakette yok → ezilmez.
+set -e
+[ "$1" = configure ] || exit 0
+install -d -m 700 /srv/5651 /srv/hotspot /srv/hotspot/state
+install -d -m 755 /var/lib/wificorrect
+[ -e /etc/wificorrect/ayarlar.toml ] || install -m 600 /etc/wificorrect/ayarlar.ornek.toml /etc/wificorrect/ayarlar.toml
+[ -e /etc/wificorrect/yasak-siteler.conf ] || : > /etc/wificorrect/yasak-siteler.conf
+/usr/local/bin/wificorrect ctl ag-ilk || echo "wificorrect: ağ rolleri belirlenemedi; panel → Portlar" >&2
+systemctl mask hostapd.service >/dev/null 2>&1 || true
+systemctl disable nftables.service >/dev/null 2>&1 || true
+systemctl enable dnsmasq.service wificorrect-guvenlik.service wificorrect-ag-acilis.service wificorrect-kaydedici.service \
+  wificorrect-panel.service wificorrect-portal.service wificorrect-wifi.service wificorrect-gece.timer wificorrect-gun-kapat.timer >/dev/null
+update-grub >/dev/null 2>&1 || true
+# Çalışan cihazda güncelleme: servisler yeni ikiliyle açılsın (kurucunun içinde systemd çalışmaz)
+if [ -d /run/systemd/system ]; then
+  systemctl daemon-reload
+  systemctl try-restart wificorrect-portal.service wificorrect-kaydedici.service wificorrect-panel.service
+fi
