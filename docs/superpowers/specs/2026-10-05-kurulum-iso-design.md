@@ -61,8 +61,13 @@ bağlanır; admin parolaları ve anahtarları farklıdır; NetGSM bilgileri giri
   wireguard-tools unattended-upgrades sudo bridge-utils openssh-server`. `postinst`: dizinler (`/srv/5651`,
   `/srv/hotspot/state`, 700), birimlerin etkinleştirilmesi, `update-grub`. Var olan `ayarlar.toml`, `ag.toml`,
   `hesaplar.json`, `merkez.json` ve anahtarlar **ezilmez** (paket güncellemesi de aynı yolu kullanır).
+- **Panelin ürettiği dosyalar pakete girmez** (`interfaces.d/wificorrect`, `arayuzler.nft`, `issue.d/wificorrect.issue`,
+  `yasak-siteler.conf`): güncelleme port/Wi-Fi/yasaklı site ayarlarını ezmesin. İlk kurulumda `wificorrect ctl ag-ilk` üretir:
+  internet alan port = kurulumun internete çıktığı arayüz (varsayılan rota), yoksa J1900 varsayılanı, yoksa Ethernet 1.
+  Böylece Ethernet adları farklı bir makinede de roller doğru olur.
 - **Açılış ayarları repoya:** `deploy/debian/etc/default/grub.d/wificorrect.cfg` → `GRUB_TERMINAL=console`,
-  `intel_idle.max_cstate=1` (2026-10-05'te cihazda elle yapıldı; monitörsüz açılış ve J1900 donması).
+  `intel_idle.max_cstate=1` (2026-10-05'te cihazda elle yapıldı; monitörsüz açılış ve J1900 donması), ayrıca
+  `console=tty0 console=ttyS0` (seri konsol: QEMU duman testi ve servis; monitörde giriş ekranı yine görünür).
 - **Elle yapılmış diğer ayarlar:** plan aşamasında canlı cihaz (`1537344`) ile `deploy/debian/` karşılaştırılır,
   eksik her ayar repoya alınır. Kural değişmez: kalıp yalnızca repodan üretilir.
 - **SSH erişimi:** hizmet sağlayıcının **açık** SSH anahtarı ISO derlenirken GitHub değişkeninden (`WFC_SSH_PUB`)
