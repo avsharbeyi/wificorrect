@@ -1,9 +1,11 @@
 import os
+import sqlite3
 import sys
 import tempfile
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.join(HERE, ".."))
+import guvenlik as G  # noqa: E402
 import veri as V  # noqa: E402
 
 WG1, WG2 = "A" * 43 + "=", "B" * 43 + "="
@@ -148,6 +150,48 @@ def test_silinen_veri_sayfalarda_kalmaz():
     with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
         v = yeni(tmp)
         assert v.db.execute("PRAGMA secure_delete").fetchone()[0] == 1  # eski açık parolalar dosyada kalmasın
+
+
+def test_cihaz_admin_parolasi_bir_kez_uretilir_ve_yenilenir():
+    with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
+        v = yeni(tmp)
+        n, _ = v.musteri_ekle()
+        cid, _ = v.cihaz_bagla(n, "A" * 43 + "=", "ssh-ed25519 AAAA c")
+        c = v.bagli_cihaz(n)
+        assert len(c["admin_parola"]) == 16 and c["admin_yineleme"] == 120000
+        assert G.dogru(c["admin_parola"], c["admin_tuz"], c["admin_ozet"], c["admin_yineleme"])
+        v.cihaz_bagla(n, "A" * 43 + "=", "ssh-ed25519 AAAA c")  # aynı cihaz yeniden giriş: parola değişmez
+        assert v.bagli_cihaz(n)["admin_ozet"] == c["admin_ozet"]
+        yeni_pw = v.admin_parola_yenile(n)
+        c2 = v.bagli_cihaz(n)
+        assert yeni_pw == c2["admin_parola"] != c["admin_parola"] and G.dogru(yeni_pw, c2["admin_tuz"], c2["admin_ozet"], 120000)
+        assert v.admin_parola_yenile(1234567) is None  # bağlı cihaz yok
+
+
+def test_sms_ayari():
+    with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
+        v = yeni(tmp)
+        assert v.sms_ayari() is None
+        try:
+            v.sms_ayari_koy({"mock": False, "usercode": "850", "password": "", "msgheader": "BASLIK", "appkey": ""})
+            assert False
+        except ValueError as h:
+            assert "password" in str(h)
+        v.sms_ayari_koy({"mock": True, "usercode": "", "password": "", "msgheader": "", "appkey": ""})
+        assert v.sms_ayari()["mock"] is True
+        v.sms_ayari_koy({"mock": False, "usercode": "8503027084", "password": "gizli-1", "msgheader": "gztp.blgsyr", "appkey": ""})
+        assert v.sms_ayari() == {"mock": False, "usercode": "8503027084", "password": "gizli-1", "msgheader": "gztp.blgsyr", "appkey": ""}
+
+
+def test_eski_cihaz_tablosuna_admin_sutunlari_eklenir():
+    with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
+        yol = os.path.join(tmp, "m.db")
+        db = sqlite3.connect(yol)
+        db.executescript(V.SEMA.replace("  admin_parola TEXT NOT NULL DEFAULT '', admin_tuz TEXT NOT NULL DEFAULT '',\n"
+                                        "  admin_ozet TEXT NOT NULL DEFAULT '', admin_yineleme INTEGER NOT NULL DEFAULT 0,\n", ""))
+        db.close()
+        v = V.Veri(yol, saat=lambda: 1_790_000_000.0)
+        assert {"admin_parola", "admin_ozet"} <= {r[1] for r in v.db.execute("PRAGMA table_info(cihaz)")}
 
 
 if __name__ == "__main__":
