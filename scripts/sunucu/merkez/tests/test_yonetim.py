@@ -202,6 +202,36 @@ def test_sifirlama_sayfasi_ve_lisans_tarihi_kaydi():
         assert "gününden sonra" in Y.al(app, f"/m/{n}", c)[2].decode()
 
 
+def test_admin_parolasi_gorunur_ve_yenilenir():
+    with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
+        app, v, _, c, _ = kur(tmp)
+        n, _ = v.musteri_ekle()
+        v.cihaz_bagla(n, WG, SSH)
+        eski = v.bagli_cihaz(n)["admin_parola"]
+        s = Y.al(app, f"/m/{n}", c)[2].decode()
+        assert eski in s and "admin parolasını yenile" in s.lower()
+        Y.gonder(app, f"/m/{n}/admin-parola", c, {"csrf": Y.csrf(Y.al(app, f"/m/{n}", c))})
+        assert v.bagli_cihaz(n)["admin_parola"] != eski
+        assert v.hareketler(n)[0]["olay"] == "ADMIN_PAROLA_YENILENDI"
+
+
+def test_sms_ayarlari_sayfasi():
+    with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
+        app, v, _, c, _ = kur(tmp)
+        s = Y.al(app, "/sms", c)[2].decode()
+        assert 'name="usercode"' in s and 'name="password"' in s
+        t = Y.csrf(Y.al(app, "/sms", c))
+        r = Y.gonder(app, "/sms", c, {"csrf": t, "usercode": "850", "msgheader": "BASLIK"})  # deneme modu kapalı, şifre yok
+        assert r[0] == 400 and "password" in r[2].decode() and v.sms_ayari() is None
+        Y.gonder(app, "/sms", c, {"csrf": t, "usercode": "8503027084", "password": "gizli-1", "msgheader": "gztp.blgsyr"})
+        assert v.sms_ayari()["password"] == "gizli-1" and v.sms_ayari()["mock"] is False
+        s = Y.al(app, "/sms", c)[2].decode()
+        assert "gizli-1" not in s and "tanımlı" in s  # şifre geri gösterilmez
+        Y.gonder(app, "/sms", c, {"csrf": t, "usercode": "8503027084", "password": "", "msgheader": "gztp.blgsyr", "mock": "1"})
+        assert v.sms_ayari()["password"] == "gizli-1" and v.sms_ayari()["mock"] is True  # boş şifre = aynı kalır
+        assert any(h["olay"] == "SMS_AYARI" and "gizli-1" not in h["ayrinti"] for h in v.hareketler())
+
+
 if __name__ == "__main__":
     for _name, _fn in sorted(globals().items()):
         if _name.startswith("test_") and callable(_fn):

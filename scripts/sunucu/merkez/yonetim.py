@@ -69,7 +69,7 @@ class Yonetim(web.Taban):
 
     def menu(self, ot):
         return ('<a href="/">Müşteriler</a><a href="/yeni">Yeni müşteri</a><a href="/hareketler">Hareketler</a>'
-                '<a href="/eski-arsivler">Eski arşivler</a><a href="/hesabim">Hesabım</a>')
+                '<a href="/sms">SMS ayarları</a><a href="/eski-arsivler">Eski arşivler</a><a href="/hesabim">Hesabım</a>')
 
     # --- yardımcılar ---
     def _durum(self):
@@ -114,6 +114,8 @@ class Yonetim(web.Taban):
             return yanit_html(self.sayfa("Hareketler", kart("<h1>Hareketler</h1>" + self._hareket_tablosu(self.veri.hareketler())), ot, genis=True))
         if yol == "/eski-arsivler":
             return self.eski_arsivler(ot, yontem, form, ip)
+        if yol == "/sms":
+            return self.sms(ot, yontem, form, ip)
         if yol == "/hesabim":
             return self.hesabim(ot, yontem, form, ip)
         m = re.fullmatch(r"/m/([0-9]{7})(/.*)?", yol)
@@ -129,6 +131,11 @@ class Yonetim(web.Taban):
                 f'<h1>Müşteri {n}: yeni parola</h1><p>Parola</p><p class="sir">{e(pw)}</p>'
                 '<p class="alt">Parola müşteri sayfasında da görünür. Merkezi panelde hemen, cihazda ertesi sabah '
                 f'06:00 eşitlemesinden sonra geçerlidir.</p><p><a href="/m/{n}">← Müşteri sayfası</a></p>'), ot))
+        if (yontem, alt) == ("POST", "/admin-parola"):
+            if self.veri.admin_parola_yenile(n) is None:
+                return yanit_html(self.mesaj(ot, "Bağlı cihaz yok", "Admin parolası yalnızca bağlı cihaz için yenilenir."), 400)
+            self.veri.hareket("admin", ip, "ADMIN_PAROLA_YENILENDI", n)
+            return yonlendir(f"/m/{n}")
         if (yontem, alt) == ("POST", "/serbest"):
             return self.serbest(ot, n, form, ip)
         if (yontem, alt) == ("POST", "/lisans"):
@@ -214,11 +221,16 @@ class Yonetim(web.Taban):
             metin, son, _ = self._ozet(m, c, d)
             cihaz = bilgi_tablosu([
                 ("Durum", e(metin)), ("İşletme adı", e(c["isletme_adi"] or "—")), ("Unvan", e(c["unvan"] or "—")),
+                ("Cihaz admin parolası", f'<span class="sir">{e(c["admin_parola"])}</span>' if c["admin_parola"]
+                 else '<span class="bos">yok (bu özellikten önce bağlandı) — yenileyin</span>'),
                 ("Tünel adresi", e(c["tunel_ip"] or "—")), ("Sürüm", e(c["surum"] or "—")),
                 ("Bağlanma", e(c["baglanma"][:16])), ("Son eşitleme", e(c["son_eslesme"][:16] or "—")),
                 ("Son gelen gün", son), ("Arşiv", e(detay.boyut(d.get("boyut", 0)))),
                 ("Cihaz paneli", f'<a href="https://{e(c["tunel_ip"])}:8443">https://{e(c["tunel_ip"])}:8443</a> (VPN gerekli)'
                  if c["tunel_ip"] else "—")])
+            cihaz += (f'<form method="post" action="/m/{n}/admin-parola"><input type="hidden" name="csrf" value="{cs}">'
+                      '<button>Admin parolasını yenile</button></form>'
+                      '<p class="alt">Cihaz yeni parolayı bir sonraki eşitlemede (her gün 06:00) alır.</p>')
             cihaz += (f'<form method="post" action="/m/{n}/serbest"><input type="hidden" name="csrf" value="{cs}">'
                       f'<label for="o">Cihazı serbest bırakmak için müşteri numarasını yazın ({n})</label>'
                       '<input id="o" name="onay" inputmode="numeric" autocomplete="off" required>'
@@ -250,6 +262,37 @@ class Yonetim(web.Taban):
                                    for x in self.veri.cihaz_gecmisi(n)], "Henüz cihaz yok.")
         return yanit_html(self.sayfa(f"Müşteri {n}", kart(f"<h1>Müşteri {n}</h1>{bilgi}") + kart(f"<h2>Cihaz</h2>{cihaz}")
                                      + kart(f"<h2>İşlemler</h2>{islemler}") + kart(f"<h2>Cihaz geçmişi</h2>{gecmis}"), ot, genis=True))
+
+    def sms(self, ot, yontem, form, ip):
+        """Bütün cihazların NetGSM ayarı. Şifre yalnızca yazılır; boş bırakılırsa eskisi kalır."""
+        eski = self.veri.sms_ayari() or {"mock": True, "usercode": "", "password": "", "msgheader": "", "appkey": ""}
+        hata = ""
+        if yontem == "POST":
+            yeni = {"mock": form.get("mock") == "1", "usercode": form.get("usercode", ""), "msgheader": form.get("msgheader", ""),
+                    "appkey": form.get("appkey", ""), "password": form.get("password", "") or eski["password"]}
+            try:
+                self.veri.sms_ayari_koy(yeni)
+            except ValueError as h:
+                hata = str(h)
+            else:
+                degisen = [k for k in ("mock", "usercode", "msgheader", "appkey", "password") if yeni[k] != eski[k]]
+                self.veri.hareket("admin", ip, "SMS_AYARI", None, "değişen=" + ",".join(degisen))  # değer yazılmaz
+                return yonlendir("/sms")
+            eski = dict(yeni, password=eski["password"])
+        cs = e(ot["csrf"])
+        sifre = "tanımlı" if eski["password"] else "tanımsız"
+        h = f'<p class="hata">{e(hata)}</p>' if hata else ""  # iç içe aynı tırnak 3.12 öncesinde sözdizimi hatası
+        icerik = (f'<h1>SMS ayarları</h1>{h}'
+                  f'<form method="post" action="/sms"><input type="hidden" name="csrf" value="{cs}">'
+                  f'<label><input type="checkbox" name="mock" value="1"{" checked" if eski["mock"] else ""}> Deneme modu (SMS gönderilmez)</label>'
+                  f'<label for="u">NetGSM kullanıcı kodu</label><input id="u" name="usercode" value="{e(eski["usercode"])}" autocomplete="off">'
+                  f'<label for="p">API şifresi ({sifre})</label><input id="p" name="password" type="password" autocomplete="new-password" '
+                  'placeholder="değiştirmek için yazın (boş = aynı kalır)">'
+                  f'<label for="b">Mesaj başlığı</label><input id="b" name="msgheader" value="{e(eski["msgheader"])}" maxlength="11">'
+                  f'<label for="a">Uygulama anahtarı (opsiyonel)</label><input id="a" name="appkey" value="{e(eski["appkey"])}">'
+                  '<button>Kaydet</button></form>'
+                  '<p class="alt">Bütün bağlı cihazlara bir sonraki eşitlemede (her gün 06:00) gider.</p>')
+        return yanit_html(self.sayfa("SMS ayarları", kart(icerik), ot), 400 if hata else 200)
 
     def lisans(self, ot, n, form, ip):
         islem = form.get("islem")
