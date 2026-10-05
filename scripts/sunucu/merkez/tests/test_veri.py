@@ -187,11 +187,39 @@ def test_eski_cihaz_tablosuna_admin_sutunlari_eklenir():
     with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
         yol = os.path.join(tmp, "m.db")
         db = sqlite3.connect(yol)
+        # Eski SEMA: admin sütunları YOK
         db.executescript(V.SEMA.replace("  admin_parola TEXT NOT NULL DEFAULT '', admin_tuz TEXT NOT NULL DEFAULT '',\n"
                                         "  admin_ozet TEXT NOT NULL DEFAULT '', admin_yineleme INTEGER NOT NULL DEFAULT 0,\n", ""))
+        # Eski şemada müşteri ve bağlı cihaz oluştur
+        db.execute("INSERT INTO musteri (numara, tuz, ozet, yineleme, olusturma) VALUES (1111111, 't', 'o', 120000, '2026-01-01T00:00:00+03:00')")
+        db.execute("INSERT INTO cihaz (musteri, durum, wg_pub, ssh_pub, anahtar_ozet, baglanma) VALUES (1111111, 'bagli', 'pub1', 'ssh1', 'hash1', '2026-01-01T00:00:00+03:00')")
+        # Serbest bırakılmış cihaz (admin parolası almamalı)
+        db.execute("INSERT INTO cihaz (musteri, durum, wg_pub, ssh_pub, anahtar_ozet, baglanma) VALUES (1111111, 'serbest', 'pub2', 'ssh2', 'hash2', '2026-01-01T00:00:00+03:00')")
+        db.commit()
+
+        # Admin sütunları YOKSA doğrula (replace maçı kanıtla)
+        var_oncesi = {r[1] for r in db.execute("PRAGMA table_info(cihaz)")}
+        assert "admin_parola" not in var_oncesi
         db.close()
+
+        # Veri açarken migration tetiklenir
         v = V.Veri(yol, saat=lambda: 1_790_000_000.0)
-        assert {"admin_parola", "admin_ozet"} <= {r[1] for r in v.db.execute("PRAGMA table_info(cihaz)")}
+
+        # Admin sütunları artık var
+        var_sonrasi = {r[1] for r in v.db.execute("PRAGMA table_info(cihaz)")}
+        assert {"admin_parola", "admin_ozet"} <= var_sonrasi
+
+        # Bağlı cihaz admin parolası aldı
+        c_bagli = v.db.execute("SELECT * FROM cihaz WHERE musteri = 1111111 AND durum = 'bagli'").fetchone()
+        assert len(c_bagli["admin_parola"]) == 16
+        assert c_bagli["admin_ozet"] != ""  # digest var
+        assert c_bagli["admin_yineleme"] == 120000
+        assert G.dogru(c_bagli["admin_parola"], c_bagli["admin_tuz"], c_bagli["admin_ozet"], c_bagli["admin_yineleme"])
+
+        # Serbest cihaz admin parolası almadı
+        c_serbest = v.db.execute("SELECT * FROM cihaz WHERE musteri = 1111111 AND durum = 'serbest'").fetchone()
+        assert c_serbest["admin_parola"] == ""
+        assert c_serbest["admin_ozet"] == ""
 
 
 if __name__ == "__main__":

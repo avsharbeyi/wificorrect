@@ -89,6 +89,11 @@ class Veri:
         for ad, tip in YENI_CIHAZ_SUTUNLARI:
             if ad not in var_c:
                 self.db.execute(f"ALTER TABLE cihaz ADD COLUMN {ad} {tip}")
+        # Eski bağlı cihazlara admin parolası ata
+        for r in self.db.execute("SELECT id FROM cihaz WHERE durum != 'serbest' AND admin_ozet = ''").fetchall():
+            pw, tuz, oz, y = _admin_alanlari()
+            self.db.execute("UPDATE cihaz SET admin_parola = ?, admin_tuz = ?, admin_ozet = ?, admin_yineleme = ? WHERE id = ?",
+                            (pw, tuz, oz, y, r["id"]))
 
     def bugun(self):
         return datetime.datetime.fromtimestamp(self.saat(), common.TZ).date()
