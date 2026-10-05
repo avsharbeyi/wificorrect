@@ -217,7 +217,8 @@ tasi-kur)
 	;;
 cihaz-kapat)
 	[ $# -eq 2 ] || kullanim
-	ad_kontrol "$2"
+	# eski (elle eklenmiş) kayıtlarda büyük harf olabilir: yalnızca harf/rakam/tire/nokta/alt çizgi; satır kayıtta olmalı
+	printf '%s' "$2" | grep -Eq '^[A-Za-z0-9][A-Za-z0-9._-]{0,40}$' || { echo "geçersiz ad: $2" >&2; exit 2; }
 	satir=$(grep "^cihaz;$2;" "$KAYIT") || { echo "$2 aktif bir cihaz değil" >&2; exit 1; }
 	pub=$(printf '%s' "$satir" | cut -d';' -f4)
 	u=$(printf '%s' "$satir" | cut -d';' -f5)
