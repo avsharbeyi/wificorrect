@@ -226,12 +226,31 @@ pub fn run(cfg: Config, args: &[String]) -> ExitCode {
             let _ = crate::merkez::kaydet(p, &m);
             let denetim = |olay: &str, ek: String| ortak::audit(&cfg.main.log_root, Row::new(olay, &ortak::now_iso(now)).set("ek", ek));
             match crate::merkez::eslesme(&mut m, &cfg.main.site_name, &cfg.main.unvan, false, &crate::merkez::curl, now) {
-                Ok(crate::merkez::Eslesme::Bagli { uyelik, .. }) => {
+                Ok(crate::merkez::Eslesme::Bagli { uyelik, ek }) => {
                     if let Err(e) = crate::merkez::kaydet(p, &m) {
                         eprintln!("{e}");
                         return ExitCode::from(1);
                     }
                     denetim("MERKEZ_ESLESME", format!("uyelik={uyelik}"));
+                    let cfg_path = std::env::var("WFC_AYAR").unwrap_or_else(|_| crate::ayar::PATH.to_string());
+                    let mut yeni = cfg.clone();
+                    let (admin, sms) = crate::merkez::ek_uygula(&mut yeni, &crate::hesap::Hesaplar::new(crate::hesap::PATH), &ek);
+                    match admin {
+                        Ok(true) => denetim("ADMIN_PAROLA_MERKEZ", String::new()),
+                        Ok(false) => {}
+                        Err(e) => denetim("MERKEZ_EK_HATA", e),
+                    }
+                    match sms {
+                        Ok(true) => match yeni.save(&cfg_path) {
+                            Ok(()) => {
+                                denetim("SMS_AYARI_MERKEZ", String::new()); // şifre yazılmaz
+                                runner(&["systemctl".into(), "restart".into(), "wificorrect-portal".into()]);
+                            }
+                            Err(e) => denetim("MERKEZ_EK_HATA", e),
+                        },
+                        Ok(false) => {}
+                        Err(e) => denetim("MERKEZ_EK_HATA", e),
+                    }
                     ExitCode::SUCCESS
                 }
                 Ok(crate::merkez::Eslesme::Serbest) => {

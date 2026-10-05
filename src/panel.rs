@@ -153,6 +153,9 @@ fn backup_target_ok(s: &str) -> bool {
     name_ok(user) && name_ok(host) && user.as_bytes()[0].is_ascii_alphanumeric() && path_ok(path)
 }
 
+/// Bağlı cihazda yönetim merkezinden gelen alanlar (spec 2026-10-05 §6): panelde salt okunur, formdan değişmez.
+const MERKEZ_SMS: &[&str] = &["sms.mock", "sms.provider", "netgsm.usercode", "netgsm.msgheader", "netgsm.appkey", "netgsm.password"];
+
 const ALANLAR: &[Alan] = &[
     Alan { key: "main.unvan", label: "İşletme unvanı (vergi levhasındaki unvan yazılmalıdır)", tur: Tur::Metin(unvan_ok), grup: "İşletme", admin: false },
     Alan { key: "main.site_name", label: "İşletme adı", tur: Tur::Metin(|s| !s.trim().is_empty() && chars_ok(s, 40, |c| c.is_alphanumeric() || " .-'&".contains(c))), grup: "İşletme", admin: false },
@@ -267,6 +270,9 @@ fn validate(admin: bool, form: &Form, cfg: &Config) -> Result<Vec<(&'static str,
     let mut changes = vec![];
     let mut errors = HashMap::new();
     for a in fields(admin) {
+        if cfg.sms.merkez && MERKEZ_SMS.contains(&a.key) {
+            continue;
+        }
         let old = get_field(cfg, a.key);
         let raw = form.get(a.key).map(|s| s.trim().to_string());
         let new = match a.tur {
@@ -469,7 +475,11 @@ impl Panel {
         let Some(o) = req.token.as_deref().and_then(|t| self.oturumlar.get(t, now)) else {
             return redirect("/giris", None);
         };
-        if o.rol == Rol::Sahip && !self.sahip_oturumu_gecerli(&o) {
+        let gecerli = match o.rol {
+            Rol::Sahip => self.sahip_oturumu_gecerli(&o),
+            Rol::Hizmet => self.hesaplar.ozet(hesap::ADMIN).is_some_and(|z| hesap::ct_eq(&z, &o.surum)),
+        };
+        if !gecerli {
             if let Some(t) = &req.token {
                 self.oturumlar.remove(t);
             }
@@ -583,7 +593,7 @@ impl Panel {
         };
         let (rol, surum) = if user == hesap::ADMIN {
             match self.hesaplar.verify(&user, pw) {
-                Some(r) => (r, String::new()),
+                Some(r) => (r, self.hesaplar.ozet(hesap::ADMIN).unwrap_or_default()),
                 None => return hatali("Kullanıcı adı veya parola hatalı."),
             }
         } else {
@@ -632,6 +642,7 @@ impl Panel {
         // önce ayarlar (tünel + yedek), sonra bağ: ayar yazılamazsa cihaz "bağlı ama tünelsiz" kalmasın
         let mut yeni = cfg.clone();
         crate::merkez::uygula(&mut yeni, &g);
+        let (admin, sms) = crate::merkez::ek_uygula(&mut yeni, &self.hesaplar, &g.ek);
         yeni.save(&self.cfg_path).map_err(|e| (e, false))?;
         crate::merkez::kaydet(&self.merkez_path, &g.merkez).map_err(|e| (e, false))?;
         // güncellenen eski cihazdaki yerel sahip hesapları artık geçersiz: yalnızca admin kalır
@@ -641,6 +652,19 @@ impl Panel {
         let unit = format!("wfc-uzak-{}", ortak::random_hex(4));
         (self.runner)(&cmd(&["systemd-run", "--collect", "--unit", &unit, "--on-active", "1s", "/usr/local/bin/wificorrect", "ctl", "uzak-uygula"]));
         self.audit(&yeni, req, None, "PANEL_MERKEZ_BAGLANDI", &format!("numara={numara} tunel={}", g.tunel_ip));
+        match admin {
+            Ok(true) => self.audit(&yeni, req, None, "ADMIN_PAROLA_MERKEZ", ""),
+            Ok(false) => {}
+            Err(e) => self.audit(&yeni, req, None, "MERKEZ_EK_HATA", &e),
+        }
+        match sms {
+            Ok(true) => {
+                self.audit(&yeni, req, None, "SMS_AYARI_MERKEZ", ""); // şifre yazılmaz
+                (self.runner)(&cmd(&["systemctl", "restart", "wificorrect-portal"]));
+            }
+            Ok(false) => {}
+            Err(e) => self.audit(&yeni, req, None, "MERKEZ_EK_HATA", &e),
+        }
         Ok(g.merkez.ozet)
     }
 
@@ -813,6 +837,16 @@ impl Panel {
             let cur = form.and_then(|f| f.get(a.key).cloned()).unwrap_or_else(|| get_field(cfg, a.key));
             let id = a.key.replace('.', "-");
             let err = errors.get(a.key).map_or(String::new(), |e| format!("<div class=\"hata\">{}</div>", h(e)));
+            if cfg.sms.merkez && MERKEZ_SMS.contains(&a.key) {
+                let deger = if matches!(a.tur, Tur::Gizli(_)) { (if cur.is_empty() { "tanımsız" } else { "tanımlı" }).to_string() }
+                            else if matches!(a.tur, Tur::Evet) { (if cur == "1" { "açık" } else { "kapalı" }).to_string() } else { cur.clone() };
+                let html = format!("<p class=\"not\">{}: <b>{}</b> (merkezden yönetiliyor)</p>", h(a.label), h(&deger));
+                match groups.iter_mut().find(|(g, _)| *g == a.grup) {
+                    Some((_, s)) => s.push_str(&html),
+                    None => groups.push((a.grup, html)),
+                }
+                continue;
+            }
             let html = match a.tur {
                 Tur::Evet => {
                     let on = if form.is_some() { req.form.get(a.key).is_some_and(|v| v == "1") } else { cur == "1" };
@@ -1302,6 +1336,32 @@ mod tests {
         let page = e.p.handle(&req("GET", "/sifre", &[], Some(&token))).body;
         let csrf = page.split("name=\"csrf\" value=\"").nth(1).unwrap().split('"').next().unwrap().to_string();
         (token, csrf)
+    }
+
+    #[test]
+    fn admin_oturumu_parola_degisince_duser() {
+        let e = env();
+        let (tok, _) = setup_and_login(&e, "admin", "hizmet-parola-1");
+        assert_eq!(e.p.handle(&req("GET", "/admin-ayarlari", &[], Some(&tok))).status, 200);
+        let oz = crate::hesap::digest("merkez-parola-1", "ab12", 120_000);
+        e.p.hesaplar.set_admin_ozet("ab12", &oz, 120_000).unwrap();
+        let r = e.p.handle(&req("GET", "/admin-ayarlari", &[], Some(&tok)));
+        assert!(r.status == 303 && r.headers.iter().any(|(_, v)| v == "/giris"));
+    }
+
+    #[test]
+    fn merkezden_sms_alanlari_salt_okunur() {
+        let e = env();
+        let (tok, csrf) = setup_and_login(&e, "admin", "hizmet-parola-1");
+        let mut c = Config::load(&e.p.cfg_path).unwrap();
+        (c.sms.merkez, c.sms.mock, c.netgsm.usercode, c.netgsm.password, c.netgsm.msgheader) =
+            (true, false, "8503027084".into(), "gizli-1".into(), "gztp.blgsyr".into());
+        c.save(&e.p.cfg_path).unwrap();
+        let page = e.p.handle(&req("GET", "/admin-ayarlari", &[], Some(&tok))).body;
+        assert!(page.contains("merkezden yönetiliyor") && !page.contains("name=\"netgsm.usercode\"") && !page.contains("gizli-1"));
+        e.p.handle(&req("POST", "/admin-ayarlari", &[("csrf", &csrf), ("netgsm.usercode", "999"), ("limits.sms_global_day", "250")], Some(&tok)));
+        let c = Config::load(&e.p.cfg_path).unwrap();
+        assert_eq!((c.netgsm.usercode.as_str(), c.sms.mock, c.limits.sms_global_day), ("8503027084", false, 250)); // sms.mock kutusu yok sayıldı
     }
 
 
