@@ -255,8 +255,9 @@ pub fn ilk(cfg: &Config, y: &Yollar, sys: &Path, rota: Option<&str>) -> Result<b
     if ag.lan.is_empty() {
         return Err("En az iki Ethernet gerekli (biri internet alır, biri misafirlere verir).".into());
     }
-    save(&y.ag, &ag)?;
+    // ag.toml en son: "kurulum tamam" işareti; yazım yarıda kalırsa yeniden deneme (dpkg --configure -a) boşa gitmez
     write_files(cfg, &ag, y)?;
+    save(&y.ag, &ag)?;
     Ok(true)
 }
 
@@ -555,5 +556,30 @@ mod tests {
         // tek Ethernet: hata
         let d = sys_kur("tek", &["eno1"]);
         assert!(ilk(&cfg, &Yollar::test(&d), &d.join("net"), Some("eno1")).is_err());
+    }
+
+    #[test]
+    fn ilk_yazim_hatasinda_ag_toml_kalmaz() {
+        let d = std::env::temp_dir().join(format!("wfc-ag-ilk-{}-hata", std::process::id()));
+        let _ = fs::remove_dir_all(&d);
+        for n in ["eno1", "enp2s0", "br-hotspot"] {
+            fs::create_dir_all(d.join("net").join(n).join("device")).unwrap();
+        }
+        let cfg = Config::default();
+        // interfaces yolunun üstü sıradan dosya: üst dizin oluşturulamaz, write_files başarısız
+        fs::write(d.join("engel"), "x").unwrap();
+        let mut y = Yollar::test(&d);
+        let iyi = y.interfaces.clone();
+        y.interfaces = d.join("engel").join("interfaces");
+        assert!(ilk(&cfg, &y, &d.join("net"), Some("eno1")).is_err());
+        assert!(!y.ag.exists()); // ag.toml "tamamlandı" işareti: yazım başarısızsa kalmaz, yeniden deneme çalışır
+        y.interfaces = iyi;
+        assert!(ilk(&cfg, &y, &d.join("net"), Some("eno1")).unwrap());
+        assert!(y.ag.exists() && y.interfaces.exists());
+        // rota Ethernet değil (köprü): varsayılan koldan geçer, ilk Ethernet internet alır
+        let d2 = d.join("kopru");
+        let y2 = Yollar::test(&d2);
+        assert!(ilk(&cfg, &y2, &d.join("net"), Some("br-hotspot")).unwrap());
+        assert_eq!(load(&y2.ag).wan, "enp2s0");
     }
 }
