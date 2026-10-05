@@ -35,6 +35,15 @@ def _lisans(veri, m):
     return {"lisans": durum, "lisans_bitis": bitis}
 
 
+def _cihaz_ekleri(veri, c):
+    """Cihaza giden admin parola özeti (açık parola gitmez) ve kayıtlıysa bütün cihazların SMS ayarı."""
+    ek = {"admin": {"tuz": c["admin_tuz"], "ozet": c["admin_ozet"], "yineleme": c["admin_yineleme"]}}
+    s = veri.sms_ayari()
+    if s is not None:
+        ek["sms"] = {"mock": s["mock"], "provider": "netgsm", "netgsm": {k: s[k] for k in veri_modulu.SMS_ALANLARI}}
+    return ek
+
+
 class Api:
     def __init__(self, veri, saat=time.time, kuyruk_ekle=kuyruk.ekle, kuyruk_bekle=kuyruk.bekle):
         self.veri, self.saat = veri, saat
@@ -87,7 +96,9 @@ class Api:
             return _hata(503, "kayit", "Cihaz kaydı tamamlanamadı, biraz sonra tekrar deneyin.")
         self.veri.cihaz_guncelle(cid, tunel_ip=s["tunel_ip"])
         self.veri.hareket(numara, ip, "CIHAZ_BAGLANDI", m["numara"], f"cihaz={cid} tunel={s['tunel_ip']}")
-        return _json(200, dict(_parola_alanlari(m), **_lisans(self.veri, m), cihaz_anahtari=anahtar, tunel_ip=s["tunel_ip"],
+        c = self.veri.bagli_cihaz(m["numara"])
+        return _json(200, dict(_parola_alanlari(m), **_lisans(self.veri, m), **_cihaz_ekleri(self.veri, c),
+                               cihaz_anahtari=anahtar, tunel_ip=s["tunel_ip"],
                                sunucu_pub=s["sunucu_pub"], uc_nokta=s["uc_nokta"],
                                yedek_hedefi=f"wfc-{numara}@{YEDEK_SUNUCU}:"))
 
@@ -103,7 +114,8 @@ class Api:
             return _json(200, {"durum": "serbest"})
         self.veri.eslesme_kaydet(c["id"], _metin(b.get("isletme_adi")), _metin(b.get("unvan")), _metin(b.get("surum")))
         m = self.veri.musteri(c["musteri"])
-        return _json(200, dict(_parola_alanlari(m), **_lisans(self.veri, m), durum="bagli", uyelik=m["uyelik"]))
+        return _json(200, dict(_parola_alanlari(m), **_lisans(self.veri, m), **_cihaz_ekleri(self.veri, c),
+                               durum="bagli", uyelik=m["uyelik"]))
 
     def parola(self, b, ip):
         c = self.veri.cihaz_anahtarla(b.get("cihaz_anahtari"))
