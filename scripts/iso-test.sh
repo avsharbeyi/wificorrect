@@ -22,11 +22,17 @@ while b.count(b"(qemu)") < 2 and time.time()-t < 15:
     except socket.timeout: break
 sys.stdout.write(b.decode(errors="replace"))' "$d/mon" "$1" >>"$d/mon.log" 2>&1 || true; }
 ekran() { mon "screendump $d/ekran.ppm"; }
+# P6 PPM → PNG (yalnızca stdlib; çalıştırıcıda ImageMagick olmayabilir)
+png() { python3 -c 'import sys,zlib,struct
+b=open(sys.argv[1],"rb").read(); m,wh,mx,r=b.split(b"\n",3); w,h=map(int,wh.split())
+c=lambda t,x: struct.pack(">I",len(x))+t+x+struct.pack(">I",zlib.crc32(t+x))
+raw=b"".join(b"\0"+r[y*w*3:(y+1)*w*3] for y in range(h))
+open(sys.argv[2],"wb").write(b"\x89PNG\r\n\x1a\n"+c(b"IHDR",struct.pack(">IIBBBBB",w,h,8,2,0,0,0))+c(b"IDAT",zlib.compress(raw))+c(b"IEND",b""))' "$1" "$2" || cp "$1" iso-test-gunluk/; }
 hata() {
   ekran; kill "$q" 2>/dev/null || true
-  for f in "$d"/*.log; do [ -e "$f" ] && { echo "--- $(basename "$f") (son 60 satır)"; tail -60 "$f" | tr -d '\033'; }; done
+  for f in "$d"/kurulum.log "$d"/acilis.log; do [ -e "$f" ] && { echo "--- $(basename "$f") (son 60 satır)"; tail -60 "$f" | tr -d '\033'; }; done
   mkdir -p iso-test-gunluk && cp "$d"/*.log iso-test-gunluk/ 2>/dev/null || true
-  [ -e "$d/ekran.ppm" ] && { convert "$d/ekran.ppm" iso-test-gunluk/ekran.png 2>/dev/null || cp "$d/ekran.ppm" iso-test-gunluk/; }
+  [ -e "$d/ekran.ppm" ] && png "$d/ekran.ppm" iso-test-gunluk/ekran.png
   echo "ISO DUMAN TESTI BASARISIZ: $1"; exit 1
 }
 # 1) kurulum. Menü (GRUB, OVMF seri konsola da yazar) kendiliğinden başlamamalı: 20 sn seri çıktı değişmemeli, sonra Enter.
@@ -41,9 +47,14 @@ sleep 3; once=$(wc -c <"$d/kurulum.log"); sleep 20
 [ "$(wc -c <"$d/kurulum.log")" = "$once" ] || hata "menü kendiliğinden başladı (seri çıktı değişti)"
 mon "sendkey ret"
 # Kurucu bitince makineyi kapatır (debian-installer/exit/poweroff).
-n=0
+# Ekran 10 dk hiç değişmediyse kurucu bir soruda/hatada takılmıştır → 40 dk beklemeden dur.
+n=0 ayni=0 once=
 while kill -0 "$q" 2>/dev/null; do
   sleep 30; n=$((n + 30)); ekran
+  simdi=$(cksum <"$d/ekran.ppm" 2>/dev/null || true)
+  if [ -n "$simdi" ] && [ "$simdi" = "$once" ]; then ayni=$((ayni + 1)); else ayni=0; fi
+  once=$simdi
+  [ $ayni -lt 20 ] || hata "kurucu ekranı 10 dk değişmedi (takıldı; son ekran: iso-test-gunluk/ekran.png)"
   [ $n -lt 2400 ] || hata "kurulum 40 dk içinde bitmedi (son ekran: iso-test-gunluk/ekran.png)"
 done
 # 2) diskten açılış: systemd durum satırı + getty'nin yazdığı yönetim adresi (seri konsol ttyS0).
@@ -56,5 +67,6 @@ until grep -aq "Started.*WifiCorrect yonetim paneli" "$d/acilis.log" && grep -aq
 done
 grep -a "WifiCorrect yonetim adresi" "$d/acilis.log" | tail -1 | tr -d '\033'
 kill "$q" 2>/dev/null || true
+mkdir -p iso-test-gunluk && cp "$d"/kurulum.log "$d"/acilis.log iso-test-gunluk/
 rm -rf "$d"
 echo "ISO DUMAN TESTI GECTI"
