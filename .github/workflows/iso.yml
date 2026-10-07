@@ -10,6 +10,10 @@ on:
       - "scripts/paket.sh"
       - "scripts/paket-test.sh"
       - "paket/**"
+      - "deploy/**"
+      - "src/**"
+      - "Cargo.toml"
+      - "Cargo.lock"
       - ".github/workflows/iso.yml"
   workflow_dispatch:
 
@@ -27,6 +31,11 @@ jobs:
           WFC_SSH_PUB: ${{ vars.WFC_SSH_PUB }}
         run: |
           s="0.0.0-${GITHUB_SHA%"${GITHUB_SHA#???????}"}"
+          # Deneme anahtarı: duman testi root SSH girişini bununla dener (özel anahtar işle birlikte yok olur).
+          # Depo değişkeni varsa o da eklenir; deneme ISO'su ekte o anahtarla kullanılabilir kalır.
+          ssh-keygen -q -t ed25519 -N '' -C wfc-iso-deneme -f "$RUNNER_TEMP/deneme"
+          WFC_SSH_PUB=$(printf '%s\n' "$WFC_SSH_PUB" "$(cat "$RUNNER_TEMP/deneme.pub")" | sed '/^$/d')
+          export WFC_SSH_PUB WFC_TEST_SSH_KEY="$RUNNER_TEMP/deneme"
           sh scripts/paket.sh target/release/wificorrect "$s" dist
           sh scripts/paket-test.sh "dist/wificorrect_${s}_amd64.deb"
           sh scripts/iso.sh "dist/wificorrect_${s}_amd64.deb" "$s" dist

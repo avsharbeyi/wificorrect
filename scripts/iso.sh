@@ -13,7 +13,7 @@ ad=$(grep -o 'debian-13[^ ]*-amd64-netinst\.iso' "$d/SHA256SUMS" | head -1)
 curl -fsSL "$u/$ad" -o "$d/$ad"
 (cd "$d" && grep " $ad\$" SHA256SUMS | sha256sum -c -)
 mkdir -p "$d/ek/wificorrect" "$cikti"
-cp "$deb" iso/son.sh "$d/ek/wificorrect/"
+cp "$deb" iso/son.sh iso/disk.sh "$d/ek/wificorrect/"
 if [ -n "${WFC_SSH_PUB:-}" ]; then printf '%s\n' "$WFC_SSH_PUB" > "$d/ek/wificorrect/authorized_keys"; fi
 rm -f "$cikti/wificorrect-kurulum-$surum.iso"
 xorriso -indev "$d/$ad" -outdev "$cikti/wificorrect-kurulum-$surum.iso" \

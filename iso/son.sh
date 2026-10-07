@@ -11,3 +11,15 @@ if [ -s /cdrom/wificorrect/authorized_keys ]; then
 fi
 # </dev/null: bir paket soru sorarsa (dpkg conffile vb.) sonsuza dek beklemek yerine hata verir
 in-target sh -c 'DEBIAN_FRONTEND=noninteractive apt-get install -y -q /tmp/wificorrect_*_amd64.deb </dev/null && rm -f /tmp/wificorrect_*_amd64.deb'
+# Bitti mesajı (bekletmez: 10 sn görünür, sonra kurucu kendi son adımlarını yapıp cihazı kapatır)
+cat >/tmp/wificorrect-bitti.templates <<'T'
+Template: wificorrect/bitti
+Type: text
+Description: Kurulum bitti. Cihaz birazdan kapanacak; kapandıktan sonra USB belleği çıkarın.
+T
+logger -t wificorrect "KURULUM BITTI"
+if debconf-loadtemplate wificorrect /tmp/wificorrect-bitti.templates; then
+  . /usr/share/debconf/confmodule
+  db_progress INFO wificorrect/bitti || true
+  sleep 10
+fi
