@@ -57,12 +57,13 @@ while kill -0 "$q" 2>/dev/null; do
   [ $ayni -lt 20 ] || hata "kurucu ekranı 10 dk değişmedi (takıldı; son ekran: iso-test-gunluk/ekran.png)"
   [ $n -lt 2400 ] || hata "kurulum 40 dk içinde bitmedi (son ekran: iso-test-gunluk/ekran.png)"
 done
-# 2) diskten açılış: systemd durum satırı + getty'nin yazdığı yönetim adresi (seri konsol ttyS0).
+# 2) diskten açılış: systemd durum satırı (açıklama konsol genişliğine kırpılır → birim adıyla aranır) + getty'nin
+#    yazdığı yönetim adresi (seri konsol ttyS0).
 rm -f "$d/mon"
 qemu-system-x86_64 "$@" -serial file:"$d/acilis.log" &
 q=$!
 n=0
-until grep -aq "Started.*WifiCorrect yonetim paneli" "$d/acilis.log" && grep -aq "WifiCorrect yonetim adresi" "$d/acilis.log"; do
+until grep -aq "Started.*wificorrect-panel.service" "$d/acilis.log" && grep -aq "WifiCorrect yonetim adresi: https://[0-9]" "$d/acilis.log"; do
   sleep 5; n=$((n + 5)); [ $n -lt 300 ] || { grep -a "FAILED" "$d/acilis.log" | tr -d '\033' || true; hata "açılışta panel/yönetim adresi görünmedi"; }
 done
 grep -a "WifiCorrect yonetim adresi" "$d/acilis.log" | tail -1 | tr -d '\033'
