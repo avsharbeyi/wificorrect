@@ -17,7 +17,8 @@ bağlanır; admin parolaları ve anahtarları farklıdır; NetGSM bilgileri giri
 2. USB'den açılır. Menü: **"WifiCorrect kur — DİSKTEKİ HER ŞEY SİLİNİR"**. Menü zaman aşımıyla kendiliğinden
    başlamaz (yanlış makinede kazara silme olmasın); Enter ile başlar.
 3. Soru sorulmaz: dil tr, saat Europe/Istanbul, klavye trq, ana bilgisayar adı `wificorrect`, disk = USB olmayan ilk
-   disk, bölümler EFI + kök (ext4) + takas. Root parolası yok (kilitli), SSH yalnızca anahtarla.
+   disk (disk yoksa kurulum hata ekranında durur, hiçbir şey silinmez), bölümler EFI + kök (ext4) + takas (kendi
+   tarif; Debian `atomic` ≥9,3 GB ister). Root parolası yok (kilitli), SSH yalnızca anahtarla.
 4. Kurulum sonunda WifiCorrect paketi kurulur, cihaz kapanır ("USB'yi çıkarın" yazar). Süre hedefi: 15 dk.
 5. İlk açılış monitörsüz olabilir. Konsolda (bağlıysa) yönetim adresi yazar: `https://<ip>:8443`.
 
@@ -58,7 +59,8 @@ bağlanır; admin parolaları ve anahtarları farklıdır; NetGSM bilgileri giri
   güncellemesinde kalıbı yenilemek gerekir, kurulumda internet zaten var; live-build — fazla hareketli parça.
 - **`.deb` paketi** (`scripts/paket.sh`, `dpkg-deb`, ek araç yok): `/usr/local/bin/wificorrect` + `deploy/debian/`
   altındaki her dosya. Bağımlılıklar: `dnsmasq hostapd iw wireless-regdb conntrack rsync curl nftables
-  wireguard-tools unattended-upgrades sudo bridge-utils openssh-server`. `postinst`: dizinler (`/srv/5651`,
+  wireguard-tools unattended-upgrades bridge-utils ifupdown dhcpcd-base iproute2 iptables openssh-server/client
+  openssl ca-certificates systemd systemd-timesyncd|time-daemon` (kesin liste `paket/control.in`). `postinst`: dizinler (`/srv/5651`,
   `/srv/hotspot/state`, 700), birimlerin etkinleştirilmesi, `update-grub`. Var olan `ayarlar.toml`, `ag.toml`,
   `hesaplar.json`, `merkez.json` ve anahtarlar **ezilmez** (paket güncellemesi de aynı yolu kullanır).
 - **Panelin ürettiği dosyalar pakete girmez** (`interfaces.d/wificorrect`, `arayuzler.nft`, `issue.d/wificorrect.issue`,
@@ -72,16 +74,17 @@ bağlanır; admin parolaları ve anahtarları farklıdır; NetGSM bilgileri giri
   eksik her ayar repoya alınır. Kural değişmez: kalıp yalnızca repodan üretilir.
 - **SSH erişimi:** hizmet sağlayıcının **açık** SSH anahtarı ISO derlenirken GitHub değişkeninden (`WFC_SSH_PUB`)
   `root/.ssh/authorized_keys`'e yazılır. Açık anahtar gizli değildir ama repoda tutulmaz (repo genel ürün).
-- **GitHub Actions:** `release.yml` her `v*` etiketinde `.deb` ve `wificorrect-kurulum-<sürüm>.iso` üretir, sürüme
-  ekler, SHA256SUMS'a yazar. Netinst ISO'su indirilirken Debian'ın imzalı SHA256SUMS'ı ile doğrulanır.
+- **GitHub Actions:** `release.yml` yalnızca `v*` etiketinde `.deb` ve `wificorrect-kurulum-<sürüm>.iso` üretir, sürüme
+  ekler, SHA256SUMS'a yazar; `WFC_SSH_PUB` boşsa derlemez. Etiketsiz ISO doğrulaması ayrı `iso.yml`'de (sürüm açmaz). Netinst ISO'su indirilirken Debian'ın imzalı SHA256SUMS'ı ile doğrulanır.
 
 ## 8. Test
 - **Birim:** cihaz (Rust) — merkezden gelen admin özeti ve SMS ayarının uygulanması, salt okunur alanlar; merkez
   (Python) — yeni API alanları, parola yenileme, SMS ayarları sayfası ve doğrulaması.
 - **Paket:** CI'da `.deb` temiz bir Debian 13 kapsayıcısına kurulur (bağımlılıklar çözülüyor, dosyalar yerinde,
   ikinci kurulumda ayar dosyaları ezilmiyor).
-- **ISO duman testi (CI):** QEMU'da (KVM varsa) boş 8 GB diske kurulum, diskten açılış, seri konsoldan
-  `wificorrect surum` ve servislerin `active` olduğu görülür. KVM yoksa adım atlanır ve bu raporda yazılır.
+- **ISO duman testi (CI):** QEMU'da (KVM varsa) boş 8 GB diske (ve takılı bir USB belleğe) kurulum; USB'nin
+  dokunulmadığı, diskten açılışta panel biriminin başladığı ve yönetim adresinin yazıldığı, deneme SSH anahtarıyla
+  girilebildiği görülür (kurucuda seri konsol yok: ekran görüntüsü + syslog aynası). KVM yoksa adım atlanır ve bu raporda yazılır.
 - **Gerçek donanım (kabul):** canlı cihaz silinmez; kurulum **boş bir yedek cihazda** ya da herhangi bir PC'de
   denenir. Monitörsüz ikinci açılış, müşteri numarasıyla bağlanma, admin parolasının yönetimde görünüp panelde
   çalışması, deneme modu kapalıyken sizin onayınızla tek gerçek SMS.
