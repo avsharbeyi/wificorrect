@@ -805,12 +805,14 @@ impl Panel {
         self.audit(cfg, req, Some(o), "PANEL_OTURUMLAR", "");
         let mut list: Vec<_> = ortak::load_sessions(&cfg.main.state_root).into_iter().collect();
         list.sort_by(|a, b| a.1.start_epoch.total_cmp(&b.1.start_epoch));
+        let bagli = std::fs::read(self.sys.join(&cfg.main.iface).join("brforward")).map(|b| ortak::kopruye_bagli(&b)).unwrap_or_default();
         let rows: Vec<Vec<String>> = list
             .iter()
             .map(|(mac, s)| {
                 let (tel, ad) = (format!("+{}", s.phone), format!("{} {}", s.ad, s.soyad));
                 let left = ((s.expires_epoch - now).max(0.0) as u64) / 60;
                 vec![
+                    if bagli.contains(mac) { "<span class=\"rozet bagli\">Bağlı</span>".into() } else { "<span class=\"rozet\">Bağlı değil</span>".into() },
                     h(&tel),
                     h(&ad),
                     format!("<code>{}</code>", h(mac)),
@@ -822,8 +824,9 @@ impl Panel {
             })
             .collect();
         let body = format!(
-            "<p class=\"not\">Bağlantısı kesilen cihaz internete çıkamaz; yeniden SMS ile giriş yapması gerekir.</p><p class=\"not\">Bu sayfadaki her görüntüleme, arama ve indirme kimin yaptığıyla birlikte kaydedilir ve hizmet sağlayıcı tarafından denetlenir.</p>{}",
-            table(&["Telefon", "Ad soyad", "MAC", "IP", "Başlangıç", "Kalan", ""], &rows, "Bağlı cihaz yok")
+            "<p class=\"not\">Bağlantısı kesilen cihaz internete çıkamaz; yeniden SMS ile giriş yapması gerekir. \
+             <b>Bağlı</b>: cihaz son 5 dakikada ağda görüldü.</p><p class=\"not\">Bu sayfadaki her görüntüleme, arama ve indirme kimin yaptığıyla birlikte kaydedilir ve hizmet sağlayıcı tarafından denetlenir.</p>{}",
+            table(&["Durum", "Telefon", "Ad soyad", "MAC", "IP", "Başlangıç", "Kalan", ""], &rows, "Bağlı cihaz yok")
         );
         self.page(cfg, req, Some(o), "Bağlı cihazlar", &body)
     }
@@ -1466,6 +1469,33 @@ mod tests {
         // bölüm sayfasından ayrı açılan ayrıntı sayfası kendi grubunu seçili gösterir
         let gun = e.p.handle(&req("GET", "/kayitlar/gun", &[], Some(&tok))).body;
         assert!(gun.contains("href=\"/kayitlar\" class=\"aktif\"") || gun.contains("gerekçe"));
+    }
+
+    #[test]
+    fn o_an_bagli_cihaz_yesil_rozetle() {
+        let mut e = env();
+        let (tok, _) = setup_and_login(&e, "mudur", "sahip-parola-12");
+        let cfg = Config::load(&e.p.cfg_path).unwrap();
+        let mut ses = ortak::Sessions::new();
+        for (mac, ad) in [("aa:bb:cc:dd:ee:01", "Ayşe"), ("aa:bb:cc:dd:ee:02", "Mehmet")] {
+            ses.insert(mac.into(), ortak::Session {
+                phone: "905334553132".into(), ad: ad.into(), soyad: "Y".into(), ip: "10.50.0.23".into(),
+                session_id: "s".into(), start: "2026-09-29T20:00:00+03:00".into(), start_epoch: 1.0, expires_epoch: 9e9,
+            });
+        }
+        ortak::save_sessions(&cfg.main.state_root, &ses).unwrap();
+        // köprü iletim tablosu: yalnızca ...:01 son 5 dakikada görüldü; köprünün kendi (yerel) MAC'i sayılmaz
+        let sys = e.root.join("sys-bagli");
+        std::fs::create_dir_all(sys.join(&cfg.main.iface)).unwrap();
+        let mut fdb = vec![0xaa, 0xbb, 0xcc, 0xdd, 0xee, 0x01, 1, 0, 0x3d, 0x21, 0, 0, 0, 0, 0, 0];
+        fdb.extend([0xaa, 0xbb, 0xcc, 0xdd, 0xee, 0x02, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0]);
+        std::fs::write(sys.join(&cfg.main.iface).join("brforward"), fdb).unwrap();
+        e.p.sys = sys;
+        let s = e.p.handle(&req("GET", "/cihazlar", &[], Some(&tok))).body;
+        let satir = |ad: &str| s.split("<tr>").find(|r| r.contains(ad)).unwrap().to_string();
+        assert!(satir("Ayşe").contains("<span class=\"rozet bagli\">Bağlı</span>"));
+        assert!(!satir("Mehmet").contains("rozet bagli") && satir("Mehmet").contains("Bağlı değil"));
+        assert_eq!(ortak::kopruye_bagli(&[1, 2, 3]), BTreeSet::new()); // yarım kayıt yok sayılır
     }
 
     #[test]

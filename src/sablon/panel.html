@@ -33,6 +33,10 @@ a:hover{color:var(--vurgu-koyu);text-decoration-color:currentColor}
 .yan nav a{display:flex;align-items:center;min-height:36px;padding:0 12px;border-radius:6px;color:var(--murekkep2);text-decoration:none;font-size:.90625rem;transition:background-color var(--hiz),color var(--hiz)}
 .yan nav a:hover{background:var(--ust);color:var(--murekkep)}
 .yan nav a.aktif{background:var(--zemin);color:var(--murekkep);font-weight:600;box-shadow:0 0 0 1px var(--cizgi),0 1px 2px rgba(0,0,0,.04)}
+/* durum rozeti: o an bağlı = dolu yeşil, değil = soluk */
+.rozet{display:inline-flex;align-items:center;min-height:24px;padding:0 10px;border-radius:999px;background:var(--ust);color:var(--soluk);font-size:.8125rem;font-weight:600;white-space:nowrap}
+.rozet.bagli{background:var(--iyi);color:#fff}
+.rozet.bagli::before{content:"";width:6px;height:6px;margin-right:6px;border-radius:50%;background:#fff}
 /* grup sayfası: üstte bölümlere atlama, bölümler alt alta (başlık + ince çizgi) */
 .bolum-atla{display:flex;flex-wrap:wrap;gap:6px;margin:-12px 0 8px}
 .bolum-atla a{display:inline-flex;align-items:center;min-height:32px;padding:0 12px;border:1px solid var(--cizgi);border-radius:999px;background:var(--ray);color:var(--murekkep2);text-decoration:none;font-size:.84375rem;transition:background-color var(--hiz),border-color var(--hiz),color var(--hiz)}
