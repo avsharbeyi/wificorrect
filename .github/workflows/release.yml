@@ -28,6 +28,7 @@ jobs:
         run: |
           s="${GITHUB_REF_NAME#v}"
           [ -n "$WFC_SSH_PUB" ] || { echo "WFC_SSH_PUB tanımlı değil (GitHub değişkeni): cihazlar root anahtarsız kurulurdu"; exit 1; }
+          printf '%s\n' "$WFC_SSH_PUB" | ssh-keygen -lf - >/dev/null || { echo "WFC_SSH_PUB geçerli bir SSH açık anahtarı değil (GitHub değişkeni): sürüm derlenmedi"; exit 1; }
           mkdir -p dist
           install -m 755 target/release/wificorrect dist/wificorrect
           sh scripts/paket.sh target/release/wificorrect "$s" dist

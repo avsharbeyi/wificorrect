@@ -11,6 +11,28 @@ if [ -s /cdrom/wificorrect/authorized_keys ]; then
 fi
 # </dev/null: bir paket soru sorarsa (dpkg conffile vb.) sonsuza dek beklemek yerine hata verir
 in-target sh -c 'DEBIAN_FRONTEND=noninteractive apt-get install -y -q /tmp/wificorrect_*_amd64.deb </dev/null && rm -f /tmp/wificorrect_*_amd64.deb'
+# Ağ rolleri belirlenemediyse (tek Ethernet vb.) paket ag.toml yazmaz → cihaz ilk açılışta ağsız ve kök kilitli:
+# erişilemez. "Kurulum bitti" demek yerine KALICI olarak dur (preseed komut hatasından sonra devam eder, exit 1 yetmez).
+if [ ! -s /target/etc/wificorrect/ag.toml ]; then
+  logger -t wificorrect "AG AYARI YAZILAMADI"
+  cat >/tmp/wificorrect-ag.templates <<'EOF'
+Template: wificorrect/ag-yok
+Type: error
+Description: Ağ ayarı yapılamadı
+ WifiCorrect en az iki Ethernet kartı ister ve Ethernet 1 modeme takılı olmalıdır. Disk kuruldu ama cihaz bu haliyle
+ ağsız açılır ve erişilemez.
+ .
+ Cihazı kapatın, iki Ethernet'in de takılı olduğunu ve Ethernet 1'in modemde olduğunu denetleyin, kurulumu yeniden başlatın.
+EOF
+  debconf-loadtemplate wificorrect /tmp/wificorrect-ag.templates || true
+  . /usr/share/debconf/confmodule
+  while :; do
+    db_fset wificorrect/ag-yok seen false || true
+    db_input critical wificorrect/ag-yok || true
+    db_go || true
+    sleep 1
+  done
+fi
 # Bitti mesajı (bekletmez: 10 sn görünür, sonra kurucu kendi son adımlarını yapıp cihazı kapatır)
 cat >/tmp/wificorrect-bitti.templates <<'T'
 Template: wificorrect/bitti
