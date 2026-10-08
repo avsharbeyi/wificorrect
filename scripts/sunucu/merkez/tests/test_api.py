@@ -166,16 +166,17 @@ def test_lisans_bilgisi_ve_parola_tipi():
         assert v.musteri(n)["parola_acik"] == "yeni-parola-1"  # cihazdan değişen parola da yönetimde görünür
 
 
-def test_giris_ve_eslesme_admin_ozeti_tasir():
+def test_giris_ve_eslesme_tek_admin_ozetini_tasir():
     with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
         api, v, _, _ = kur(tmp)
         n, pw = v.musteri_ekle()
         d, j = giris(api, n, pw)
-        c = v.bagli_cihaz(n)
-        assert d == 200 and j["admin"] == {"tuz": c["admin_tuz"], "ozet": c["admin_ozet"], "yineleme": 120000}
-        assert c["admin_parola"] not in json.dumps(j)  # açık parola gitmez
+        assert d == 200 and "admin" not in j  # yönetici belirlemediyse cihazdaki admin aynen kalır
+        v.admin_parolasi_koy("benim-admin-parolam")
         d, j2 = post(api, "/api/eslesme", {"cihaz_anahtari": j["cihaz_anahtari"]})
-        assert d == 200 and j2["admin"] == j["admin"]  # aynı özet: cihaz admin oturumlarını boşuna kapatmaz
+        assert d == 200 and j2["admin"] == v.admin_parolasi() and "benim-admin-parolam" not in json.dumps(j2)
+        d, j3 = post(api, "/api/eslesme", {"cihaz_anahtari": j["cihaz_anahtari"]})
+        assert j3["admin"] == j2["admin"]  # her eşitlemede aynı özet: admin oturumları boşuna düşmez
 
 
 def test_sms_ayari_yoksa_alan_yok_varsa_gider():

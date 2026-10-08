@@ -42,19 +42,11 @@ YENI_SUTUNLAR = (("parola_acik", "TEXT NOT NULL DEFAULT ''"), ("lisans_bitis", "
 YENI_CIHAZ_SUTUNLARI = (("admin_parola", "TEXT NOT NULL DEFAULT ''"), ("admin_tuz", "TEXT NOT NULL DEFAULT ''"),
                         ("admin_ozet", "TEXT NOT NULL DEFAULT ''"), ("admin_yineleme", "INTEGER NOT NULL DEFAULT 0"))
 SMS_ALANLARI = ("usercode", "password", "msgheader", "appkey")
-ADMIN_PAROLA_UZUNLUK = 16
 LISANS_GUN = 365
 
 
 def _yil_sonra(gun):
     return (gun + datetime.timedelta(days=LISANS_GUN)).isoformat()
-
-
-def _admin_alanlari():
-    """Cihazın admin parolası: açık (yönetimde görünür, kullanıcı kararı 2026-10-05) + cihaza giden özet."""
-    pw = guvenlik.parola_uret(ADMIN_PAROLA_UZUNLUK)
-    tuz, oz, y = guvenlik.yeni_kayit(pw)
-    return pw, tuz, oz, y
 
 
 class BaskaCihaz(Exception):
@@ -89,11 +81,6 @@ class Veri:
         for ad, tip in YENI_CIHAZ_SUTUNLARI:
             if ad not in var_c:
                 self.db.execute(f"ALTER TABLE cihaz ADD COLUMN {ad} {tip}")
-        # Eski bağlı cihazlara admin parolası ata
-        for r in self.db.execute("SELECT id FROM cihaz WHERE durum != 'serbest' AND admin_ozet = ''").fetchall():
-            pw, tuz, oz, y = _admin_alanlari()
-            self.db.execute("UPDATE cihaz SET admin_parola = ?, admin_tuz = ?, admin_ozet = ?, admin_yineleme = ? WHERE id = ?",
-                            (pw, tuz, oz, y, r["id"]))
 
     def bugun(self):
         return datetime.datetime.fromtimestamp(self.saat(), common.TZ).date()
@@ -122,8 +109,11 @@ class Veri:
             return self.db.execute(sql, a).fetchall()
 
     # --- müşteriler ---
-    def musteri_ekle(self, not_=""):
-        pw = guvenlik.parola_uret()
+    def musteri_ekle(self, not_="", parola=None):
+        """Parolayı yönetici yazar (2026-10-08, kullanıcı kararı); verilmezse (testler) rastgele."""
+        if parola is not None and (not isinstance(parola, str) or len(parola) < guvenlik.EN_AZ):
+            raise ValueError(f"Parola en az {guvenlik.EN_AZ} karakter olmalı.")
+        pw = parola if parola is not None else guvenlik.parola_uret()
         tuz, oz, y = guvenlik.yeni_kayit(pw)
         with self._islem() as db:
             while True:
@@ -225,9 +215,9 @@ class Veri:
                            (anahtar_ozeti(anahtar), ssh_pub, isletme_adi, unvan, surum, c["id"]))
                 return c["id"], anahtar
             cur = db.execute(
-                "INSERT INTO cihaz (musteri, durum, wg_pub, ssh_pub, anahtar_ozet, isletme_adi, unvan, surum, baglanma, "
-                "admin_parola, admin_tuz, admin_ozet, admin_yineleme) VALUES (?, 'bagli', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                (numara, wg_pub, ssh_pub, anahtar_ozeti(anahtar), isletme_adi, unvan, surum, self._simdi(), *_admin_alanlari()))
+                "INSERT INTO cihaz (musteri, durum, wg_pub, ssh_pub, anahtar_ozet, isletme_adi, unvan, surum, baglanma) "
+                "VALUES (?, 'bagli', ?, ?, ?, ?, ?, ?, ?)",
+                (numara, wg_pub, ssh_pub, anahtar_ozeti(anahtar), isletme_adi, unvan, surum, self._simdi()))
             return cur.lastrowid, anahtar
 
     def cihaz_anahtarla(self, anahtar):
@@ -265,13 +255,19 @@ class Veri:
         with self._islem() as db:
             db.execute("UPDATE cihaz SET durum = 'serbest', ayrilma = ? WHERE id = ?", (self._simdi(), cid))
 
-    def admin_parola_yenile(self, numara):
-        """Bağlı cihazın admin parolasını yeniler; cihaz bir sonraki eşitlemede alır. Dönen: yeni parola ya da None."""
-        pw, tuz, oz, y = _admin_alanlari()
+    # --- bütün cihazlarda tek admin parolası (2026-10-08, kullanıcı kararı): yalnızca özet saklanır ---
+    # ponytail: cihaz başına admin_* sütunları (2026-10-05) artık kullanılmıyor; eski veritabanında boş durur.
+    def admin_parolasi(self):
+        r = self._bir("SELECT deger FROM ayar WHERE anahtar = 'admin'")
+        return json.loads(r["deger"]) if r else None
+
+    def admin_parolasi_koy(self, pw):
+        if not isinstance(pw, str) or len(pw) < guvenlik.EN_AZ:
+            raise ValueError(f"Parola en az {guvenlik.EN_AZ} karakter olmalı.")
+        tuz, oz, y = guvenlik.yeni_kayit(pw)
         with self._islem() as db:
-            cur = db.execute("UPDATE cihaz SET admin_parola = ?, admin_tuz = ?, admin_ozet = ?, admin_yineleme = ? "
-                             "WHERE musteri = ? AND durum != 'serbest'", (pw, tuz, oz, y, numara))
-        return pw if cur.rowcount else None
+            db.execute("INSERT OR REPLACE INTO ayar (anahtar, deger) VALUES ('admin', ?)",
+                       (json.dumps({"tuz": tuz, "ozet": oz, "yineleme": y}),))
 
     # --- bütün cihazlara giden SMS (NetGSM) ayarı ---
     def sms_ayari(self):

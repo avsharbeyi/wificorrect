@@ -1,3 +1,4 @@
+import json
 import os
 import sqlite3
 import sys
@@ -152,20 +153,30 @@ def test_silinen_veri_sayfalarda_kalmaz():
         assert v.db.execute("PRAGMA secure_delete").fetchone()[0] == 1  # eski açık parolalar dosyada kalmasın
 
 
-def test_cihaz_admin_parolasi_bir_kez_uretilir_ve_yenilenir():
+def test_tek_admin_parolasi_ve_belirlenen_musteri_parolasi():
     with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
         v = yeni(tmp)
+        assert v.admin_parolasi() is None
+        for kotu in ("kisa", "", None):
+            try:
+                v.admin_parolasi_koy(kotu)
+                assert False, kotu
+            except ValueError:
+                pass
+        v.admin_parolasi_koy("benim-admin-parolam")
+        a = v.admin_parolasi()
+        assert a["yineleme"] == 120000 and G.dogru("benim-admin-parolam", a["tuz"], a["ozet"], a["yineleme"])
+        assert "benim-admin-parolam" not in json.dumps(a)  # yalnızca özet saklanır
         n, _ = v.musteri_ekle()
-        cid, _ = v.cihaz_bagla(n, "A" * 43 + "=", "ssh-ed25519 AAAA c")
-        c = v.bagli_cihaz(n)
-        assert len(c["admin_parola"]) == 16 and c["admin_yineleme"] == 120000
-        assert G.dogru(c["admin_parola"], c["admin_tuz"], c["admin_ozet"], c["admin_yineleme"])
-        v.cihaz_bagla(n, "A" * 43 + "=", "ssh-ed25519 AAAA c")  # aynı cihaz yeniden giriş: parola değişmez
-        assert v.bagli_cihaz(n)["admin_ozet"] == c["admin_ozet"]
-        yeni_pw = v.admin_parola_yenile(n)
-        c2 = v.bagli_cihaz(n)
-        assert yeni_pw == c2["admin_parola"] != c["admin_parola"] and G.dogru(yeni_pw, c2["admin_tuz"], c2["admin_ozet"], 120000)
-        assert v.admin_parola_yenile(1234567) is None  # bağlı cihaz yok
+        v.cihaz_bagla(n, WG1, SSH)
+        assert v.admin_parolasi() == a and v.bagli_cihaz(n)["admin_ozet"] == ""  # bağlanınca rastgele parola üretilmez
+        n2, pw = v.musteri_ekle("not", parola="musteri-parola-1")
+        assert pw == "musteri-parola-1" and v.parola_dogrula(n2, "musteri-parola-1") and v.musteri(n2)["parola_acik"] == pw
+        try:
+            v.musteri_ekle(parola="kisa")
+            assert False
+        except ValueError:
+            pass
 
 
 def test_sms_ayari():
@@ -209,17 +220,9 @@ def test_eski_cihaz_tablosuna_admin_sutunlari_eklenir():
         var_sonrasi = {r[1] for r in v.db.execute("PRAGMA table_info(cihaz)")}
         assert {"admin_parola", "admin_ozet"} <= var_sonrasi
 
-        # Bağlı cihaz admin parolası aldı
-        c_bagli = v.db.execute("SELECT * FROM cihaz WHERE musteri = 1111111 AND durum = 'bagli'").fetchone()
-        assert len(c_bagli["admin_parola"]) == 16
-        assert c_bagli["admin_ozet"] != ""  # digest var
-        assert c_bagli["admin_yineleme"] == 120000
-        assert G.dogru(c_bagli["admin_parola"], c_bagli["admin_tuz"], c_bagli["admin_ozet"], c_bagli["admin_yineleme"])
-
-        # Serbest cihaz admin parolası almadı
-        c_serbest = v.db.execute("SELECT * FROM cihaz WHERE musteri = 1111111 AND durum = 'serbest'").fetchone()
-        assert c_serbest["admin_parola"] == ""
-        assert c_serbest["admin_ozet"] == ""
+        # 2026-10-08: cihaz başına rastgele admin parolası yok (tek admin parolası, yönetici belirler)
+        for r in v.db.execute("SELECT * FROM cihaz WHERE musteri = 1111111").fetchall():
+            assert r["admin_parola"] == "" and r["admin_ozet"] == ""
 
 
 if __name__ == "__main__":
