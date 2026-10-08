@@ -371,6 +371,7 @@ const BOLUMLER: &[(&str, &str, &str, &str, bool)] = &[
     ("/cihazlar", "/izinli", "izinli", "İzinli cihazlar", false),
     ("/cihazlar", "/yasakli-siteler", "yasakli-siteler", "Yasaklı siteler", false),
     ("/kayitlar", "/kayitlar", "gunler", "Kayıtlar", false),
+    ("/kayitlar", "/ara", "site-ara", "Site / IP arama", false),
     ("/kayitlar", "/panel-hareketleri", "panel-hareketleri", "Panel hareketleri", true),
     ("/kayitlar", "/kullanicilar", "kullanicilar", "Kullanıcılar", false),
     ("/kayitlar", "/talep", "talep", "Resmi talep", false),
@@ -509,6 +510,7 @@ impl Panel {
                     .into(),
                 "/kullanicilar" => self.kullanicilar(cfg, req, o).body,
                 "/talep" => self.talep(cfg, req, o, now).body,
+                "/ara" => self.site_ara(cfg, req, o, now).body,
                 "/ayarlar" => self.ayarlar(cfg, req, o, &HashMap::new(), false).body,
                 "/portal-metinleri" => self.metinler(cfg, req, o).body,
                 "/portlar" => self.portlar(cfg, req, o, now).body,
@@ -607,6 +609,7 @@ impl Panel {
             ("GET", "/kullanicilar") => self.kullanicilar(&cfg, req, &o),
             ("GET", "/kullanici") => self.kullanici(&cfg, req, &o),
             ("GET", "/talep") => self.talep(&cfg, req, &o, now),
+            ("GET", "/ara") => self.site_ara(&cfg, req, &o, now),
             ("GET", "/talep/paket") => self.talep_paket(&cfg, req, &o),
             ("GET", "/yasakli-siteler") => self.filtre_sayfa(&cfg, req, &o),
             ("POST", "/yasakli-siteler/ekle") => self.filtre_degistir(cfg, req, &o, true),
@@ -1469,6 +1472,34 @@ mod tests {
         // bölüm sayfasından ayrı açılan ayrıntı sayfası kendi grubunu seçili gösterir
         let gun = e.p.handle(&req("GET", "/kayitlar/gun", &[], Some(&tok))).body;
         assert!(gun.contains("href=\"/kayitlar\" class=\"aktif\"") || gun.contains("gerekçe"));
+    }
+
+    #[test]
+    fn site_ip_arama_kimin_girdigini_gosterir() {
+        let e = env();
+        let (tok, _) = setup_and_login(&e, "mudur", "sahip-parola-12");
+        let root = Config::load(&e.p.cfg_path).unwrap().main.log_root;
+        let gun = ortak::day_of(&ortak::now_iso((e.p.clock)())).to_string();
+        ortak::append_rows(&ortak::day_file(&root, &gun, "dns.csv"), &[Row::new("DNS", &format!("{gun}T10:00:00+03:00"))
+            .set("telefon", "905334553132").set("mac", "aa:bb:cc:dd:ee:01").set("ic_ip", "10.50.0.23").set("alan_adi", "www.bet365.com")]).unwrap();
+        std::fs::create_dir_all(std::path::Path::new(&root).join("kullanicilar")).unwrap();
+        std::fs::write(std::path::Path::new(&root).join("kullanicilar/index.csv"), "telefon;ad;soyad;ilk_kayit;son_oturum\n905334553132;Ayşe;Yılmaz;x;y\n").unwrap();
+        // Kayıtlar sayfasında arama formu; varsayılan aralık son 7 gün
+        let k = e.p.handle(&req("GET", "/kayitlar", &[], Some(&tok))).body;
+        assert!(k.contains("<section class=\"bolum\" id=\"site-ara\"") && k.contains("action=\"/ara\"") && k.contains(&format!("value=\"{gun}\"")));
+        // kişisel veri: işletme sahibi önce gerekçe yazar
+        let mut r = req("GET", "/ara", &[], Some(&tok));
+        r.query.insert("q".into(), "bet365.com".into());
+        let sonuc = e.p.handle(&r).body;
+        assert!(sonuc.contains("action=\"/gerekce\"") && !sonuc.contains("Ayşe Yılmaz"));
+        let (tok, _) = setup_and_login(&e, "admin", "hizmet-parola-1");
+        let mut r = req("GET", "/ara", &[], Some(&tok));
+        r.query.insert("q".into(), "https://bet365.com/spor".into());
+        let sonuc = e.p.handle(&r);
+        assert!(sonuc.body.contains("Ayşe Yılmaz") && sonuc.body.contains("+905334553132") && sonuc.body.contains("www.bet365.com"), "{}", sonuc.body);
+        assert!(sonuc.body.contains("href=\"/kayitlar\" class=\"aktif\""));
+        let denetim = std::fs::read_to_string(ortak::day_file(&root, &gun, "denetim.csv")).unwrap();
+        assert!(denetim.contains("PANEL_SITE_ARA") && denetim.contains("aranan=https://bet365.com/spor"));
     }
 
     #[test]

@@ -277,6 +277,84 @@ pub fn ara(cfg: &Config, tur: &str, deger: &str, zaman: &str, tol: f64, now: f64
     }
 }
 
+// ---------------------------------------------------------------- site / IP arama
+/// Bir siteye ya da IP'ye girenlerden biri (telefonla; izinli cihazda telefon yok, MAC ile).
+#[derive(Debug, Clone, PartialEq)]
+pub struct Kisi {
+    pub telefon: String,
+    pub ad: String,
+    pub macler: Vec<String>,
+    pub ilk: String,
+    pub son: String,
+    pub sayi: usize,
+}
+
+pub struct SiteSonuc {
+    pub kisiler: Vec<Kisi>,
+    pub satirlar: Vec<Rec>,
+}
+
+/// Aranan site: adres çubuğundan kopyalanmış biçim de olur (`https://www.Site.com/yol` → `site.com`).
+fn site_terimi(s: &str) -> String {
+    let s = s.trim().to_lowercase();
+    let s = s.split_once("://").map_or(s.as_str(), |(_, r)| r);
+    let s = s.split(['/', '?', '#', ':']).next().unwrap_or("");
+    s.strip_prefix("www.").unwrap_or(s).to_string()
+}
+
+/// Kim girdi: site adı (DNS sorgusunda geçen) ya da hedef IP (bağlantı başlangıcı), [bas, bit] günleri arasında.
+/// Kişiler en çok girenden aza. ponytail: günler sırayla taranır (92 günle sınırlı); çok büyürse dizin gerekir.
+pub fn site_ara(cfg: &Config, aranan: &str, bas: &str, bit: &str) -> Result<SiteSonuc, String> {
+    let root = &cfg.main.log_root;
+    let (Some(t1), Some(t2)) = (parse_time(bas.trim()), parse_time(bit.trim())) else { return Err("Günler YYYY-AA-GG biçiminde olmalı.".into()) };
+    if t2 < t1 || t2 - t1 > 92.0 * 86400.0 {
+        return Err("Aralık en fazla 92 gün olabilir ve bitiş başlangıçtan önce olamaz.".into());
+    }
+    let ip = aranan.trim().parse::<std::net::Ipv4Addr>().ok().map(|i| i.to_string());
+    let terim = site_terimi(aranan);
+    if ip.is_none() && terim.len() < 3 {
+        return Err("En az 3 harflik bir site adı ya da bir IP adresi girin.".into());
+    }
+    let mut satirlar: Vec<Rec> = vec![];
+    for gun in days_range(t1, t2) {
+        satirlar.extend(match &ip {
+            Some(ip) => day_rows(root, &gun, "trafik.csv").into_iter().filter(|r| col(r, "olay") == "BAGLANTI_BASLA" && col(r, "hedef_ip") == ip).collect::<Vec<_>>(),
+            None => day_rows(root, &gun, "dns.csv").into_iter().filter(|r| col(r, "alan_adi").to_lowercase().contains(&terim)).collect(),
+        });
+    }
+    satirlar.sort_by(|a, b| col(a, "zaman").cmp(col(b, "zaman")));
+    let adlar: std::collections::HashMap<String, String> = parse_index(&read_text(&Path::new(root).join("kullanicilar").join("index.csv")));
+    let mut kisiler: Vec<Kisi> = vec![];
+    for r in &satirlar {
+        let (tel, mac, z) = (col(r, "telefon"), col(r, "mac"), col(r, "zaman"));
+        let k = match kisiler.iter_mut().position(|k| if tel.is_empty() { k.telefon.is_empty() && k.macler.iter().any(|m| m == mac) } else { k.telefon == tel }) {
+            Some(i) => &mut kisiler[i],
+            None => {
+                kisiler.push(Kisi { telefon: tel.into(), ad: adlar.get(tel).cloned().unwrap_or_default(), macler: vec![], ilk: z.into(), son: z.into(), sayi: 0 });
+                kisiler.last_mut().unwrap()
+            }
+        };
+        if !mac.is_empty() && !k.macler.iter().any(|m| m == mac) {
+            k.macler.push(mac.into());
+        }
+        k.son = z.into();
+        k.sayi += 1;
+    }
+    kisiler.sort_by(|a, b| b.sayi.cmp(&a.sayi));
+    Ok(SiteSonuc { kisiler, satirlar })
+}
+
+/// `kullanicilar/index.csv`: telefon → "Ad Soyad".
+fn parse_index(text: &str) -> std::collections::HashMap<String, String> {
+    text.lines()
+        .filter(|l| !l.starts_with("telefon;"))
+        .filter_map(|l| {
+            let f: Vec<&str> = l.trim_end_matches('\r').split(';').collect();
+            (f.len() >= 3 && !f[0].is_empty()).then(|| (f[0].to_string(), format!("{} {}", f[1], f[2]).trim().to_string()))
+        })
+        .collect()
+}
+
 // ---------------------------------------------------------------- paketler
 /// Resmi talep paketi: günlerin klasörleri olduğu gibi (mühürlü dosyalar, MANIFEST), zincir.txt ve doğrulama çıktısı.
 /// Orijinallere dokunulmaz. ponytail: sistemdeki GNU tar kullanılır.
@@ -346,6 +424,45 @@ mod tests {
         assert_eq!(ortak::now_iso(parse_time("2024-02-29").unwrap()), "2024-02-29T00:00:00+03:00");
         assert!(parse_time("2026-13-01").is_none() && parse_time("dün").is_none() && parse_time("2026-09-29 25:00").is_none());
         assert_eq!(days_range(parse_time("2026-09-30 23:00").unwrap(), parse_time("2026-10-02 01:00").unwrap()), vec!["2026-09-30", "2026-10-01", "2026-10-02"]);
+    }
+
+    #[test]
+    fn site_ve_ip_arama_kimin_girdigini_bulur() {
+        let (cfg, _) = setup();
+        let r = &cfg.main.log_root;
+        let dns = |z: &str, tel: &str, mac: &str, ad: &str| {
+            Row::new("DNS", z).set("telefon", tel).set("mac", mac).set("ic_ip", "10.50.0.23").set("protokol", "A").set("alan_adi", ad)
+        };
+        ortak::append_rows(&ortak::day_file(r, "2026-09-27", "dns.csv"), &[
+            dns("2026-09-27T10:00:00+03:00", "905334553132", "aa:bb:cc:dd:ee:01", "www.bet365.com"),
+            dns("2026-09-27T10:05:00+03:00", "905334553132", "aa:bb:cc:dd:ee:01", "m.bet365.com"),
+            dns("2026-09-27T11:00:00+03:00", "905551112233", "aa:bb:cc:dd:ee:02", "google.com"),
+            dns("2026-09-27T12:00:00+03:00", "", "aa:bb:cc:dd:ee:09", "bet365.com"), // izinli cihaz: telefon yok, MAC ile
+        ]).unwrap();
+        let akis = |olay: &str, z: &str| {
+            Row::new(olay, z).set("telefon", "905551112233").set("mac", "aa:bb:cc:dd:ee:02").set("ic_ip", "10.50.0.24").set("protokol", "tcp")
+                .set("hedef_ip", "203.0.113.7").set("hedef_port", "443")
+        };
+        ortak::append_rows(&ortak::day_file(r, "2026-09-28", "trafik.csv"), &[
+            akis("BAGLANTI_BASLA", "2026-09-28T09:00:00+03:00"),
+            akis("BAGLANTI_BITIS", "2026-09-28T09:01:00+03:00"), // aynı bağlantının bitişi iki kez sayılmaz
+        ]).unwrap();
+        fs::create_dir_all(Path::new(r).join("kullanicilar")).unwrap();
+        fs::write(Path::new(r).join("kullanicilar/index.csv"), "\u{feff}telefon;ad;soyad;ilk_kayit;son_oturum\r\n905334553132;Ayşe;Yılmaz;x;y\r\n").unwrap();
+        // adres çubuğundan kopyalanmış biçim de olur; www.bet365.com ve m.bet365.com aynı sitedir
+        let s = site_ara(&cfg, "https://WWW.Bet365.com/spor", "2026-09-27", "2026-09-28").unwrap();
+        assert_eq!(s.kisiler.len(), 2);
+        let k = &s.kisiler[0];
+        assert_eq!((k.telefon.as_str(), k.ad.as_str(), k.sayi), ("905334553132", "Ayşe Yılmaz", 2));
+        assert_eq!((k.ilk.as_str(), k.son.as_str(), k.macler.clone()), ("2026-09-27T10:00:00+03:00", "2026-09-27T10:05:00+03:00", vec!["aa:bb:cc:dd:ee:01".to_string()]));
+        assert_eq!((s.kisiler[1].telefon.as_str(), s.kisiler[1].macler[0].as_str()), ("", "aa:bb:cc:dd:ee:09"));
+        assert_eq!(s.satirlar.len(), 3);
+        let s = site_ara(&cfg, "203.0.113.7", "2026-09-27", "2026-09-28").unwrap();
+        assert_eq!((s.kisiler.len(), s.kisiler[0].ad.as_str(), s.kisiler[0].sayi, s.satirlar.len()), (1, "", 1, 1));
+        assert!(site_ara(&cfg, "bet365", "2026-09-27", "2026-09-27").unwrap().kisiler.len() == 2); // kelime de yeter
+        assert!(site_ara(&cfg, "  ", "2026-09-27", "2026-09-28").is_err());
+        assert!(site_ara(&cfg, "x.com", "2026-09-28", "2026-09-27").is_err());
+        assert!(site_ara(&cfg, "x.com", "2026-01-01", "2026-09-27").is_err()); // en çok 92 gün
     }
 
     #[test]

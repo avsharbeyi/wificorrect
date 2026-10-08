@@ -297,6 +297,58 @@ impl Panel {
         self.page(cfg, req, Some(o), "Resmi talep", &body)
     }
 
+    /// Girilmemesi gereken bir siteye / IP'ye kim girdi: kişiler (en çok girenden) + ayrıntı satırları.
+    pub(super) fn site_ara(&self, cfg: &Config, req: &Req, o: &Oturum, now: f64) -> Resp {
+        let gun = |t: f64| ortak::day_of(&ortak::now_iso(t)).to_string();
+        let aranan = q(req, "q").trim();
+        let bas = if q(req, "bas").is_empty() { gun(now - 6.0 * 86400.0) } else { q(req, "bas").trim().to_string() };
+        let bit = if q(req, "bit").is_empty() { gun(now) } else { q(req, "bit").trim().to_string() };
+        let mut sonuc = String::new();
+        if !aranan.is_empty() {
+            match kayit::site_ara(cfg, aranan, &bas, &bit) {
+                Err(e) => sonuc = format!("<p class=\"hata\">{}</p>", h(&e)),
+                Ok(s) => {
+                    self.audit(cfg, req, Some(o), "PANEL_SITE_ARA", &format!("aranan={aranan} bas={bas} bit={bit} kisi={}", s.kisiler.len()));
+                    let kisiler: Vec<Vec<String>> = s
+                        .kisiler
+                        .iter()
+                        .map(|k| {
+                            let tel = if k.telefon.is_empty() {
+                                "<span class=\"not\">izinli cihaz</span>".into()
+                            } else {
+                                format!("<a href=\"{}\">+{}</a>", h(&link("/kullanici", &[("tel", &k.telefon)])), h(&k.telefon))
+                            };
+                            let zaman = |z: &str| h(&z.get(..16).unwrap_or(z).replace('T', " "));
+                            vec![tel, h(&k.ad), format!("<code>{}</code>", h(&k.macler.join(", "))), zaman(&k.ilk), zaman(&k.son), k.sayi.to_string()]
+                        })
+                        .collect();
+                    let goster = &s.satirlar[..s.satirlar.len().min(TALEP_EN_FAZLA)];
+                    let not = if s.satirlar.len() > goster.len() { format!("<p class=\"not\">{} satır; ilk {TALEP_EN_FAZLA} gösteriliyor.</p>", s.satirlar.len()) } else { String::new() };
+                    sonuc = format!(
+                        "<div class=\"kart\"><h2>Kimler girdi</h2>{}</div><div class=\"kart\"><h2>Ayrıntı</h2>{not}{}</div>",
+                        table(&["Telefon", "Ad soyad", "MAC", "İlk", "Son", "Kaç kez"], &kisiler, "Bu aralıkta kimse girmemiş"),
+                        rec_table(goster, "Kayıt bulunamadı")
+                    );
+                }
+            }
+        }
+        let body = format!(
+            "<p class=\"not\">Girilmemesi gereken bir siteye ya da IP adresine kimin girdiğini bulur. Site adı DNS kayıtlarında \
+             (\"bet365\", \"bet365.com\" ya da adres çubuğundan kopyalanmış adres), IP adresi bağlantı kayıtlarında aranır. \
+             Yasaklı kelime filtresinin engellediği siteler kayda düşmez; tarayıcının şifreli DNS'i (DoH) kullanılırsa site adı \
+             görünmez — o durumda sitenin IP adresiyle arayın.</p>\
+             <form class=\"satir kart\" method=\"get\" action=\"/ara\">\
+             <div><label for=\"ara-q\">Site adı ya da IP</label><input type=\"text\" id=\"ara-q\" name=\"q\" value=\"{}\" required autocomplete=\"off\"></div>\
+             <div><label for=\"ara-bas\">Başlangıç günü</label><input type=\"date\" id=\"ara-bas\" name=\"bas\" value=\"{}\" required></div>\
+             <div><label for=\"ara-bit\">Bitiş günü</label><input type=\"date\" id=\"ara-bit\" name=\"bit\" value=\"{}\" required></div>\
+             <button>Ara</button></form>{sonuc}",
+            h(aranan),
+            h(&bas),
+            h(&bit)
+        );
+        self.page(cfg, req, Some(o), "Site / IP arama", &body)
+    }
+
     pub(super) fn talep_paket(&self, cfg: &Config, req: &Req, o: &Oturum) -> Resp {
         let (bas, bit) = (q(req, "bas").trim(), q(req, "bit").trim());
         if !kayit::valid_day(bas) || !kayit::valid_day(bit) {

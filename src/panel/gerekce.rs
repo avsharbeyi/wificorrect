@@ -13,6 +13,7 @@ pub(super) fn needs_reason(req: &Req) -> bool {
         && match req.path.as_str() {
             "/kayitlar/gun" | "/kayitlar/dosya" | "/kayitlar/indir" | "/kayitlar/gun-indir" | "/kullanicilar" | "/kullanici" | "/talep/paket" => true,
             "/talep" => req.query.get("tur").is_some_and(|t| !t.is_empty()), // boş form gerekçesiz açılır, arama gerekçe ister
+            "/ara" => req.query.get("q").is_some_and(|t| !t.trim().is_empty()),
             _ => false,
         }
 }
