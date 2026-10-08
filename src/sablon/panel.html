@@ -33,7 +33,13 @@ a:hover{color:var(--vurgu-koyu);text-decoration-color:currentColor}
 .yan nav a{display:flex;align-items:center;min-height:36px;padding:0 12px;border-radius:6px;color:var(--murekkep2);text-decoration:none;font-size:.90625rem;transition:background-color var(--hiz),color var(--hiz)}
 .yan nav a:hover{background:var(--ust);color:var(--murekkep)}
 .yan nav a.aktif{background:var(--zemin);color:var(--murekkep);font-weight:600;box-shadow:0 0 0 1px var(--cizgi),0 1px 2px rgba(0,0,0,.04)}
-.yan nav a[href="/sifre"]{margin-top:14px}
+/* grup sayfası: üstte bölümlere atlama, bölümler alt alta (başlık + ince çizgi) */
+.bolum-atla{display:flex;flex-wrap:wrap;gap:6px;margin:-12px 0 8px}
+.bolum-atla a{display:inline-flex;align-items:center;min-height:32px;padding:0 12px;border:1px solid var(--cizgi);border-radius:999px;background:var(--ray);color:var(--murekkep2);text-decoration:none;font-size:.84375rem;transition:background-color var(--hiz),border-color var(--hiz),color var(--hiz)}
+.bolum-atla a:hover{background:var(--ust);border-color:var(--cizgi2);color:var(--murekkep)}
+.bolum{padding-top:36px;scroll-margin-top:12px}
+.bolum + .bolum{margin-top:8px;border-top:1px solid var(--cizgi2)}
+.bolum-baslik{margin:0 0 18px;font-size:1.25rem;font-weight:650;letter-spacing:-.012em}
 .yan form{margin-top:auto;padding:16px 12px 0}
 .yan form button{width:100%}
 main{min-width:0;padding:44px 56px 72px;max-width:1240px}
@@ -149,7 +155,7 @@ code{font:.8125rem var(--es)}
 .kim span::before{content:" · "}
 .yan nav{order:3;flex-basis:100%;flex-direction:row;flex-wrap:wrap;gap:2px;margin:0 -8px}
 .yan nav a{min-height:34px;padding:0 8px;font-size:.875rem}
-.yan nav a[href="/sifre"]{margin-top:0}
+
 main{padding:28px 16px 56px}
 .rakamlar{grid-template-columns:repeat(2,minmax(0,1fr))}
 .rakamlar div:nth-child(odd){border-left:0;padding-left:0}
@@ -167,7 +173,7 @@ main{padding:28px 16px 56px}
 .yalin .marka{flex:none}
 .yalin main{padding:24px 20px}
 }
-@media (pointer:coarse){button,.dugme{min-height:44px}.yan nav a{min-height:40px}td button{min-height:40px}}
+@media (pointer:coarse){button,.dugme{min-height:44px}.yan nav a{min-height:40px}.bolum-atla a{min-height:44px}td button{min-height:40px}}
 @media (prefers-reduced-motion:reduce){*{transition:none !important}}
 </style>
 </head>

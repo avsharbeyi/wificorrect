@@ -45,9 +45,14 @@ pub struct Resp {
 }
 
 fn redirect(loc: &str, msg: Option<(&str, bool)>) -> Resp {
+    // eski bölüm yolu (sorgusuz) → grup sayfasının o bölümü; sorgulu adres (arama, ayrıntı) olduğu gibi kalır
+    let (loc, frag) = match BOLUMLER.iter().find(|(_, y, ..)| *y == loc) {
+        Some((g, _, id, ..)) => (*g, format!("#{id}")),
+        None => (loc, String::new()),
+    };
     let loc = match msg {
-        Some((m, err)) => format!("{loc}?m={}{}", pct(m), if err { "&e=1" } else { "" }),
-        None => loc.to_string(),
+        Some((m, err)) => format!("{loc}?m={}{}{frag}", pct(m), if err { "&e=1" } else { "" }),
+        None => format!("{loc}{frag}"),
     };
     Resp { status: 303, body: String::new(), headers: vec![("Location".into(), loc)], file: None }
 }
@@ -356,23 +361,58 @@ pub struct Panel {
     baglan_kilit: std::sync::Mutex<()>,
 }
 
-const MENU: &[(&str, &str, bool)] = &[
-    ("/", "Özet", false),
-    ("/oturumlar", "Bağlı cihazlar", false),
-    ("/yasak", "Yasaklı cihazlar", false),
-    ("/izinli", "İzinli cihazlar", false),
-    ("/yasakli-siteler", "Yasaklı siteler", false),
-    ("/kayitlar", "Kayıtlar", false),
-    ("/kullanicilar", "Kullanıcılar", false),
-    ("/talep", "Resmi talep", false),
-    ("/ayarlar", "Ayarlar", false),
-    ("/portal-metinleri", "Portal metinleri", false),
-    ("/portlar", "Portlar", false),
-    ("/admin-ayarlari", "Admin ayarları", true),
-    ("/sistem", "Sistem", false),
-    ("/panel-hareketleri", "Panel hareketleri", true),
-    ("/sifre", "Şifremi değiştir", false),
+const MENU: &[(&str, &str)] = &[("/", "Özet"), ("/cihazlar", "Cihazlar"), ("/kayitlar", "Kayıtlar"), ("/ayarlar", "Ayarlar")];
+
+/// Menü grupları tek sayfadır; eski sayfalar bu sayfada alt alta bölüm olur (2026-10-08, kullanıcı isteği).
+/// (grup, eski yol, bölüm id, başlık, yalnızca admin). Eski yollar ayrıca açılır (hata/arama sonucu, ayrıntı).
+const BOLUMLER: &[(&str, &str, &str, &str, bool)] = &[
+    ("/cihazlar", "/oturumlar", "oturumlar", "Bağlı cihazlar", false),
+    ("/cihazlar", "/yasak", "yasak", "Yasaklı cihazlar", false),
+    ("/cihazlar", "/izinli", "izinli", "İzinli cihazlar", false),
+    ("/cihazlar", "/yasakli-siteler", "yasakli-siteler", "Yasaklı siteler", false),
+    ("/kayitlar", "/kayitlar", "gunler", "Kayıtlar", false),
+    ("/kayitlar", "/panel-hareketleri", "panel-hareketleri", "Panel hareketleri", true),
+    ("/kayitlar", "/kullanicilar", "kullanicilar", "Kullanıcılar", false),
+    ("/kayitlar", "/talep", "talep", "Resmi talep", false),
+    ("/ayarlar", "/ayarlar", "isletme", "İşletme", false),
+    ("/ayarlar", "/portal-metinleri", "portal-metinleri", "Portal metinleri", false),
+    ("/ayarlar", "/portlar", "portlar", "Portlar", false),
+    ("/ayarlar", "/sistem", "sistem", "Sistem", false),
+    ("/ayarlar", "/admin-ayarlari", "admin-ayarlari", "Admin ayarları", true),
+    ("/ayarlar", "/sifre", "sifre-degistir", "Şifremi değiştir", false),
 ];
+
+/// Yolun menü grubu: eski bölüm yolu ya da onun alt sayfası (/kayitlar/gun, /kullanici, /talep/paket …).
+fn menu_grubu(path: &str) -> &'static str {
+    if path == "/kullanici" {
+        return "/kayitlar";
+    }
+    BOLUMLER
+        .iter()
+        .find(|(g, y, ..)| path == *g || path == *y || path.strip_prefix(y).is_some_and(|r| r.starts_with('/')))
+        .map_or("/", |(g, ..)| g)
+}
+
+struct ParcaKipi;
+
+impl ParcaKipi {
+    fn ac() -> ParcaKipi {
+        PARCA.with(|p| p.set(true));
+        ParcaKipi
+    }
+}
+
+impl Drop for ParcaKipi {
+    fn drop(&mut self) {
+        PARCA.with(|p| p.set(false));
+    }
+}
+
+thread_local! {
+    // ponytail: grup sayfası, bölüm işleyicilerini çağırıp yalnızca gövdelerini alır (her işleyici page() ile biter).
+    // İşleyicileri gövde/sayfa diye ikiye bölmek yerine iş parçacığına özel bir bayrak; istek tek iş parçacığında işlenir.
+    static PARCA: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
 
 impl Panel {
     pub fn new(cfg_path: &str, hesap_path: &str, runner: Box<Runner>, clock: Box<Clock>) -> Panel {
@@ -395,13 +435,16 @@ impl Panel {
     }
 
     fn page(&self, cfg: &Config, req: &Req, o: Option<&Oturum>, title: &str, body: &str) -> Resp {
+        if PARCA.with(std::cell::Cell::get) {
+            return Resp { status: 200, body: body.into(), headers: vec![], file: None };
+        }
         let menu = match o {
             Some(o) => {
+                let grup = menu_grubu(&req.path);
                 let links: String = MENU
                     .iter()
-                    .filter(|(_, _, hz)| !hz || o.rol == Rol::Hizmet)
-                    .map(|(p, l, _)| {
-                        let act = if *p == req.path { " class=\"aktif\" aria-current=\"page\"" } else { "" };
+                    .map(|(p, l)| {
+                        let act = if *p == grup { " class=\"aktif\" aria-current=\"page\"" } else { "" };
                         format!("<a href=\"{p}\"{act}>{}</a>", h(l))
                     })
                     .collect();
@@ -443,6 +486,48 @@ impl Panel {
         v.insert("mesaj_html", uyari + &msg.unwrap_or_default());
         v.insert("icerik_html", body.into());
         Resp { status: 200, body: substitute(TPL, &v), headers: vec![("Content-Type".into(), "text/html; charset=utf-8".into())], file: None }
+    }
+
+    /// Menü grubu sayfası (/cihazlar, /kayitlar, /ayarlar): bölümler alt alta, üstte bölümlere atlama bağlantıları.
+    fn grup_sayfasi(&self, cfg: &Config, req: &Req, o: &Oturum, now: f64) -> Resp {
+        let hizmet = o.rol == Rol::Hizmet;
+        let gerekce = hizmet || o.gerekce.as_ref().is_some_and(|(_, until)| *until > now);
+        let bolumler: Vec<_> = BOLUMLER.iter().filter(|(g, .., yalniz_admin)| *g == req.path && (hizmet || !yalniz_admin)).collect();
+        let parca = ParcaKipi::ac(); // bir bölüm panik yapsa da bayrak iş parçacığında kalmasın
+        let govdeler: Vec<String> = bolumler
+            .iter()
+            .map(|(_, yol, ..)| match *yol {
+                "/oturumlar" => self.oturumlar_sayfa(cfg, req, o, now).body,
+                "/yasak" => self.liste(cfg, req, o, true).body,
+                "/izinli" => self.liste(cfg, req, o, false).body,
+                "/yasakli-siteler" => self.filtre_sayfa(cfg, req, o).body,
+                "/kayitlar" => self.kayitlar(cfg, req, o).body,
+                "/panel-hareketleri" => self.hareketler(cfg, req, o, now).body,
+                // kişisel veri: işletme sahibi gerekçe yazmadan liste gösterilmez (gerekçe sayfası /kullanicilar'da açılır)
+                "/kullanicilar" if !gerekce => "<p>Müşterilerin kişisel verisini görmek için önce gerekçe yazmanız gerekir; \
+                     her görüntüleme gerekçesiyle kaydedilir.</p><p><a class=\"dugme\" href=\"/kullanicilar\">Kullanıcıları göster</a></p>"
+                    .into(),
+                "/kullanicilar" => self.kullanicilar(cfg, req, o).body,
+                "/talep" => self.talep(cfg, req, o, now).body,
+                "/ayarlar" => self.ayarlar(cfg, req, o, &HashMap::new(), false).body,
+                "/portal-metinleri" => self.metinler(cfg, req, o).body,
+                "/portlar" => self.portlar(cfg, req, o, now).body,
+                "/sistem" => self.sistem(cfg, req, o, "").body,
+                "/admin-ayarlari" => self.ayarlar(cfg, req, o, &HashMap::new(), true).body,
+                _ => self.sifre(cfg, req, o, "").body,
+            })
+            .collect();
+        drop(parca);
+        let atla: String = bolumler.iter().map(|(_, _, id, baslik, _)| format!("<a href=\"#{id}\">{}</a>", h(baslik))).collect();
+        let mut body = format!("<nav class=\"bolum-atla\" aria-label=\"Bu sayfadaki bölümler\">{atla}</nav>");
+        for ((_, _, id, baslik, _), govde) in bolumler.iter().zip(&govdeler) {
+            body.push_str(&format!(
+                "<section class=\"bolum\" id=\"{id}\" aria-labelledby=\"b-{id}\"><h2 class=\"bolum-baslik\" id=\"b-{id}\">{}</h2>{govde}</section>",
+                h(baslik)
+            ));
+        }
+        let baslik = MENU.iter().find(|(p, _)| *p == req.path).map_or("", |(_, l)| l);
+        self.page(cfg, req, Some(o), baslik, &body)
     }
 
     fn audit(&self, cfg: &Config, req: &Req, o: Option<&Oturum>, olay: &str, ek: &str) {
@@ -504,6 +589,7 @@ impl Panel {
                 r
             }
             ("GET", "/") => self.ozet(&cfg, req, &o, now),
+            ("GET", "/cihazlar" | "/kayitlar" | "/ayarlar") => self.grup_sayfasi(&cfg, req, &o, now),
             ("GET", "/oturumlar") => self.oturumlar_sayfa(&cfg, req, &o, now),
             ("POST", "/oturumlar/at") => self.at(&cfg, req, &o, now),
             ("GET", "/yasak") => self.liste(&cfg, req, &o, true),
@@ -514,7 +600,6 @@ impl Panel {
             ("POST", "/izinli/kaldir") => self.liste_kaldir(cfg, req, &o, false),
             ("GET", "/panel-hareketleri") if hizmet => self.hareketler(&cfg, req, &o, now),
             ("GET", "/panel-hareketleri") => text(403, "Bu sayfa yalnızca admin'e açık."),
-            ("GET", "/kayitlar") => self.kayitlar(&cfg, req, &o),
             ("GET", "/kayitlar/gun") => self.kayit_gun(&cfg, req, &o),
             ("GET", "/kayitlar/dosya") => self.kayit_dosya(&cfg, req, &o),
             ("GET", "/kayitlar/indir") => self.kayit_indir(&cfg, req, &o),
@@ -533,7 +618,6 @@ impl Panel {
             ("POST", "/portlar/onayla") => self.portlar_onayla(&cfg, req, &o),
             ("POST", "/portlar/geri-al") => self.portlar_geri_al(&cfg, req, &o),
             ("POST", "/portlar/etiket") => self.portlar_etiket(&cfg, req, &o),
-            ("GET", "/ayarlar") => self.ayarlar(&cfg, req, &o, &HashMap::new(), false),
             ("POST", "/ayarlar") => self.ayarlar_post(cfg, req, &o, false),
             ("GET", "/admin-ayarlari") if hizmet => self.ayarlar(&cfg, req, &o, &HashMap::new(), true),
             ("POST", "/admin-ayarlari") if hizmet => self.ayarlar_post(cfg, req, &o, true),
@@ -770,11 +854,12 @@ impl Panel {
             .collect();
         let body = format!(
             "<p class=\"not\">{}</p><form class=\"satir kart\" method=\"post\" action=\"{base}/ekle\">{}\
-             <div><label for=\"mac\">MAC adresi</label><input type=\"text\" id=\"mac\" name=\"mac\" placeholder=\"aa:bb:cc:dd:ee:ff\" required></div>\
-             <div><label for=\"ad\">Not</label><input type=\"text\" id=\"ad\" name=\"ad\" maxlength=\"40\"></div><button>Ekle</button></form>{}",
+             <div><label for=\"{k}-mac\">MAC adresi</label><input type=\"text\" id=\"{k}-mac\" name=\"mac\" placeholder=\"aa:bb:cc:dd:ee:ff\" required></div>\
+             <div><label for=\"{k}-ad\">Not</label><input type=\"text\" id=\"{k}-ad\" name=\"ad\" maxlength=\"40\"></div><button>Ekle</button></form>{}",
             h(note),
             csrf_input(o),
-            table(&["MAC", "Not", ""], &rows, "Liste boş")
+            table(&["MAC", "Not", ""], &rows, "Liste boş"),
+            k = &base[1..], // yasaklı ve izinli listesi aynı sayfada: alan kimlikleri ayrı
         );
         self.page(cfg, req, Some(o), title, &body)
     }
@@ -1336,6 +1421,69 @@ mod tests {
         let page = e.p.handle(&req("GET", "/sifre", &[], Some(&token))).body;
         let csrf = page.split("name=\"csrf\" value=\"").nth(1).unwrap().split('"').next().unwrap().to_string();
         (token, csrf)
+    }
+
+    /// Sayfadaki id'ler: aynı id iki kez olursa etiketler yanlış alana bağlanır.
+    fn tekrar_eden_idler(html: &str) -> Vec<String> {
+        let mut gorulen = BTreeSet::new();
+        html.split(" id=\"").skip(1).filter_map(|s| s.split('"').next()).filter(|id| !gorulen.insert(id.to_string())).map(String::from).collect()
+    }
+
+    fn menu_linkleri(html: &str) -> Vec<String> {
+        let nav = html.split("<nav aria-label=\"Menü\">").nth(1).unwrap().split("</nav>").next().unwrap();
+        nav.split("href=\"").skip(1).map(|s| s.split('"').next().unwrap().to_string()).collect()
+    }
+
+    #[test]
+    fn menu_dort_grup_ve_bolumler_tek_sayfada() {
+        let e = env();
+        let (tok, _) = setup_and_login(&e, "mudur", "sahip-parola-12");
+        let ozet = e.p.handle(&req("GET", "/", &[], Some(&tok))).body;
+        assert_eq!(menu_linkleri(&ozet), ["/", "/cihazlar", "/kayitlar", "/ayarlar"]);
+        let s = e.p.handle(&req("GET", "/cihazlar", &[], Some(&tok)));
+        assert_eq!(s.status, 200);
+        for (id, form) in [("oturumlar", ""), ("yasak", "/yasak/ekle"), ("izinli", "/izinli/ekle"), ("yasakli-siteler", "/yasakli-siteler/ekle")] {
+            assert!(s.body.contains(&format!("<section class=\"bolum\" id=\"{id}\"")), "{id}");
+            assert!(s.body.contains(&format!("href=\"#{id}\"")), "atlama bağlantısı {id}");
+            assert!(s.body.contains(form), "{form}");
+        }
+        assert!(s.body.contains("href=\"/cihazlar\" class=\"aktif\""));
+        assert!(tekrar_eden_idler(&s.body).is_empty(), "{:?}", tekrar_eden_idler(&s.body));
+        // kayıtlar: işletme sahibi panel hareketlerini görmez; kullanıcılar gerekçe ister (gerekçesiz içerik yok)
+        let k = e.p.handle(&req("GET", "/kayitlar", &[], Some(&tok))).body;
+        for id in ["gunler", "kullanicilar", "talep"] {
+            assert!(k.contains(&format!("id=\"{id}\"")), "{id}");
+        }
+        assert!(!k.contains("id=\"panel-hareketleri\"") && k.contains("href=\"/kullanicilar\""));
+        assert!(tekrar_eden_idler(&k).is_empty(), "{:?}", tekrar_eden_idler(&k));
+        // ayarlar: şifre değiştirme de burada; admin ayarları yalnızca admin'e
+        let a = e.p.handle(&req("GET", "/ayarlar", &[], Some(&tok))).body;
+        for id in ["isletme", "portal-metinleri", "portlar", "sistem", "sifre-degistir"] {
+            assert!(a.contains(&format!("<section class=\"bolum\" id=\"{id}\"")), "{id}");
+        }
+        assert!(!a.contains("id=\"admin-ayarlari\"") && a.contains("action=\"/sifre\""));
+        assert!(tekrar_eden_idler(&a).is_empty(), "{:?}", tekrar_eden_idler(&a));
+        // bölüm sayfasından ayrı açılan ayrıntı sayfası kendi grubunu seçili gösterir
+        let gun = e.p.handle(&req("GET", "/kayitlar/gun", &[], Some(&tok))).body;
+        assert!(gun.contains("href=\"/kayitlar\" class=\"aktif\"") || gun.contains("gerekçe"));
+    }
+
+    #[test]
+    fn admin_bolumleri_ve_yonlendirmeler() {
+        let e = env();
+        let (tok, csrf) = setup_and_login(&e, "admin", "hizmet-parola-1");
+        let k = e.p.handle(&req("GET", "/kayitlar", &[], Some(&tok))).body;
+        assert!(k.contains("<section class=\"bolum\" id=\"panel-hareketleri\"") && k.contains("action=\"/kullanicilar\""));
+        let a = e.p.handle(&req("GET", "/ayarlar", &[], Some(&tok))).body;
+        assert!(a.contains("<section class=\"bolum\" id=\"admin-ayarlari\"") && a.contains("name=\"netgsm.usercode\""));
+        assert!(tekrar_eden_idler(&a).is_empty(), "{:?}", tekrar_eden_idler(&a));
+        // form gönderince aynı sayfanın o bölümüne dönülür; mesaj korunur
+        let r = e.p.handle(&req("POST", "/yasak/ekle", &[("csrf", &csrf), ("mac", "aa:bb:cc:dd:ee:01"), ("ad", "x")], Some(&tok)));
+        assert!(loc(&r).starts_with("/cihazlar?m=") && loc(&r).ends_with("#yasak"), "{}", loc(&r));
+        let r = e.p.handle(&req("POST", "/admin-ayarlari", &[("csrf", &csrf), ("limits.sms_global_day", "250")], Some(&tok)));
+        assert!(loc(&r).starts_with("/ayarlar?m=") && loc(&r).ends_with("#admin-ayarlari"), "{}", loc(&r));
+        // sorgulu adresler (arama sonucu) olduğu gibi kalır
+        assert_eq!(redirect("/kullanicilar?q=x", None).headers[0].1, "/kullanicilar?q=x");
     }
 
     #[test]
