@@ -81,7 +81,7 @@ impl Panel {
             .collect();
         let body = format!(
             "<p class=\"not\">Bu sayfadaki her görüntüleme, arama ve indirme kimin yaptığıyla birlikte kaydedilir ve hizmet sağlayıcı tarafından denetlenir.</p><p class=\"not\">Her gün gece 00:15'te mühürlenir (sıkıştırılır, özeti zincire eklenir). Kayıtlar yalnızca okunur; \
-             panelden silinemez. \"Günü indir\" mühürlü dosyaları, zinciri ve doğrulama çıktısını tek pakette verir.</p>{}",
+             panelden silinemez. \"Günü indir\" mühürlü dosyaları, zinciri ve doğrulama çıktısını tek pakette verir.</p><p class=\"not\"><a href=\"https://panel.wificorrect.com/\">Merkezdeki yedek arşiv</a> — cihaz ulaşılamazken de açılır.</p>{}",
             table(&["Gün", "Durum", "Kişi", "Boyut", ""], &rows, "Henüz kayıt yok")
         );
         self.page(cfg, req, Some(o), "Kayıtlar", &body)
