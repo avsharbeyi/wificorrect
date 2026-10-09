@@ -106,10 +106,10 @@ usb_ayni "kurulumda"
 #    yazdığı yönetim adresi (seri konsol ttyS0).
 vm acilis.log -drive file="$d/disk.qcow2",if=virtio
 n=0
-until grep -aq "Started.*wificorrect-panel.service" "$d/acilis.log" && grep -aq "WifiCorrect yonetim adresi: https://[0-9]" "$d/acilis.log"; do
+until grep -aq "Started.*wificorrect-panel.service" "$d/acilis.log" && grep -aq "WifiCorrect panel: https://panel.wificorrect.com (eslestirme: https://[0-9]" "$d/acilis.log"; do
   sleep 5; n=$((n + 5)); [ $n -lt 300 ] || { grep -a "FAILED" "$d/acilis.log" | tr -d '\033' || true; hata "açılışta panel/yönetim adresi görünmedi"; }
 done
-grep -a "WifiCorrect yonetim adresi" "$d/acilis.log" | tail -1 | tr -d '\033'
+grep -a "WifiCorrect panel: https://panel.wificorrect.com" "$d/acilis.log" | tail -1 | tr -d '\033'
 if [ -n "${WFC_TEST_SSH_KEY:-}" ]; then
   n=0
   until for p in 2222 2223; do
