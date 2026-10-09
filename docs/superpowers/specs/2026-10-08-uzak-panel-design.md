@@ -1,69 +1,76 @@
-# Cihaz paneline tarayıcıdan uzaktan erişim + parolaları yönetici belirler — tasarım (2026-10-08)
+# Cihaz paneline yalnızca panel.wificorrect.com'dan giriş + admin ayarları parolayla — tasarım (2026-10-09)
 
-## 1. Amaç
-İşletme sahibi telefonundan ya da bilgisayarından **yalnızca tarayıcıyla** kendi cihazının paneline (Özet, Cihazlar,
-Kayıtlar, Ayarlar) her yerden girer; VPN, port yönlendirme, sertifika uyarısı yok. Hizmet sağlayıcı (admin) da
-yönetimden herhangi bir müşterinin cihaz paneline aynı yolla geçer. WireGuard yalnızca cihaz ↔ merkez arasında kalır.
+Önceki sürüm (2026-10-08: ayrı admin kullanıcısı, merkezden admin geçişi, dükkân içi giriş) kullanıcı kararıyla iptal.
 
-Ayrıca (kullanıcı kararı 2026-10-08): müşteri parolası ve cihaz admin parolası **rastgele üretilmez**; yönetici yazar,
-müşteri isterse kendi parolasını sonra değiştirir. Hiçbir parola kendiliğinden değişmez.
+## 1. Kullanıcı kararları (2026-10-09)
+- Herkes **kendi müşteri numarası ve parolasıyla** girer; ayrı `admin` kullanıcısı yok.
+- Giriş **yalnızca panel.wificorrect.com'dan**; dükkân içinden cihaz paneline giriş yok.
+- **Admin ayarları** menüsü herkeste görünür; girmek için **admin parolası** gerekir. Admin parolası merkezden belirlenir
+  (Yönetim → Admin parolası; 2026-10-08'de yapıldı), bütün cihazlarda aynı, kendiliğinden değişmez.
+- **Panel hareketleri** de admin parolasının arkasında.
+- Hizmet sağlayıcı bir cihaza o müşterinin numarası + parolasıyla girer (yönetimde görünür); ayrı geçiş düğmesi yok.
+- Müşteri parolasını yönetici yazar, müşteri isterse değiştirir (2026-10-08'de yapıldı).
 
 ## 2. Kullanıcının gördüğü
-1. `panel.wificorrect.com` → müşteri numarası + parola (bugünkü giriş) → menüde **Cihaz paneli** düğmesi.
-2. Düğme `cihaz.wificorrect.com`'u açar: cihazın kendi paneli, ikinci giriş yok, geçerli sertifika.
-3. Cihaz panelindeki **Çıkış** merkez oturumunu da kapatır, `panel.wificorrect.com` giriş sayfasına döner.
-4. Yönetimde müşteri sayfasında **Cihaz paneline git** (admin rolüyle).
-5. Dükkân içinden `https://<cihaz-ip>:8443` bugünkü gibi çalışır (yerel giriş).
+1. Telefonda/bilgisayarda **panel.wificorrect.com** → müşteri numarası + parola.
+2. Girişten sonra doğrudan **cihazın paneli** açılır (Özet, Cihazlar, Kayıtlar, Ayarlar, Admin ayarları); adres
+   `cihaz.wificorrect.com`, geçerli sertifika, ikinci giriş yok.
+3. **Admin ayarları** → admin parolası sorulur → doğruysa o oturumda 30 dk açık (Admin ayarları + Panel hareketleri).
+4. **Çıkış** her iki oturumu kapatır, panel.wificorrect.com giriş sayfasına döner.
+5. Cihaz bağlı değilse ya da ulaşılamıyorsa (kapalı, internetsiz): merkezin bugünkü sayfası (yedek arşiv, parola
+   değiştirme) ve "Cihazınıza şu an ulaşılamıyor" uyarısı.
+6. Merkezin yedek arşivi cihaz panelinden de açılır: Kayıtlar sayfasında "Merkezdeki yedek arşiv" bağlantısı
+   (`panel.wificorrect.com/arsiv`).
 
 ## 3. Mimari
 ```
-tarayıcı ──HTTPS──▶ Caddy (cihaz.wificorrect.com)
-                     │ 1) istemcinin X-WFC-* başlıklarını siler
-                     │ 2) forward_auth → wc-merkez /cihaz-yetki : çerez geçerli mi, hangi cihaz?
-                     │      200 + X-WFC-Cihaz: 10.99.0.11, X-WFC-Kullanici: 1537344 | admin
-                     │      302 → panel.wificorrect.com/giris  (çerez yok / lisans kapalı / cihaz bağlı değil)
-                     └ 3) reverse_proxy https://{X-WFC-Cihaz}:8443  (WireGuard tüneli; cihaz sertifikası
-                          kendinden imzalı → doğrulama yok: kimliği WireGuard doğruluyor)
+tarayıcı ─▶ Caddy  panel.wificorrect.com ─▶ wc-merkez (giriş, arşiv, /cihaza-git)
+                    cihaz.wificorrect.com
+                     1) istemcinin X-WFC-* başlıklarını siler
+                     2) forward_auth → wc-merkez /cihaz-yetki: çerez → müşteri → bağlı cihazın tünel adresi
+                          200 + X-WFC-Cihaz: 10.99.0.11, X-WFC-Kullanici: 1537344
+                          302 → panel.wificorrect.com/giris (çerez yok/süresi doldu, lisans kapalı, cihaz bağlı değil)
+                     3) reverse_proxy https://{X-WFC-Cihaz}:8443 (WireGuard; cihaz sertifikası doğrulanmaz)
 ```
-- **Merkez (`wc-merkez`, Python):** `cihaz.wificorrect.com` ana bilgisayarı için yalnızca `/cihaz-yetki` (Caddy'nin
-  sorduğu) ve özel yollar `/_giris?t=…` (tek kullanımlık geçiş belirteci → çerez) ve `/_cikis` (çerezi siler).
-- **Geçiş belirteci:** `panel.wificorrect.com` → `POST /cihaz-paneli` (CSRF) → 60 sn geçerli tek kullanımlık belirteç →
-  `302 https://cihaz.wificorrect.com/_giris?t=…` → merkez çerezi koyar (`wcc`, HttpOnly, Secure, SameSite=Lax,
-  yalnızca cihaz.wificorrect.com) → `302 /`. Yönetimden: `POST /m/<n>/cihaz-paneli` (admin rolü, seçilen müşteri).
-- **Cihaz oturumu (merkezde):** müşteri numarası + rol + oluşturma/son kullanım; boşta 30 dk, en çok 12 saat;
-  müşteri parolası değişince, üyelik/lisans kapanınca, cihaz serbest bırakılınca geçersiz. Bellek içi (bugünkü
-  oturumlar gibi; servis yeniden başlarsa yeniden girilir).
-- **Cihaz (Rust):** istek **kaynak IP'si merkezin tünel adresi** (10.99.0.1; ayardaki uzak sunucu ağından türetilir)
-  ve `X-WFC-Kullanici` varsa: değer cihazın bağlı olduğu müşteri numarasıysa işletme sahibi, `admin` ise hizmet
-  sağlayıcı oturumu açılır (cihazın normal oturum/CSRF düzeni aynen). Başlık başka kaynaktan gelirse yok sayılır.
-  Aynı kaynaktan `X-Forwarded-For` gerçek istemci IP'si olarak alınır (denetim kaydı, giriş kilidi). Merkez üzerinden
-  açılan oturumda **Çıkış** `/_cikis`'e yönlenir.
-- **Güvenlik:** Caddy istemci başlıklarını siler; cihaz başlığa yalnızca tünelden ve merkez adresinden güvenir
-  (WireGuard eş anahtarıyla doğrulanmış kaynak). Merkez ele geçirilirse bütün cihazlara erişilir — bugün de SSH ve
-  yedek için durum aynı (kabul edilen risk). Her müşteri yalnızca kendi cihazına gider (oturum → müşteri → bağlı cihaz).
+- **Merkez (Python):**
+  - panel.wificorrect.com girişi başarılıysa ve müşterinin bağlı, tünel adresi olan cihazı varsa → tek kullanımlık
+    (60 sn) belirteçle `cihaz.wificorrect.com/_giris?t=…`'ye yönlendirir; yoksa bugünkü merkez sayfası.
+  - `cihaz.wificorrect.com` ana bilgisayarı: `/cihaz-yetki` (Caddy sorar), `/_giris?t=` (belirteç → çerez `wcc`,
+    HttpOnly, Secure, SameSite=Lax → `302 /`), `/_cikis` (iki oturumu da kapatır → panel giriş sayfası).
+  - Cihaz oturumu bellek içi: müşteri + oluşturma/son kullanım; boşta 30 dk, en çok 12 saat; müşteri parolası değişince,
+    üyelik/lisans kapanınca, cihaz serbest bırakılınca düşer.
+  - Mevcut merkez sayfaları `panel.wificorrect.com/arsiv` altında (bağlantılar buna göre).
+- **Cihaz (Rust):**
+  - **Kimlik:** istek tünel arayüzünden ve merkezin tünel adresinden (10.99.0.1) gelir ve `X-WFC-Kullanici` cihazın bağlı
+    olduğu müşteri numarasıysa → işletme sahibi oturumu (cihazın normal oturum/CSRF düzeni). Aynı kaynaktan
+    `X-Forwarded-For` gerçek istemci IP'si (denetim, kilit). Başka her istek: başlık yok sayılır.
+  - **Yerel giriş yok:** bağlı cihazda giriş sayfası yalnızca "panel.wificorrect.com'dan girin" der. Bağlı olmayan
+    cihaz dükkân içinden yalnızca **eşleştirme** ekranı açar (numara + parola → bugünkü merkeze bağlanma akışı); başka
+    sayfa yok.
+  - **Admin kilidi:** `/admin-ayarlari` (ve altı) ile `/panel-hareketleri` için oturumda geçerli admin kilidi yoksa
+    parola formu; parola cihazdaki admin özetiyle (merkezden gelen) doğrulanır; doğruysa oturuma 30 dk kilit açık
+    yazılır; hatalı denemeler giriş kilidiyle aynı sınır; denetim `PANEL_ADMIN_ACILDI` / `PANEL_ADMIN_HATALI`.
+    Admin özeti hiç gelmemişse (merkezde admin parolası yok) Admin ayarları kapalı: "Admin parolası belirlenmemiş".
+  - Rol kavramı sadeleşir: tek kullanıcı türü (işletme sahibi) + admin kilidi. Bugün yalnızca admin'e açık her şey
+    (Admin ayarları, Panel hareketleri, Özet'teki SMS ayrıntıları) admin kilidine bağlanır.
+  - **Çıkış:** merkez üzerinden açılan oturumda `/_cikis`'e yönlenir.
+  - **Güvenlik duvarı:** 8443 yalnızca tünelden (10.99.0.0/24); modem ağından 8443 yalnızca cihaz bağlı değilken
+    (eşleştirme için). SSH değişmez (modem ağı + tünel; servis için).
+- **Güvenlik:** Caddy istemci başlıklarını siler; cihaz başlığa yalnızca merkezin tünel adresinden güvenir (WireGuard eş
+  anahtarıyla doğrulanmış kaynak). Merkez ele geçirilirse cihazlara erişilir — SSH ve yedek için bugün de durum aynı.
 
-## 4. Parolalar
-- **Müşteri parolası:** yeni müşteri formunda yönetici yazar (en az 10 karakter); "Parola sıfırla" → "Parola belirle"
-  formu. Rastgele üretim kalkar. Müşteri cihaz panelinden / merkez panelinden değiştirebilir (bugünkü akış).
-- **Cihaz admin parolası:** yönetimde müşteri sayfasında "Admin parolası belirle" formu; boşsa merkez cihaza admin
-  bilgisi **göndermez** (cihazdaki mevcut admin aynen kalır). Bağlanmada rastgele üretim kalkar. Mevcut kayıtlar
-  (1537344 için üretilmiş olan) değişmez. Admin uzaktan erişimi merkez üzerinden olduğu için cihaz admin parolası
-  yalnızca dükkân içinden yerel giriş için gerekir.
+## 4. Kurulum
+- DNS `cihaz.wificorrect.com` → merkez (2026-10-08 eklendi). Caddyfile'a site bloğu (forward_auth + reverse_proxy).
+- Merkez güncellemesi (sudo, kullanıcı); cihaz yeni sürüm.
 
-## 5. Kurulum
-- DNS: `cihaz.wificorrect.com` A → merkez dış IP (2026-10-08 eklendi).
-- Caddyfile'a site bloğu; merkez güncellemesi (sudo, kullanıcı). Sunucuda tünel adresi 10.99.0.1'den cihazların
-  8443'üne erişim (cihaz güvenlik duvarı 10.99.0.0/24'e zaten açık).
-- Cihaz yeni sürüm (geliştirme döneminde `scripts/gelistir.sh`; sonra sürüm/ISO).
+## 5. Test
+- Merkez: giriş → belirteç → `wcc` çerezi; belirteç tek kullanımlık ve 60 sn; `/cihaz-yetki` (çerezsiz, süresi dolmuş,
+  lisans kapalı, serbest, parola değişti → giriş yönlendirmesi; geçerli → başlıklar); `/_cikis`; cihazı olmayan müşteri
+  merkez sayfasında; arşiv `/arsiv` altında.
+- Cihaz: başlık yalnızca 10.99.0.1'den; numara uyuşmazsa red; X-Forwarded-For yalnızca merkezden; bağlı cihazda yerel
+  giriş yok, bağlı olmayan cihazda yalnızca eşleştirme; admin kilidi (parola yok/yanlış/doğru, 30 dk, Panel
+  hareketleri de kilitli, admin özeti yoksa kapalı); çıkış yönlendirmesi; güvenlik duvarı kuralı.
+- Uçtan uca: telefondan panel.wificorrect.com → cihaz paneli → Admin ayarları (parola) → çıkış.
 
-## 6. Test
-- Merkez: `/cihaz-yetki` (çerezsiz → giriş yönlendirmesi; geçerli → başlıklar; lisans kapalı / serbest / parola
-  değişti → red), belirteç tek kullanımlık ve 60 sn, `/_cikis`, admin geçişi yalnızca admin oturumundan, yönetici
-  parola formları (kısa parola reddi, rastgele üretim yok), admin parolası boşsa API'de `admin` alanı yok.
-- Cihaz: başlık yalnızca 10.99.0.1'den kabul (başka IP'den aynı başlık → giriş sayfası), müşteri numarası
-  uyuşmazsa red, `admin` → hizmet rolü, X-Forwarded-For yalnızca merkezden, Çıkış yönlendirmesi.
-- Uçtan uca (kurulumdan sonra): telefondan `panel.wificorrect.com` → Cihaz paneli → Cihazlar sayfası; çıkış.
-
-## 7. Kapsam dışı
-- Merkezden SSH geçişi (yalnızca admin; sonra).
-- Merkez oturumlarının kalıcı saklanması.
+## 6. Kapsam dışı
+- Merkezden SSH geçişi; merkez oturumlarının kalıcı saklanması.
