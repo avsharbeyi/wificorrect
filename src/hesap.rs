@@ -1,6 +1,7 @@
 //! Panel hesapları, giriş kilidi ve oturumlar (eski panel_auth.py; RUST_YENIDEN_YAZIM.md A10, A14).
 //! Hesap dosyası `/etc/wificorrect/hesaplar.json` (600). Parola özeti PBKDF2-HMAC-SHA256, kullanıcı başına tuz.
-//! Hizmet sağlayıcı hesabı sabit `admin` (root gibi; parolasını yalnızca hizmet sağlayıcı bilir, `wificorrect ctl admin-parola`).
+//! `admin` girişli bir kullanıcı değildir: özeti merkezden gelir (ya da `wificorrect ctl admin-parola`) ve panelde yalnızca
+//! admin kilidini açar (Admin ayarları + Panel hareketleri, 30 dk).
 //! İşletme sahibi hesabı ilk açılıştaki kurulum ekranında oluşturulur; varsayılan sahip hesabı yok.
 
 use crate::ortak;
@@ -123,14 +124,6 @@ impl Hesaplar {
         self.save(&m)
     }
 
-    pub fn set_password(&self, user: &str, pw: &str) -> Result<(), String> {
-        let _g = self.lock.lock().unwrap_or_else(|e| e.into_inner());
-        let mut m = self.load()?;
-        let rol = m.get(user).ok_or("Kullanıcı bulunamadı.")?.rol;
-        m.insert(user.into(), Self::new_hesap(rol, pw));
-        self.save(&m)
-    }
-
     /// Fabrika ayarı: admin dışındaki bütün hesaplar silinir.
     pub fn keep_only_admin(&self) -> Result<(), String> {
         let _g = self.lock.lock().unwrap_or_else(|e| e.into_inner());
@@ -186,6 +179,9 @@ pub struct Oturum {
     pub gerekce: Option<(String, f64)>,
     /// Sahip oturumunda girişteki merkez parola özeti; merkezde değişince (eşitleme) oturum düşer
     pub surum: String,
+    /// Admin kilidi açık kalma sonu ve açılıştaki admin özeti; özet merkezde değişince kilit kapanır
+    pub admin_kadar: f64,
+    pub admin_surum: String,
 }
 
 /// Bellekte oturumlar (panel yeniden başlayınca herkes yeniden girer). 12 saat geçerli.
@@ -197,7 +193,8 @@ impl Oturumlar {
 
     pub fn create(&self, user: &str, rol: Rol, now: f64, surum: &str) -> String {
         let token = ortak::random_hex(32);
-        let o = Oturum { user: user.into(), rol, csrf: ortak::random_hex(16), expires: now + Self::TTL, gerekce: None, surum: surum.into() };
+        let o = Oturum { user: user.into(), rol, csrf: ortak::random_hex(16), expires: now + Self::TTL, gerekce: None, surum: surum.into(),
+                       admin_kadar: 0.0, admin_surum: String::new() };
         let mut m = self.0.lock().unwrap_or_else(|e| e.into_inner());
         m.retain(|_, v| v.expires > now);
         m.insert(token.clone(), o);
@@ -211,6 +208,12 @@ impl Oturumlar {
     pub fn set_gerekce(&self, token: &str, text: &str, until: f64) {
         if let Some(o) = self.0.lock().unwrap_or_else(|e| e.into_inner()).get_mut(token) {
             o.gerekce = Some((text.to_string(), until));
+        }
+    }
+
+    pub fn set_admin(&self, token: &str, until: f64, surum: &str) {
+        if let Some(o) = self.0.lock().unwrap_or_else(|e| e.into_inner()).get_mut(token) {
+            (o.admin_kadar, o.admin_surum) = (until, surum.to_string());
         }
     }
 
@@ -256,7 +259,7 @@ mod tests {
         assert_eq!(h.verify(ADMIN, "hizmet-parola-1"), Some(Rol::Hizmet));
         assert_eq!(h.verify(ADMIN, "yanlis-parola"), None);
         assert_eq!(h.verify("yok", "hizmet-parola-1"), None);
-        h.set_password(ADMIN, "yeni-admin-parola").unwrap();
+        h.set_admin("yeni-admin-parola").unwrap();
         assert_eq!(h.verify(ADMIN, "yeni-admin-parola"), Some(Rol::Hizmet));
         h.keep_only_admin().unwrap();
         assert_eq!(h.load().unwrap().len(), 1);

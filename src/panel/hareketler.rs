@@ -34,6 +34,9 @@ pub(super) fn olay_adi(olay: &str) -> &str {
         "PANEL_YEDEKLE" => "Yedeklemeyi başlattı",
         "PANEL_FABRIKA" => "Fabrika ayarlarını başlattı",
         "PANEL_FABRIKA_RED" => "Fabrika ayarları reddedildi",
+        "PANEL_ADMIN_ACILDI" => "Admin kilidini açtı",
+        "PANEL_ADMIN_HATALI" => "Hatalı admin parolası",
+        "PANEL_ADMIN_KAPANDI" => "Admin kilidini kapattı",
         o => o.strip_prefix("PANEL_").unwrap_or(o),
     }
 }

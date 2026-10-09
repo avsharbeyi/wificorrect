@@ -3,6 +3,8 @@
 //! İki rol (2026-10-03 kullanıcı kararı): işletme sahibi kayıtlar dahil işletmeyle ilgili her şeyi görür ve yönetir;
 //! admin (hizmet sağlayıcı) ondan "Admin ayarları" sayfasıyla ayrılır: SMS sağlayıcıları ve sınırları, deneme modu,
 //! kayıt saklama ve uzak yedek (sunucu), fabrika ayarları. İşletme sahibi sağlayıcı ve sunucu adlarını hiçbir yerde görmez.
+//! 2026-10-09: ayrı admin kullanıcısı yok; herkes müşteri olarak girer, "Admin ayarları" (ve Panel hareketleri) merkezden
+//! gelen admin parolasıyla oturumda 30 dk açılır (admin kilidi; açıkken etkin rol Hizmet).
 //! 8b kayıtlar / kullanıcılar / resmi talep: panel/kayit_sayfalari.rs. 8c portlar ve Wi-Fi: panel/portlar.rs.
 
 use crate::ayar::{Config, Device};
@@ -276,17 +278,29 @@ fn set_field(c: &mut Config, key: &str, v: &str) {
     }
 }
 
+/// Panelden değiştirilemeyen alan ve nedeni: merkezden yönetilen SMS alanları; bağlı cihazda uzak erişim (merkez bağlanırken
+/// yazar; tünel üzerinden kapatılırsa panel kendi erişimini keserdi).
+fn salt_okunur(a: &Alan, cfg: &Config, bagli: bool) -> Option<&'static str> {
+    if cfg.sms.merkez && MERKEZ_SMS.contains(&a.key) {
+        Some("merkezden yönetiliyor")
+    } else if bagli && a.key.starts_with("uzak.") {
+        Some("merkez bağlantısıyla kuruldu")
+    } else {
+        None
+    }
+}
+
 /// Ayarlar sayfasının (admin=false) ya da Admin ayarları sayfasının (admin=true) alanları.
 fn fields(admin: bool) -> impl Iterator<Item = &'static Alan> {
     ALANLAR.iter().filter(move |a| a.admin == admin)
 }
 
 /// Formdan değişiklikler: (anahtar, eski, yeni). Sayfada olmayan alanlar yok sayılır; boş gizli alan = değişmez.
-fn validate(admin: bool, form: &Form, cfg: &Config) -> Result<Vec<(&'static str, String, String)>, HashMap<&'static str, String>> {
+fn validate(admin: bool, form: &Form, cfg: &Config, bagli: bool) -> Result<Vec<(&'static str, String, String)>, HashMap<&'static str, String>> {
     let mut changes = vec![];
     let mut errors = HashMap::new();
     for a in fields(admin) {
-        if cfg.sms.merkez && MERKEZ_SMS.contains(&a.key) {
+        if salt_okunur(a, cfg, bagli).is_some() {
             continue;
         }
         let old = get_field(cfg, a.key);
@@ -372,7 +386,7 @@ pub struct Panel {
     baglan_kilit: std::sync::Mutex<()>,
 }
 
-const MENU: &[(&str, &str)] = &[("/", "Özet"), ("/cihazlar", "Cihazlar"), ("/kayitlar", "Kayıtlar"), ("/ayarlar", "Ayarlar")];
+const MENU: &[(&str, &str)] = &[("/", "Özet"), ("/cihazlar", "Cihazlar"), ("/kayitlar", "Kayıtlar"), ("/ayarlar", "Ayarlar"), ("/admin", "Admin ayarları")];
 
 /// Menü grupları tek sayfadır; eski sayfalar bu sayfada alt alta bölüm olur (2026-10-08, kullanıcı isteği).
 /// (grup, eski yol, bölüm id, başlık, yalnızca admin). Eski yollar ayrıca açılır (hata/arama sonucu, ayrıntı).
@@ -383,21 +397,23 @@ const BOLUMLER: &[(&str, &str, &str, &str, bool)] = &[
     ("/cihazlar", "/yasakli-siteler", "yasakli-siteler", "Yasaklı siteler", false),
     ("/kayitlar", "/kayitlar", "gunler", "Kayıtlar", false),
     ("/kayitlar", "/ara", "site-ara", "Site / IP arama", false),
-    ("/kayitlar", "/panel-hareketleri", "panel-hareketleri", "Panel hareketleri", true),
     ("/kayitlar", "/kullanicilar", "kullanicilar", "Kullanıcılar", false),
     ("/kayitlar", "/talep", "talep", "Resmi talep", false),
     ("/ayarlar", "/ayarlar", "isletme", "İşletme", false),
     ("/ayarlar", "/portal-metinleri", "portal-metinleri", "Portal metinleri", false),
     ("/ayarlar", "/portlar", "portlar", "Portlar", false),
     ("/ayarlar", "/sistem", "sistem", "Sistem", false),
-    ("/ayarlar", "/admin-ayarlari", "admin-ayarlari", "Admin ayarları", true),
     ("/ayarlar", "/sifre", "sifre-degistir", "Şifremi değiştir", false),
+    ("/admin", "/admin-ayarlari", "admin-ayarlari", "Admin ayarları", true),
+    ("/admin", "/panel-hareketleri", "panel-hareketleri", "Panel hareketleri", true),
 ];
 
 /// Yolun menü grubu: eski bölüm yolu ya da onun alt sayfası (/kayitlar/gun, /kullanici, /talep/paket …).
 fn menu_grubu(path: &str) -> &'static str {
-    if path == "/kullanici" {
-        return "/kayitlar";
+    match path {
+        "/kullanici" => return "/kayitlar",
+        "/admin-kilidi" => return "/admin",
+        _ => {}
     }
     BOLUMLER
         .iter()
@@ -578,15 +594,11 @@ impl Panel {
             return text(404, "Sayfa bulunamadı");
         }
         let Some(bag) = crate::merkez::oku(&self.merkez_path) else {
-            // bağlı değil: yalnızca eşleştirme (müşteri numarasıyla ilk giriş cihazı merkeze bağlar).
-            // ponytail: yerel admin oturumu (sahip oturumu bağsız geçersiz) Task 3'e kadar açık kalır (ör. serbest bırakılan cihazda fabrika)
+            // bağlı değil: yalnızca eşleştirme (müşteri numarasıyla ilk giriş cihazı merkeze bağlar)
             return match (req.method.as_str(), req.path.as_str()) {
                 ("GET", "/giris") => self.giris(&cfg, req, ""),
                 ("POST", "/giris") => self.giris_post(&cfg, req, now),
-                _ => match self.gecerli_oturum(req, now) {
-                    Some(o) => self.oturumlu(cfg, req, o, now),
-                    None => redirect("/giris", None),
-                },
+                _ => redirect("/giris", None),
             };
         };
         // bağlıyken panel yalnızca merkez üzerinden (2026-10-09, kullanıcı kararı)
@@ -596,17 +608,12 @@ impl Panel {
         if req.merkez_kullanici.as_ref().is_some_and(|k| *k != bag.numara) {
             return text(403, "Bu cihaz bu müşteriye ait değil.");
         }
-        match (req.method.as_str(), req.path.as_str()) {
-            // ponytail: yerel admin girişi Task 3'te admin kilidiyle değişene kadar duruyor
-            ("POST", "/giris") if req.form.get("kullanici").is_some_and(|u| u.trim().eq_ignore_ascii_case(hesap::ADMIN)) => {
-                return self.giris_post(&cfg, req, now)
-            }
-            (_, "/giris") => return self.yalniz_merkez(&cfg, req),
-            _ => {}
+        if req.path == "/giris" {
+            return self.yalniz_merkez(&cfg, req);
         }
-        // geçerli oturum (yerel admin oturumu dahil) korunur; yoksa merkezin doğruladığı müşteriye oturum açılır
+        // geçerli oturum korunur; yoksa merkezin doğruladığı müşteriye oturum açılır
         let mut yeni = None;
-        let o = match self.gecerli_oturum(req, now) {
+        let mut o = match self.gecerli_oturum(req, now) {
             Some(o) => o,
             None if req.merkez_kullanici.is_some() => {
                 let t = self.oturumlar.create(&bag.numara, Rol::Sahip, now, &bag.ozet);
@@ -617,6 +624,9 @@ impl Panel {
             }
             None => return redirect("/giris", None),
         };
+        // admin kilidi açık ve admin parolası o zamandan beri değişmedi: etkin rol hizmet sağlayıcı
+        let admin = o.admin_kadar > now && self.hesaplar.ozet(hesap::ADMIN).is_some_and(|z| hesap::ct_eq(&z, &o.admin_surum));
+        o.rol = if admin { Rol::Hizmet } else { Rol::Sahip };
         let req = &Req { token: yeni.clone().or_else(|| req.token.clone()), ..clone_req(req) };
         let mut r = self.oturumlu(cfg, req, o, now);
         if let Some(t) = yeni {
@@ -625,14 +635,11 @@ impl Panel {
         r
     }
 
-    /// Çerezdeki oturum hâlâ geçerliyse (sahip: bağ ve parola özeti aynı; admin: admin özeti aynı); değilse silinir.
+    /// Çerezdeki oturum hâlâ geçerliyse (bağ ve parola özeti aynı); değilse silinir.
     fn gecerli_oturum(&self, req: &Req, now: f64) -> Option<Oturum> {
         let t = req.token.as_deref()?;
         let o = self.oturumlar.get(t, now)?;
-        let gecerli = match o.rol {
-            Rol::Sahip => self.sahip_oturumu_gecerli(&o),
-            Rol::Hizmet => self.hesaplar.ozet(hesap::ADMIN).is_some_and(|z| hesap::ct_eq(&z, &o.surum)),
-        };
+        let gecerli = self.sahip_oturumu_gecerli(&o);
         if !gecerli {
             self.oturumlar.remove(t);
         }
@@ -650,7 +657,46 @@ impl Panel {
         )
     }
 
-    /// Oturumlu istek. Bağlı cihazda buraya yalnızca merkez üzerinden gelinir (bağsız cihazda yalnızca yerel admin, Task 3'e kadar).
+    /// Admin kilidi formu (Admin ayarları ve Panel hareketleri kilitliyken). Admin özeti hiç gelmediyse form yok.
+    fn admin_kilidi_formu(&self, cfg: &Config, req: &Req, o: &Oturum, err: &str) -> Resp {
+        let body = if self.hesaplar.ozet(hesap::ADMIN).is_none() {
+            "<div class=\"kart dar\"><p>Admin parolası belirlenmemiş; hizmet sağlayıcınız merkezden belirler.</p></div>".to_string()
+        } else {
+            let err = if err.is_empty() { String::new() } else { format!("<p class=\"hata\">{}</p>", h(err)) };
+            format!(
+                "<div class=\"kart dar\"><p>Admin ayarları ve Panel hareketleri admin parolasıyla 30 dakika açılır.</p>{err}\
+                 <form method=\"post\" action=\"/admin-kilidi\">{}<input type=\"hidden\" name=\"donus\" value=\"{}\">\
+                 <label for=\"ap\">Admin parolası</label><input type=\"password\" id=\"ap\" name=\"parola\" autocomplete=\"current-password\" required autofocus>\
+                 <div style=\"margin-top:20px\"><button>Aç</button></div></form></div>",
+                csrf_input(o),
+                admin_donus(req.form.get("donus").unwrap_or(&req.path))
+            )
+        };
+        self.page(cfg, req, Some(o), "Admin ayarları", &body)
+    }
+
+    fn admin_kilidi(&self, cfg: &Config, req: &Req, o: &Oturum, now: f64) -> Resp {
+        let anahtar = format!("admin-kilidi:{}", o.user);
+        if !self.guard.allowed(&req.ip, &anahtar, now) {
+            return self.admin_kilidi_formu(cfg, req, o, "Çok fazla hatalı deneme. 15 dakika sonra tekrar deneyin.");
+        }
+        let pw = req.form.get("parola").map_or("", String::as_str);
+        match (self.hesaplar.verify(hesap::ADMIN, pw), self.hesaplar.ozet(hesap::ADMIN), req.token.as_deref()) {
+            (Some(Rol::Hizmet), Some(ozet), Some(t)) => {
+                self.guard.succeeded(&req.ip, &anahtar);
+                self.oturumlar.set_admin(t, now + ADMIN_SURE, &ozet);
+                self.audit(cfg, req, Some(o), "PANEL_ADMIN_ACILDI", "");
+                redirect(admin_donus(req.form.get("donus").map_or("", String::as_str)), None)
+            }
+            _ => {
+                self.guard.failed(&req.ip, &anahtar, now);
+                self.audit(cfg, req, Some(o), "PANEL_ADMIN_HATALI", "");
+                self.admin_kilidi_formu(cfg, req, o, "Admin parolası hatalı.")
+            }
+        }
+    }
+
+    /// Oturumlu istek. Bağlı cihazda buraya yalnızca merkez üzerinden gelinir.
     fn oturumlu(&self, cfg: Config, req: &Req, o: Oturum, now: f64) -> Resp {
         if req.method == "POST" && !hesap::ct_eq(req.form.get("csrf").map_or("", String::as_str), &o.csrf) {
             return text(403, "Geçersiz form (CSRF). Sayfayı yenileyip tekrar deneyin.");
@@ -682,8 +728,18 @@ impl Panel {
             ("POST", "/izinli/ekle") => self.liste_ekle(cfg, req, &o, false, now),
             ("POST", "/yasak/kaldir") => self.liste_kaldir(cfg, req, &o, true),
             ("POST", "/izinli/kaldir") => self.liste_kaldir(cfg, req, &o, false),
+            ("GET", "/admin") if hizmet => self.grup_sayfasi(&cfg, req, &o, now),
             ("GET", "/panel-hareketleri") if hizmet => self.hareketler(&cfg, req, &o, now),
-            ("GET", "/panel-hareketleri") => text(403, "Bu sayfa yalnızca admin'e açık."),
+            ("GET", "/admin-ayarlari") if hizmet => self.ayarlar(&cfg, req, &o, &HashMap::new(), true),
+            ("GET", "/admin" | "/admin-ayarlari" | "/panel-hareketleri") => self.admin_kilidi_formu(&cfg, req, &o, ""),
+            ("POST", "/admin-kilidi") => self.admin_kilidi(&cfg, req, &o, now),
+            ("POST", "/admin-kilidi/kapat") => {
+                if let Some(t) = &req.token {
+                    self.oturumlar.set_admin(t, 0.0, "");
+                }
+                self.audit(&cfg, req, Some(&o), "PANEL_ADMIN_KAPANDI", "");
+                redirect("/", None)
+            }
             ("GET", "/kayitlar/gun") => self.kayit_gun(&cfg, req, &o),
             ("GET", "/kayitlar/dosya") => self.kayit_dosya(&cfg, req, &o),
             ("GET", "/kayitlar/indir") => self.kayit_indir(&cfg, req, &o),
@@ -704,11 +760,10 @@ impl Panel {
             ("POST", "/portlar/geri-al") => self.portlar_geri_al(&cfg, req, &o),
             ("POST", "/portlar/etiket") => self.portlar_etiket(&cfg, req, &o),
             ("POST", "/ayarlar") => self.ayarlar_post(cfg, req, &o, false),
-            ("GET", "/admin-ayarlari") if hizmet => self.ayarlar(&cfg, req, &o, &HashMap::new(), true),
             ("POST", "/admin-ayarlari") if hizmet => self.ayarlar_post(cfg, req, &o, true),
             ("POST", "/admin-ayarlari/fabrika") if hizmet => self.fabrika(&cfg, req, &o),
             ("POST", "/admin-ayarlari/yedekle") if hizmet => self.yedekle(&cfg, req, &o),
-            ("GET" | "POST", "/admin-ayarlari" | "/admin-ayarlari/fabrika" | "/admin-ayarlari/yedekle") => text(403, "Bu sayfa yalnızca admin'e açık."),
+            ("POST", "/admin-ayarlari" | "/admin-ayarlari/fabrika" | "/admin-ayarlari/yedekle") => text(403, "Admin kilidi kapalı."),
             ("GET", "/sistem") => self.sistem(&cfg, req, &o, ""),
             ("POST", "/sistem/gun-kapat") => {
                 let out = crate::muhur::gun_kapat(&cfg, None, now, false);
@@ -760,12 +815,7 @@ impl Panel {
             self.audit(cfg, req, None, "PANEL_GIRIS_HATA", &format!("kullanici_adi={user}"));
             self.giris(cfg, req, e)
         };
-        let (rol, surum) = if user == hesap::ADMIN {
-            match self.hesaplar.verify(&user, pw) {
-                Some(r) => (r, self.hesaplar.ozet(hesap::ADMIN).unwrap_or_default()),
-                None => return hatali("Kullanıcı adı veya parola hatalı."),
-            }
-        } else {
+        let surum = {
             // bağ kontrolü ve ilk bağlanma kilit altında: aynı anda iki giriş iki ayrı cihaz anahtarı almasın
             let _k = self.baglan_kilit.lock().unwrap_or_else(|e| e.into_inner());
             match crate::merkez::oku(&self.merkez_path) {
@@ -776,17 +826,17 @@ impl Panel {
                     if !crate::merkez::dogrula(&m, pw) {
                         return hatali("Kullanıcı adı veya parola hatalı.");
                     }
-                    (Rol::Sahip, m.ozet)
+                    m.ozet
                 }
                 None if !crate::merkez::numara_gecerli(&user) => return hatali("Kullanıcı adı veya parola hatalı."),
                 None => match self.merkeze_baglan(cfg, req, &user, pw, now) {
-                    Ok(ozet) => (Rol::Sahip, ozet),
+                    Ok(ozet) => ozet,
                     Err((mesaj, kilit)) => return if kilit { hatali(&mesaj) } else { self.giris(cfg, req, &mesaj) },
                 },
             }
         };
         self.guard.succeeded(&req.ip, &user);
-        let token = self.oturumlar.create(&user, rol, now, &surum);
+        let token = self.oturumlar.create(&user, Rol::Sahip, now, &surum);
         let o = self.oturumlar.get(&token, now);
         self.audit(cfg, req, o.as_ref(), "PANEL_GIRIS", "");
         let mut r = redirect("/", None);
@@ -1006,14 +1056,15 @@ impl Panel {
     fn ayarlar(&self, cfg: &Config, req: &Req, o: &Oturum, errors: &HashMap<&str, String>, admin: bool) -> Resp {
         let form = if errors.is_empty() { None } else { Some(&req.form) };
         let mut groups: Vec<(&str, String)> = vec![];
+        let bagli = crate::merkez::oku(&self.merkez_path).is_some();
         for a in fields(admin) {
             let cur = form.and_then(|f| f.get(a.key).cloned()).unwrap_or_else(|| get_field(cfg, a.key));
             let id = a.key.replace('.', "-");
             let err = errors.get(a.key).map_or(String::new(), |e| format!("<div class=\"hata\">{}</div>", h(e)));
-            if cfg.sms.merkez && MERKEZ_SMS.contains(&a.key) {
+            if let Some(neden) = salt_okunur(a, cfg, bagli) {
                 let deger = if matches!(a.tur, Tur::Gizli(_)) { (if cur.is_empty() { "tanımsız" } else { "tanımlı" }).to_string() }
                             else if matches!(a.tur, Tur::Evet) { (if cur == "1" { "açık" } else { "kapalı" }).to_string() } else { cur.clone() };
-                let html = format!("<p class=\"not\">{}: <b>{}</b> (merkezden yönetiliyor)</p>", h(a.label), h(&deger));
+                let html = format!("<p class=\"not\">{}: <b>{}</b> ({neden})</p>", h(a.label), h(&deger));
                 match groups.iter_mut().find(|(g, _)| *g == a.grup) {
                     Some((_, s)) => s.push_str(&html),
                     None => groups.push((a.grup, html)),
@@ -1057,6 +1108,10 @@ impl Panel {
             if let Some(f) = &fabrika {
                 body.insert_str(0, f);
             }
+            body.insert_str(0, &format!(
+                "<div class=\"kart satir\"><p>Admin kilidi 30 dk açık.</p>{}</div>",
+                post_button(o, "/admin-kilidi/kapat", "Kapat", &[], "ikincil")
+            ));
             let st = |missing: bool| if missing { "eksik" } else { "tanımlı" };
             let twilio_missing = !cfg.twilio_missing().is_empty();
             body.push_str(&format!(
@@ -1154,7 +1209,7 @@ impl Panel {
 
     fn fabrika(&self, cfg: &Config, req: &Req, o: &Oturum) -> Resp {
         let pw = req.form.get("parola").map_or("", String::as_str);
-        if req.form.get("onay").is_none_or(|v| v != "1") || self.hesaplar.verify(&o.user, pw) != Some(Rol::Hizmet) {
+        if req.form.get("onay").is_none_or(|v| v != "1") || self.hesaplar.verify(hesap::ADMIN, pw) != Some(Rol::Hizmet) {
             self.audit(cfg, req, Some(o), "PANEL_FABRIKA_RED", "");
             return redirect("/admin-ayarlari", Some(("Parola hatalı ya da onay işaretlenmedi; hiçbir şey değişmedi.", true)));
         }
@@ -1182,7 +1237,7 @@ impl Panel {
 
     fn ayarlar_post(&self, mut cfg: Config, req: &Req, o: &Oturum, admin: bool) -> Resp {
         let back = if admin { "/admin-ayarlari" } else { "/ayarlar" };
-        let changes = match validate(admin, &req.form, &cfg) {
+        let changes = match validate(admin, &req.form, &cfg, crate::merkez::oku(&self.merkez_path).is_some()) {
             Ok(c) => c,
             Err(errors) => {
                 let req2 = Req { query: [("m".to_string(), "Geçersiz değerler var, düzeltip tekrar kaydedin.".to_string()), ("e".to_string(), "1".to_string())].into(), ..clone_req(req) };
@@ -1265,32 +1320,10 @@ impl Panel {
 
     fn sifre_post(&self, cfg: &Config, req: &Req, o: &Oturum) -> Resp {
         let g = |k: &str| req.form.get(k).cloned().unwrap_or_default();
-        if o.rol == Rol::Sahip {
-            // müşteri parolası merkezde: değişiklik merkeze gider, yeni özet cihaza yazılır (internetsiz değişmez)
-            let Some(mut m) = crate::merkez::oku(&self.merkez_path) else { return redirect("/giris", None) };
-            if !crate::merkez::dogrula(&m, &g("eski")) {
-                return self.sifre(cfg, req, o, "Şu anki parola hatalı.");
-            }
-            if let Some(e) = hesap::password_problem(&g("yeni")) {
-                return self.sifre(cfg, req, o, e);
-            }
-            if g("yeni") != g("yeni2") {
-                return self.sifre(cfg, req, o, "Yeni parolalar aynı değil.");
-            }
-            if let Err(e) = crate::merkez::parola(&mut m, &g("eski"), &g("yeni"), &*self.http) {
-                return self.sifre(cfg, req, o, &e);
-            }
-            if let Err(e) = crate::merkez::kaydet(&self.merkez_path, &m) {
-                return self.sifre(cfg, req, o, &e);
-            }
-            self.oturumlar.remove_user(&o.user, None);
-            let token = self.oturumlar.create(&o.user, Rol::Sahip, (self.clock)(), &m.ozet);
-            self.audit(cfg, req, Some(o), "PANEL_SIFRE", "merkez");
-            let mut r = redirect("/sifre", Some(("Parola değiştirildi.", false)));
-            r.headers.push(("Set-Cookie".into(), format!("wfc={token}; Path=/; Secure; HttpOnly; SameSite=Strict")));
-            return r;
-        }
-        if self.hesaplar.verify(&o.user, &g("eski")).is_none() {
+        // müşteri parolası merkezde (admin kilidi açık olsa da; admin parolası yalnızca merkezden değişir): değişiklik merkeze
+        // gider, yeni özet cihaza yazılır (internetsiz değişmez)
+        let Some(mut m) = crate::merkez::oku(&self.merkez_path) else { return redirect("/giris", None) };
+        if !crate::merkez::dogrula(&m, &g("eski")) {
             return self.sifre(cfg, req, o, "Şu anki parola hatalı.");
         }
         if let Some(e) = hesap::password_problem(&g("yeni")) {
@@ -1299,12 +1332,29 @@ impl Panel {
         if g("yeni") != g("yeni2") {
             return self.sifre(cfg, req, o, "Yeni parolalar aynı değil.");
         }
-        if let Err(e) = self.hesaplar.set_password(&o.user, &g("yeni")) {
+        if let Err(e) = crate::merkez::parola(&mut m, &g("eski"), &g("yeni"), &*self.http) {
             return self.sifre(cfg, req, o, &e);
         }
-        self.oturumlar.remove_user(&o.user, req.token.as_deref()); // diğer cihazlardaki oturumlar kapanır
-        self.audit(cfg, req, Some(o), "PANEL_SIFRE", "");
-        redirect("/sifre", Some(("Parola değiştirildi.", false)))
+        if let Err(e) = crate::merkez::kaydet(&self.merkez_path, &m) {
+            return self.sifre(cfg, req, o, &e);
+        }
+        self.oturumlar.remove_user(&o.user, None);
+        let token = self.oturumlar.create(&o.user, Rol::Sahip, (self.clock)(), &m.ozet);
+        self.audit(cfg, req, Some(o), "PANEL_SIFRE", "merkez");
+        let mut r = redirect("/sifre", Some(("Parola değiştirildi.", false)));
+        r.headers.push(("Set-Cookie".into(), format!("wfc={token}; Path=/; Secure; HttpOnly; SameSite=Strict")));
+        r
+    }
+}
+
+/// Admin kilidi açık kalma süresi (sn)
+const ADMIN_SURE: f64 = 1800.0;
+
+/// Admin kilidi açılınca dönülecek yer: yalnızca kilitli sayfalar (başka siteye yönlendirme yok).
+fn admin_donus(yol: &str) -> &str {
+    match yol {
+        "/admin-ayarlari" | "/panel-hareketleri" => yol,
+        _ => "/admin",
     }
 }
 
@@ -1531,8 +1581,8 @@ mod tests {
         Box::new(|_: &str, _: &str| Err("ağ yok".into()))
     }
 
-    /// Cihaz müşteriye bağlı (merkez.json) ve admin parolası kurulu; `user` "mudur" ise merkez başlığıyla (müşteri
-    /// numarası) oturum açılır, "admin" ise yerel admin girişiyle (Task 3'e kadar).
+    /// Cihaz müşteriye bağlı (merkez.json) ve admin parolası kurulu; merkez başlığıyla (müşteri numarası) oturum açılır.
+    /// `user` "admin" ise ardından admin kilidi `pw` ile açılır (etkin rol hizmet sağlayıcı).
     fn setup_and_login(e: &Env, user: &str, pw: &str) -> (String, String) {
         if crate::merkez::oku(&e.p.merkez_path).is_none() {
             e.p.hesaplar.set_admin("hizmet-parola-1").unwrap();
@@ -1545,11 +1595,15 @@ mod tests {
             c.save(&e.p.cfg_path).unwrap();
         }
         uzak_adresli(e);
-        let r = if user == "mudur" { e.p.handle(&merkez_req("/", MUSTERI)) } else { e.p.handle(&req("POST", "/giris", &[("kullanici", user), ("parola", pw)], None)) };
+        let r = e.p.handle(&merkez_req("/", MUSTERI));
         let cookie = r.headers.iter().find(|(k, _)| k == "Set-Cookie").map(|(_, v)| v.clone()).expect("çerez");
         let token = cookie.trim_start_matches("wfc=").split(';').next().unwrap().to_string();
         let page = e.p.handle(&req("GET", "/sifre", &[], Some(&token))).body;
         let csrf = page.split("name=\"csrf\" value=\"").nth(1).unwrap().split('"').next().unwrap().to_string();
+        if user == "admin" {
+            let r = e.p.handle(&req("POST", "/admin-kilidi", &[("csrf", &csrf), ("parola", pw), ("donus", "/admin")], Some(&token)));
+            assert_eq!(loc(&r), "/admin", "admin kilidi açılmadı");
+        }
         (token, csrf)
     }
 
@@ -1675,7 +1729,7 @@ mod tests {
         let e = env();
         let (tok, _) = setup_and_login(&e, "mudur", "sahip-parola-12");
         let ozet = e.p.handle(&req("GET", "/", &[], Some(&tok))).body;
-        assert_eq!(menu_linkleri(&ozet), ["/", "/cihazlar", "/kayitlar", "/ayarlar"]);
+        assert_eq!(menu_linkleri(&ozet), ["/", "/cihazlar", "/kayitlar", "/ayarlar", "/admin"]);
         let s = e.p.handle(&req("GET", "/cihazlar", &[], Some(&tok)));
         assert_eq!(s.status, 200);
         for (id, form) in [("oturumlar", ""), ("yasak", "/yasak/ekle"), ("izinli", "/izinli/ekle"), ("yasakli-siteler", "/yasakli-siteler/ekle")] {
@@ -1765,28 +1819,19 @@ mod tests {
         let e = env();
         let (tok, csrf) = setup_and_login(&e, "admin", "hizmet-parola-1");
         let k = e.p.handle(&req("GET", "/kayitlar", &[], Some(&tok))).body;
-        assert!(k.contains("<section class=\"bolum\" id=\"panel-hareketleri\"") && k.contains("action=\"/kullanicilar\""));
-        let a = e.p.handle(&req("GET", "/ayarlar", &[], Some(&tok))).body;
+        assert!(!k.contains("id=\"panel-hareketleri\"") && k.contains("action=\"/kullanicilar\""));
+        let a = e.p.handle(&req("GET", "/admin", &[], Some(&tok))).body;
         assert!(a.contains("<section class=\"bolum\" id=\"admin-ayarlari\"") && a.contains("name=\"netgsm.usercode\""));
+        assert!(a.contains("<section class=\"bolum\" id=\"panel-hareketleri\"") && a.contains("href=\"/admin\" class=\"aktif\""));
+        assert!(!e.p.handle(&req("GET", "/ayarlar", &[], Some(&tok))).body.contains("id=\"admin-ayarlari\""));
         assert!(tekrar_eden_idler(&a).is_empty(), "{:?}", tekrar_eden_idler(&a));
         // form gönderince aynı sayfanın o bölümüne dönülür; mesaj korunur
         let r = e.p.handle(&req("POST", "/yasak/ekle", &[("csrf", &csrf), ("mac", "aa:bb:cc:dd:ee:01"), ("ad", "x")], Some(&tok)));
         assert!(loc(&r).starts_with("/cihazlar?m=") && loc(&r).ends_with("#yasak"), "{}", loc(&r));
         let r = e.p.handle(&req("POST", "/admin-ayarlari", &[("csrf", &csrf), ("limits.sms_global_day", "250")], Some(&tok)));
-        assert!(loc(&r).starts_with("/ayarlar?m=") && loc(&r).ends_with("#admin-ayarlari"), "{}", loc(&r));
+        assert!(loc(&r).starts_with("/admin?m=") && loc(&r).ends_with("#admin-ayarlari"), "{}", loc(&r));
         // sorgulu adresler (arama sonucu) olduğu gibi kalır
         assert_eq!(redirect("/kullanicilar?q=x", None).headers[0].1, "/kullanicilar?q=x");
-    }
-
-    #[test]
-    fn admin_oturumu_parola_degisince_duser() {
-        let e = env();
-        let (tok, _) = setup_and_login(&e, "admin", "hizmet-parola-1");
-        assert_eq!(e.p.handle(&req("GET", "/admin-ayarlari", &[], Some(&tok))).status, 200);
-        let oz = crate::hesap::digest("merkez-parola-1", "ab12", 120_000);
-        e.p.hesaplar.set_admin_ozet("ab12", &oz, 120_000).unwrap();
-        let r = e.p.handle(&basliksiz(req("GET", "/admin-ayarlari", &[], Some(&tok))));
-        assert!(r.status == 303 && r.headers.iter().any(|(_, v)| v == "/giris"));
     }
 
     #[test]
@@ -1821,10 +1866,11 @@ mod tests {
         assert_eq!(e.p.handle(&req("GET", "/kurulum", &[], None)).status, 404);
         let page = e.p.handle(&req("GET", "/giris", &[], None)).body;
         assert!(page.contains("WifiCorrect") && !page.contains("müşteriye bağlanmadı"));
-        // merkeze ulaşılamıyor: müşteri giremez, admin girer
+        // merkeze ulaşılamıyor: müşteri giremez; admin kullanıcı girişi yok
         let r = e.p.handle(&req("POST", "/giris", &[("kullanici", MUSTERI), ("parola", "sahip-parola-12")], None));
         assert!(r.body.contains("Merkeze ulaşılamadı"));
-        assert_eq!(e.p.handle(&req("POST", "/giris", &[("kullanici", "admin"), ("parola", "hizmet-parola-1")], None)).status, 303);
+        let r = e.p.handle(&req("POST", "/giris", &[("kullanici", "admin"), ("parola", "hizmet-parola-1")], None));
+        assert!(r.body.contains("hatalı") && !r.headers.iter().any(|(k, _)| k == "Set-Cookie"));
         // numara biçimsizse merkeze sorulmaz
         assert!(e.p.handle(&req("POST", "/giris", &[("kullanici", "mudur"), ("parola", "x")], None)).body.contains("hatalı"));
         // merkez: önce hatalı parola, sonra başarı
@@ -1854,17 +1900,20 @@ mod tests {
         e.p.http = merkez_yok();
         let r = e.p.handle(&req("POST", "/giris", &[("kullanici", MUSTERI), ("parola", "sahip-parola-12")], None));
         assert!(r.status != 303 && r.body.contains("panel.wificorrect.com"));
-        // kilit (yerel admin girişi, Task 3'e kadar) ve müşteri ağı
-        for _ in 0..5 {
-            e.p.handle(&req("POST", "/giris", &[("kullanici", "admin"), ("parola", "yanlis-parola")], None));
-        }
-        assert!(e.p.handle(&req("POST", "/giris", &[("kullanici", "admin"), ("parola", "hizmet-parola-1")], None)).body.contains("Çok fazla"));
+        // müşteri ağı
         let mut r = req("GET", "/giris", &[], None);
         r.ip = "10.50.0.23".into();
         assert_eq!(e.p.handle(&r).status, 403);
         let audit = std::fs::read_to_string(e.root.join("5651/gunluk/2026-09-29/denetim.csv")).unwrap();
-        assert!(audit.contains("PANEL_MERKEZ_BAGLANDI") && audit.contains("PANEL_GIRIS_HATA") && audit.contains("PANEL_GIRIS_KILIT"));
+        assert!(audit.contains("PANEL_MERKEZ_BAGLANDI") && audit.contains("PANEL_GIRIS_HATA"));
         assert!(!audit.contains("k-1")); // cihaz anahtarı denetime yazılmaz
+        // eşleştirme girişinde kilit: 5 hatadan sonra doğru parola da beklemeli (merkeze sorulmaz)
+        let e = env();
+        for _ in 0..5 {
+            e.p.handle(&req("POST", "/giris", &[("kullanici", "mudur"), ("parola", "yanlis-parola")], None));
+        }
+        assert!(e.p.handle(&req("POST", "/giris", &[("kullanici", MUSTERI), ("parola", "sahip-parola-12")], None)).body.contains("Çok fazla"));
+        assert!(std::fs::read_to_string(e.root.join("5651/gunluk/2026-09-29/denetim.csv")).unwrap().contains("PANEL_GIRIS_KILIT"));
     }
 
     #[test]
@@ -1889,7 +1938,8 @@ mod tests {
         let e = env();
         let (tok, csrf) = setup_and_login(&e, "mudur", "sahip-parola-12");
         assert_eq!(e.p.handle(&req("POST", "/ayarlar", &[("main.site_name", "X")], Some(&tok))).status, 403); // CSRF yok
-        assert_eq!(e.p.handle(&req("GET", "/admin-ayarlari", &[], Some(&tok))).status, 403); // Admin ayarları yalnızca admin
+        let r = e.p.handle(&req("GET", "/admin-ayarlari", &[], Some(&tok))); // Admin ayarları admin kilidiyle
+        assert!(r.body.contains("action=\"/admin-kilidi\"") && !r.body.contains("name=\"sms.mock\""));
         assert_eq!(e.p.handle(&req("POST", "/admin-ayarlari", &[("csrf", &csrf), ("sms.mock", "0")], Some(&tok))).status, 403);
         let page = e.p.handle(&req("GET", "/", &[], Some(&tok))).body;
         assert!(!page.contains("href=\"/admin-ayarlari\"") && !page.contains("href=\"/hesaplar\""));
@@ -1916,10 +1966,10 @@ mod tests {
         let r = e.p.handle(&req("POST", "/admin-ayarlari", &[("csrf", &csrf), ("netgsm.password", "gizli-sifre-1"), ("netgsm.usercode", "8503027084"), ("sms.mock", "1"), ("netgsm.msgheader", "COK-UZUN-BASLIK-OLMAZ")], Some(&tok)));
         assert!(r.status == 200 && r.body.contains("Geçersiz değer")); // geçersiz → hiçbir şey kaydedilmez
         assert_eq!(Config::load(&e.p.cfg_path).unwrap().netgsm.password, "");
-        // uzak.enabled işaretli gelir (formdaki kutu): kapanırsa panel tünelden de kapanır
-        e.p.handle(&req("POST", "/admin-ayarlari", &[("csrf", &csrf), ("netgsm.password", "gizli-sifre-1"), ("netgsm.usercode", "8503027084"), ("sms.mock", "1"), ("uzak.enabled", "1")], Some(&tok)));
+        // bağlı cihazda uzak erişim kutusu formda yok: gönderilmemesi uzak erişimi kapatmaz
+        e.p.handle(&req("POST", "/admin-ayarlari", &[("csrf", &csrf), ("netgsm.password", "gizli-sifre-1"), ("netgsm.usercode", "8503027084"), ("sms.mock", "1")], Some(&tok)));
         let c = Config::load(&e.p.cfg_path).unwrap();
-        assert_eq!((c.netgsm.password.as_str(), c.netgsm.usercode.as_str()), ("gizli-sifre-1", "8503027084"));
+        assert_eq!((c.netgsm.password.as_str(), c.netgsm.usercode.as_str(), c.uzak.enabled), ("gizli-sifre-1", "8503027084", true));
         let page = e.p.handle(&req("GET", "/admin-ayarlari", &[], Some(&tok))).body;
         assert!(!page.contains("gizli-sifre-1") && page.contains("(tanımlı)")); // şifre geri gösterilmez
         e.p.handle(&req("POST", "/admin-ayarlari", &[("csrf", &csrf), ("netgsm.password", ""), ("sms.mock", "1")], Some(&tok))); // boş = aynı
@@ -1992,12 +2042,12 @@ mod tests {
         let cookie = r.headers.iter().find(|(k, _)| k == "Set-Cookie").map(|(_, v)| v.clone()).expect("yeni çerez");
         let t3 = cookie.trim_start_matches("wfc=").split(';').next().unwrap().to_string();
         assert_eq!(e.p.handle(&req("GET", "/", &[], Some(&t3))).status, 200); // değiştiren yeni oturumla devam eder
-        // admin parolası yerel değişir
+        // admin kilidi açıkken de Şifremi değiştir müşteri parolasıdır; admin parolası panelden değişmez (merkezden gelir)
         e.p.http = merkez_yok();
         let (a1, acsrf) = setup_and_login(&e, "admin", "hizmet-parola-1");
         let r = e.p.handle(&req("POST", "/sifre", &[("csrf", &acsrf), ("eski", "hizmet-parola-1"), ("yeni", "yeni-admin-12"), ("yeni2", "yeni-admin-12")], Some(&a1)));
-        assert_eq!(r.status, 303);
-        assert!(e.p.hesaplar.verify("admin", "yeni-admin-12").is_some());
+        assert!(r.body.contains("Şu anki parola hatalı"));
+        assert!(e.p.hesaplar.verify("admin", "yeni-admin-12").is_none() && e.p.hesaplar.verify("admin", "hizmet-parola-1").is_some());
     }
 
     fn get(path: &str, query: &[(&str, &str)], token: &str) -> Req {
@@ -2158,7 +2208,8 @@ mod tests {
         e.p.handle(&get("/kullanicilar", &[], &tok));
         e.p.handle(&get("/kullanicilar", &[("q", "ayşe")], &tok));
         assert!(e.p.handle(&get("/kullanicilar", &[], &tok)).body.contains("hizmet sağlayıcı tarafından denetlenir"));
-        assert_eq!(e.p.handle(&get("/panel-hareketleri", &[], &tok)).status, 403); // sahip kendi izini göremez/silemez
+        let r = e.p.handle(&get("/panel-hareketleri", &[], &tok)); // sahip kendi izini admin parolası olmadan göremez/silemez
+        assert!(r.body.contains("action=\"/admin-kilidi\"") && !r.body.contains("Bağlı cihazlara baktı"));
         assert!(!e.p.handle(&get("/", &[], &tok)).body.contains("/panel-hareketleri"));
         e.p.handle(&req("POST", "/cikis", &[("csrf", &csrf)], Some(&tok)));
         let (atok, _) = setup_and_login(&e, "admin", "hizmet-parola-1");
@@ -2259,10 +2310,17 @@ mod tests {
         // cihaz müşteriye bağlıyken elle fabrika yok (merkezde sahipsiz bağlı kalırdı): önce serbest bırakılır
         let r = fab("hizmet-parola-1", "1");
         assert!(loc(&r).contains("e=1") && !e.calls.lock().unwrap().iter().any(|c| c.join(" ").contains("ctl fabrika")));
-        crate::merkez::sil(&e.p.merkez_path);
-        assert!(fab("hizmet-parola-1", "1").body.contains("fabrika ayarlarına dönüyor"));
-        assert!(e.p.handle(&get("/admin-ayarlari", &[], &tok)).body.contains("kayıtlar sunucuya gönderiliyor")); // sürüyor
         assert!(!loc(&e.p.handle(&req("POST", "/admin-ayarlari/yedekle", &[("csrf", &csrf)], Some(&tok)))).contains("e=1"));
+        crate::merkez::sil(&e.p.merkez_path);
+        // bağsız cihazda panel yalnızca eşleştirme: Admin ayarları da açılmaz
+        assert_eq!(loc(&e.p.handle(&get("/admin-ayarlari", &[], &tok))), "/giris");
+        // işleyicinin kendisi: admin parolası doğru, cihaz bağsız → başlar (panelden artık ulaşılmıyor; bkz. Task 3 raporu)
+        let o = e.p.oturumlar.get(&tok, 1_790_705_134.0).unwrap();
+        let cfgd = Config::load(&e.p.cfg_path).unwrap();
+        let r = e.p.fabrika(&cfgd, &req("POST", "/admin-ayarlari/fabrika", &[("parola", "hizmet-parola-1"), ("onay", "1")], Some(&tok)), &o);
+        assert!(r.body.contains("fabrika ayarlarına dönüyor"));
+        let (tok, _) = setup_and_login(&e, "admin", "hizmet-parola-1"); // yeniden bağlandı
+        assert!(e.p.handle(&get("/admin-ayarlari", &[], &tok)).body.contains("kayıtlar sunucuya gönderiliyor")); // sürüyor
         assert!(e.calls.lock().unwrap().iter().any(|c| c.join(" ").ends_with("wificorrect ctl yedekle")));
         assert!(e.calls.lock().unwrap().iter().any(|c| c.join(" ").ends_with("wificorrect ctl fabrika")));
         let audit = std::fs::read_to_string(e.root.join("5651/gunluk/2026-09-29/denetim.csv")).unwrap();
@@ -2276,22 +2334,72 @@ mod tests {
         assert!(!e.p.handle(&get("/ayarlar", &[], &otok)).body.contains("uzak.")); // işletme sahibi görmez
         let (tok, csrf) = setup_and_login(&e, "admin", "hizmet-parola-1");
         let page = e.p.handle(&get("/admin-ayarlari", &[], &tok)).body;
-        assert!(page.contains("uzak.sunucu") && page.contains("sudo wificorrect-sunucu cihaz-ekle bocafe-goztepe ") && page.contains("ssh-ed25519 "));
+        assert!(page.contains("sudo wificorrect-sunucu cihaz-ekle bocafe-goztepe ") && page.contains("ssh-ed25519 "));
         assert!(e.root.join("wg.key").exists() && e.root.join("yedek_anahtar.pub").exists()); // anahtarlar cihazda üretildi
-        let post = |f: &[(&str, &str)]| {
-            let mut v = vec![("csrf", csrf.as_str())];
-            v.extend_from_slice(f);
-            e.p.handle(&req("POST", "/admin-ayarlari", &v, Some(&tok)))
-        };
-        // eksik bilgiyle açık kalamaz
-        assert!(loc(&post(&[("uzak.enabled", "1"), ("uzak.sunucu", ""), ("sms.mock", "1")])).contains("e=1"));
-        assert_eq!(Config::load(&e.p.cfg_path).unwrap().uzak.sunucu, "vpn.wificorrect.com:51820");
-        let k = UZAK_KEY;
-        let r = post(&[("uzak.enabled", "1"), ("uzak.sunucu", "vpn.wificorrect.com:51820"), ("uzak.sunucu_anahtar", k), ("uzak.adres", "10.99.0.17"), ("sms.mock", "1")]);
+        // bağlı cihazda uzak erişim salt okunur (merkez bağlanırken yazar; tünelden kapatan panele erişimini keserdi)
+        assert!(!page.contains("name=\"uzak.") && page.contains("10.99.0.11</b> (merkez bağlantısıyla kuruldu)"));
+        let r = e.p.handle(&req("POST", "/admin-ayarlari", &[("csrf", &csrf), ("uzak.sunucu", ""), ("uzak.adres", "10.99.0.17"), ("sms.mock", "1")], Some(&tok)));
         assert!(!loc(&r).contains("e=1"), "{}", loc(&r));
         let c = Config::load(&e.p.cfg_path).unwrap();
-        assert!(c.uzak.enabled && c.uzak.adres == "10.99.0.17");
-        assert!(e.calls.lock().unwrap().iter().any(|c| c.join(" ").ends_with("wificorrect ctl uzak-uygula")));
+        assert!(c.uzak.enabled && c.uzak.adres == "10.99.0.11" && c.uzak.sunucu == "vpn.wificorrect.com:51820");
+        assert!(!e.calls.lock().unwrap().iter().any(|c| c.join(" ").ends_with("wificorrect ctl uzak-uygula")));
+    }
+
+    #[test]
+    fn admin_kilidi_ve_menu() {
+        let e = env();
+        let (tok, csrf) = setup_and_login(&e, "mudur", "sahip-parola-12");
+        let ozet = e.p.handle(&req("GET", "/", &[], Some(&tok))).body;
+        assert_eq!(menu_linkleri(&ozet), ["/", "/cihazlar", "/kayitlar", "/ayarlar", "/admin"]);
+        let a = e.p.handle(&req("GET", "/admin", &[], Some(&tok))).body;
+        assert!(a.contains("action=\"/admin-kilidi\"") && !a.contains("name=\"netgsm.usercode\""));
+        assert!(e.p.handle(&req("GET", "/panel-hareketleri", &[], Some(&tok))).body.contains("action=\"/admin-kilidi\""));
+        let r = e.p.handle(&req("POST", "/admin-kilidi", &[("csrf", &csrf), ("parola", "yanlis-parola-1"), ("donus", "/admin")], Some(&tok)));
+        assert!(r.body.contains("hatalı"));
+        let r = e.p.handle(&req("POST", "/admin-kilidi", &[("csrf", &csrf), ("parola", "hizmet-parola-1"), ("donus", "/admin")], Some(&tok)));
+        assert_eq!(loc(&r), "/admin");
+        let a = e.p.handle(&req("GET", "/admin", &[], Some(&tok))).body;
+        assert!(a.contains("name=\"netgsm.usercode\"") && a.contains("id=\"panel-hareketleri\""));
+        // yerel admin kullanıcı girişi yok
+        assert!(!e.p.handle(&req("POST", "/giris", &[("kullanici", "admin"), ("parola", "hizmet-parola-1")], None)).headers.iter().any(|(k, _)| k == "Set-Cookie"));
+        // kapat: kilit hemen kapanır; başka siteye dönüş yok
+        let r = e.p.handle(&req("POST", "/admin-kilidi/kapat", &[("csrf", &csrf)], Some(&tok)));
+        assert_eq!(r.status, 303);
+        assert!(e.p.handle(&req("GET", "/admin", &[], Some(&tok))).body.contains("action=\"/admin-kilidi\""));
+        let r = e.p.handle(&req("POST", "/admin-kilidi", &[("csrf", &csrf), ("parola", "hizmet-parola-1"), ("donus", "//kotu.example/x")], Some(&tok)));
+        assert_eq!(loc(&r), "/admin");
+        let audit = std::fs::read_to_string(e.root.join("5651/gunluk/2026-09-29/denetim.csv")).unwrap();
+        assert!(audit.contains("PANEL_ADMIN_HATALI") && audit.contains("PANEL_ADMIN_ACILDI"));
+    }
+
+    #[test]
+    fn admin_kilidi_parola_degisince_kapanir_ve_sure_dolunca() {
+        let mut e = env();
+        let (tok, csrf) = setup_and_login(&e, "mudur", "sahip-parola-12");
+        e.p.handle(&req("POST", "/admin-kilidi", &[("csrf", &csrf), ("parola", "hizmet-parola-1"), ("donus", "/admin")], Some(&tok)));
+        assert!(e.p.handle(&req("GET", "/admin", &[], Some(&tok))).body.contains("name=\"netgsm.usercode\""));
+        let oz = crate::hesap::digest("merkez-parola-1", "ab12", 120_000);
+        e.p.hesaplar.set_admin_ozet("ab12", &oz, 120_000).unwrap();
+        assert!(e.p.handle(&req("GET", "/admin", &[], Some(&tok))).body.contains("action=\"/admin-kilidi\""));
+        // yeni parolayla açılır, 30 dk sonra kendiliğinden kapanır (müşteri oturumu sürer)
+        e.p.handle(&req("POST", "/admin-kilidi", &[("csrf", &csrf), ("parola", "merkez-parola-1"), ("donus", "/admin")], Some(&tok)));
+        assert!(e.p.handle(&req("GET", "/admin", &[], Some(&tok))).body.contains("name=\"limits.sms_global_day\""));
+        e.p.clock = Box::new(|| 1_790_705_134.0 + 1801.0);
+        let r = e.p.handle(&req("GET", "/admin", &[], Some(&tok)));
+        assert!(r.status == 200 && r.body.contains("action=\"/admin-kilidi\"") && !r.body.contains("name=\"limits.sms_global_day\""));
+    }
+
+    #[test]
+    fn admin_parolasi_yoksa_kilit_acilmaz() {
+        let e = env();
+        let (tok, csrf) = setup_and_login(&e, "mudur", "sahip-parola-12");
+        let mut j: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(e.root.join("hesaplar.json")).unwrap()).unwrap();
+        j.as_object_mut().unwrap().remove("admin");
+        std::fs::write(e.root.join("hesaplar.json"), j.to_string()).unwrap();
+        let a = e.p.handle(&req("GET", "/admin", &[], Some(&tok))).body;
+        assert!(a.contains("Admin parolası belirlenmemiş") && !a.contains("action=\"/admin-kilidi\""));
+        let r = e.p.handle(&req("POST", "/admin-kilidi", &[("csrf", &csrf), ("parola", "hizmet-parola-1"), ("donus", "/admin")], Some(&tok)));
+        assert!(r.status == 200 && !e.p.handle(&req("GET", "/admin", &[], Some(&tok))).body.contains("name=\"netgsm.usercode\""));
     }
 
     #[test]
