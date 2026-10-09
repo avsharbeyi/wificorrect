@@ -244,8 +244,7 @@ class Yonetim(web.Taban):
                 ("Tünel adresi", e(c["tunel_ip"] or "—")), ("Sürüm", e(c["surum"] or "—")),
                 ("Bağlanma", e(c["baglanma"][:16])), ("Son eşitleme", e(c["son_eslesme"][:16] or "—")),
                 ("Son gelen gün", son), ("Arşiv", e(detay.boyut(d.get("boyut", 0)))),
-                ("Cihaz paneli", f'<a href="https://{e(c["tunel_ip"])}:8443">https://{e(c["tunel_ip"])}:8443</a> (VPN gerekli)'
-                 if c["tunel_ip"] else "—")])
+                ("Cihaz paneli", '<a href="https://panel.wificorrect.com">panel.wificorrect.com</a> (müşteri numarası ve parolasıyla)')])
             cihaz += (f'<form method="post" action="/m/{n}/serbest"><input type="hidden" name="csrf" value="{cs}">'
                       f'<label for="o">Cihazı serbest bırakmak için müşteri numarasını yazın ({n})</label>'
                       '<input id="o" name="onay" inputmode="numeric" autocomplete="off" required>'

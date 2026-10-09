@@ -85,17 +85,18 @@ class GecisBelirtecleri:
     def __init__(self):
         self._b, self.lock = {}, threading.Lock()
 
-    def uret(self, numara, simdi):
+    def uret(self, numara, simdi, ozet=""):
+        """ozet: müşterinin o anki parola özeti; belirteç alındıktan sonra parola değişirse cihaz oturumu açılmaz."""
         t = secrets.token_urlsafe(32)
         with self.lock:
             self._b = {k: v for k, v in self._b.items() if v[1] > simdi}
-            self._b[t] = (numara, simdi + self.SURE)
+            self._b[t] = (numara, simdi + self.SURE, ozet)
         return t
 
     def tuket(self, token, simdi):
         with self.lock:
             v = self._b.pop(token or "", None)
-        return v[0] if v and v[1] > simdi else None
+        return (v[0], v[2]) if v and v[1] > simdi else None
 
 
 class GirisKilidi:

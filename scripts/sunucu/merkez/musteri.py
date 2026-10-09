@@ -2,6 +2,7 @@
 Üyeliği bitmiş müşteri de girer (yalnızca okuma)."""
 
 import time
+import urllib.parse
 
 import guvenlik
 import web
@@ -73,8 +74,9 @@ class Musteri(web.Taban):
             baslik = c["isletme_adi"] if c is not None and c["isletme_adi"] else f"Müşteri {n}"
             return self.kayit_sayfasi(ot, n, yol, sorgu, "", ip, baslik)
         if yol == "/cihaz" and yontem == "GET":
-            if self.cihaz_adresi(n):
-                return yonlendir("https://cihaz.wificorrect.com/_giris?t=" + self.gecis.uret(ot["user"], self.saat()))
+            if self.cihaz_adresi(n) and "yok" not in urllib.parse.parse_qs(sorgu):  # yok=1: Caddy cihaza ulaşamadı → döngü olmasın
+                ozet = self.veri.musteri(n)["ozet"]
+                return yonlendir("https://cihaz.wificorrect.com/_giris?t=" + self.gecis.uret(ot["user"], self.saat(), ozet))
             return yanit_html(self.sayfa("Cihaz paneli", kart(
                 '<h1>Cihazınıza şu an ulaşılamıyor</h1><p>Cihaz kapalı, internetsiz ya da lisansı kapalı olabilir. '
                 'Yedek arşiviniz aşağıdadır.</p><p><a href="/">Yedek arşiv</a></p>'), ot))

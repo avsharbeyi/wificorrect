@@ -188,7 +188,7 @@ pub fn nft_text(ag: &Ag) -> String {
 
 pub fn issue_text(ag: &Ag) -> String {
     let b = '\\';
-    format!("WifiCorrect yonetim adresi: https://{b}4{{{0}}}:8443   SSH: {b}4{{{0}}}\n\n", ag.wan)
+    format!("WifiCorrect panel: https://panel.wificorrect.com (eslestirme: https://{b}4{{{0}}}:8443)   SSH: {b}4{{{0}}}\n\n", ag.wan)
 }
 
 pub fn hostapd_text(ag: &Ag) -> Option<String> {
@@ -446,7 +446,7 @@ mod tests {
         assert!(t.contains("allow-hotplug enp1s0\niface enp1s0 inet dhcp\n\thwaddress ether 00:0e:c4:ce:a0:9b"));
         assert!(t.contains("address 10.50.0.1/24\n\tbridge_ports enp3s0\n") && t.contains("net.ipv6.conf.enp3s0.disable_ipv6=1"));
         assert_eq!(nft_text(&ag), "# WifiCorrect üretir (ag.toml). guvenlik.nft bunu okur.\ndefine WAN = \"enp1s0\"\n");
-        assert!(issue_text(&ag).starts_with("WifiCorrect yonetim adresi: https://\\4{enp1s0}:8443"));
+        assert!(issue_text(&ag).starts_with("WifiCorrect panel: https://panel.wificorrect.com (eslestirme: https://\\4{enp1s0}:8443)"));
         assert!(hostapd_text(&ag).is_none());
         ag.lan.clear();
         ag.wifi = Wifi { acik: true, ssid: "Bocafe".into(), sifre: "guclu-sifre".into(), kanal: 11, ..Wifi::default() };

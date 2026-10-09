@@ -34,8 +34,8 @@ def cerez(yanit, ad):
 
 def test_belirtec_tek_kullanim():
     g = G.GecisBelirtecleri()
-    t = g.uret("1234567", 1000.0)
-    assert g.tuket(t, 1030.0) == "1234567" and g.tuket(t, 1031.0) is None
+    t = g.uret("1234567", 1000.0, "oz")
+    assert g.tuket(t, 1030.0) == ("1234567", "oz") and g.tuket(t, 1031.0) is None
     t2 = g.uret("1234567", 1000.0)
     assert g.tuket(t2, 1061.0) is None and g.tuket("yok", 1000.0) is None
 
@@ -57,6 +57,23 @@ def test_giris_cihaza_gecirir_ve_yetki_baslik_verir():
         assert c.istek("GET", "/_giris", CIHAZ, "", "t=" + t, "203.0.113.5")[0] == 303  # ikinci kez: giriş sayfasına
         r = c.istek("GET", "/cihaz-yetki", CIHAZ, "", "", "203.0.113.5")
         assert r[0] == 302 and r[1]["Location"] == "https://panel.wificorrect.com/giris"
+
+
+def test_belirtec_parola_degisirse_giris_sayfasina():
+    with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
+        v, m, c, saat, n = kur(tmp)
+        r = m.istek("GET", "/cihaz", {"Cookie": Y.cerez(gir(m, n))}, "", "", "203.0.113.5")
+        t = r[1]["Location"].split("t=", 1)[1]
+        v.parola_koy(n, "yeni-parola-12")  # belirteç alındıktan sonra
+        r = c.istek("GET", "/_giris", CIHAZ, "", "t=" + t, "203.0.113.5")
+        assert r[0] == 303 and r[1]["Location"] == "https://panel.wificorrect.com/giris" and "Set-Cookie" not in r[1]
+
+
+def test_cihaz_yok_sorgusu_yonlendirmez():
+    with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
+        v, m, c, saat, n = kur(tmp)
+        r = m.istek("GET", "/cihaz", {"Cookie": Y.cerez(gir(m, n))}, "", "yok=1", "203.0.113.5")
+        assert r[0] == 200 and "Location" not in r[1] and "ulaşılamıyor" in r[2].decode()
 
 
 def test_cihaz_oturumu_parola_lisans():

@@ -840,7 +840,7 @@ impl Panel {
         let token = self.oturumlar.create(&user, Rol::Sahip, now, &surum);
         let o = self.oturumlar.get(&token, now);
         self.audit(cfg, req, o.as_ref(), "PANEL_GIRIS", "");
-        let mut r = redirect("/", None);
+        let mut r = redirect("/", Some(("Cihaz eşleşti. Bundan sonra panel.wificorrect.com'dan girin.", false)));
         r.headers.push(("Set-Cookie".into(), format!("wfc={token}; Path=/; Secure; HttpOnly; SameSite=Strict")));
         r
     }
@@ -856,7 +856,7 @@ impl Panel {
         };
         let g = match crate::merkez::giris(numara, pw, &wg, &ssh, &cfg.main.site_name, &cfg.main.unvan, &*self.http, now) {
             Ok(g) => g,
-            Err(crate::merkez::GirisHata::Baglanti) => return Err(("Merkeze ulaşılamadı, internet bağlantısını kontrol edin.".into(), false)),
+            Err(crate::merkez::GirisHata::Baglanti) => return Err(("Merkeze ulaşılamadı, internet bağlantısını kontrol edin. Modem kablosunun Ethernet 1'e takılı olduğunu kontrol edin.".into(), false)),
             Err(crate::merkez::GirisHata::Mesaj(m, kilit)) => return Err((m, kilit)),
         };
         // önce ayarlar (tünel + yedek), sonra bağ: ayar yazılamazsa cihaz "bağlı ama tünelsiz" kalmasın
@@ -1878,7 +1878,7 @@ mod tests {
         assert!(page.contains("WifiCorrect") && !page.contains("müşteriye bağlanmadı"));
         // merkeze ulaşılamıyor: müşteri giremez; admin kullanıcı girişi yok
         let r = e.p.handle(&req("POST", "/giris", &[("kullanici", MUSTERI), ("parola", "sahip-parola-12")], None));
-        assert!(r.body.contains("Merkeze ulaşılamadı"));
+        assert!(r.body.contains("Merkeze ulaşılamadı") && r.body.contains("Ethernet 1"));
         let r = e.p.handle(&req("POST", "/giris", &[("kullanici", "admin"), ("parola", "hizmet-parola-1")], None));
         assert!(r.body.contains("hatalı") && !r.headers.iter().any(|(k, _)| k == "Set-Cookie"));
         // numara biçimsizse merkeze sorulmaz
@@ -1900,6 +1900,11 @@ mod tests {
         assert!(e.p.handle(&req("POST", "/giris", &[("kullanici", MUSTERI), ("parola", "yanlis-parola")], None)).body.contains("hatalı"));
         let r = e.p.handle(&req("POST", "/giris", &[("kullanici", MUSTERI), ("parola", "sahip-parola-12")], None));
         assert_eq!(r.status, 303);
+        assert!(loc(&r).starts_with("/?m="), "{}", loc(&r));
+        let mut q = req("GET", "/", &[], None);
+        q.query = crate::portal::parse_query(loc(&r).split_once('?').unwrap().1);
+        let sayfa = e.p.handle(&q).body; // bağlı cihaz: yalnızca merkez sayfası + eşleşti mesajı
+        assert!(sayfa.contains("Cihaz eşleşti") && sayfa.contains("panel.wificorrect.com"), "{sayfa}");
         let m = crate::merkez::oku(&e.p.merkez_path).unwrap();
         assert_eq!((m.numara.as_str(), m.cihaz_anahtari.as_str()), (MUSTERI, "k-1"));
         let c = Config::load(&e.p.cfg_path).unwrap();

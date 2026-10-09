@@ -29,7 +29,14 @@ cihaz.wificorrect.com {
 			header_up -X-WFC-Cihaz
 			# merkez oturum çerezi (wcc) cihaza gitmesin
 			header_up Cookie "(^|;\s*)wcc=[^;]*" ""
+			# ortak kökende cihazın CSP'si yerine sabit, sıkı CSP (panelde JavaScript yok); Set-Cookie (wfc) geçer
+			header_down Content-Security-Policy "default-src 'none'; style-src 'unsafe-inline'; img-src data:; form-action 'self'; frame-ancestors 'none'"
 		}
+	}
+	# cihaz kapalı/ulaşılamaz: 502 yerine "ulaşılamıyor" sayfası (panel /cihaz?yok=1 döngüsüz gösterir)
+	handle_errors {
+		@cihazyok expression {http.error.status_code} in [502, 503, 504]
+		redir @cihazyok https://panel.wificorrect.com/cihaz?yok=1 302
 	}
 	header {
 		Strict-Transport-Security "max-age=31536000"

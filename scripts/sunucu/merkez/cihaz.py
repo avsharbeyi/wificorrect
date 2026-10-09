@@ -41,9 +41,10 @@ class Cihaz:
                 return 302, {"Location": PANEL_GIRIS, "Cache-Control": "no-store"}, b""
             return 200, {"X-WFC-Kullanici": g[0], "X-WFC-Cihaz": g[1], "Cache-Control": "no-store"}, b""
         if yol == "/_giris":
-            numara = self.gecis.tuket((urllib.parse.parse_qs(sorgu).get("t") or [""])[0], self.saat())
+            b = self.gecis.tuket((urllib.parse.parse_qs(sorgu).get("t") or [""])[0], self.saat())
+            numara = b[0] if b else None
             m = self.veri.musteri(int(numara)) if numara else None
-            if m is None:
+            if m is None or m["ozet"] != b[1]:
                 return 303, {"Location": PANEL_GIRIS, "Cache-Control": "no-store"}, b""
             yeni = self.oturumlar.create(numara, "musteri", self.saat(), m["ozet"])
             return 303, {"Location": "/", "Set-Cookie": _cerez(yeni), "Cache-Control": "no-store"}, b""
