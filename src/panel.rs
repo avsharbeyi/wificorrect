@@ -603,13 +603,13 @@ impl Panel {
         };
         // bağlıyken panel yalnızca merkez üzerinden (2026-10-09, kullanıcı kararı)
         if !merkezden {
-            return self.yalniz_merkez(&cfg, req);
+            return Self::yerel_kapali();
         }
         if req.merkez_kullanici.as_ref().is_some_and(|k| *k != bag.numara) {
             return text(403, "Bu cihaz bu müşteriye ait değil.");
         }
         if req.path == "/giris" {
-            return self.yalniz_merkez(&cfg, req);
+            return Self::yerel_kapali();
         }
         // geçerli oturum korunur; yoksa merkezin doğruladığı müşteriye oturum açılır
         let mut yeni = None;
@@ -647,14 +647,9 @@ impl Panel {
     }
 
     /// Bağlı cihazda dükkân içinden (merkez dışından) gelen her isteğe: yönlendirme notu.
-    fn yalniz_merkez(&self, cfg: &Config, req: &Req) -> Resp {
-        self.page(
-            cfg,
-            req,
-            None,
-            "Giriş",
-            "<div class=\"kart dar\"><p>Bu cihazın paneli yalnızca <a href=\"https://panel.wificorrect.com\">panel.wificorrect.com</a> üzerinden açılır. Müşteri numaranız ve parolanızla oradan girin.</p></div>",
-        )
+    /// Bağlı cihaz merkez dışından gelen isteğe hiçbir şey göstermez (2026-10-10, kullanıcı kararı: not sayfası da yok).
+    fn yerel_kapali() -> Resp {
+        Resp { status: 404, body: String::new(), headers: vec![], file: None }
     }
 
     /// Admin kilidi formu (Admin ayarları ve Panel hareketleri kilitliyken). Admin özeti hiç gelmediyse form yok.
@@ -840,9 +835,11 @@ impl Panel {
         let token = self.oturumlar.create(&user, Rol::Sahip, now, &surum);
         let o = self.oturumlar.get(&token, now);
         self.audit(cfg, req, o.as_ref(), "PANEL_GIRIS", "");
-        let mut r = redirect("/", Some(("Cihaz eşleşti. Bundan sonra panel.wificorrect.com'dan girin.", false)));
-        r.headers.push(("Set-Cookie".into(), format!("wfc={token}; Path=/; Secure; HttpOnly; SameSite=Strict")));
-        r
+        // sonuç bir kez gösterilir; bundan sonra cihaz yerelden erişimsiz (oturum çerezi verilmez)
+        let _ = token;
+        self.page(cfg, req, None, "Cihaz eşleşti",
+                  "<div class=\"kart dar\"><p><b>Cihaz eşleşti.</b> Bundan sonra panele <a href=\"https://panel.wificorrect.com\">panel.wificorrect.com</a> \
+                   üzerinden müşteri numaranız ve parolanızla girin.</p></div>")
     }
 
     /// Bağlı olmayan cihazda ilk müşteri girişi: merkez parolayı doğrular, cihazı bağlar; tünel ve yedek ayarlanır.
@@ -1629,7 +1626,8 @@ mod tests {
         // aynı başlık modem ağından: yok sayılır
         let mut r2 = merkez_req("/cihazlar", MUSTERI);
         r2.ip = "192.168.1.50".into();
-        assert!(e.p.handle(&r2).body.contains("panel.wificorrect.com"));
+        let y = e.p.handle(&r2);
+        assert!(y.status == 404 && y.body.is_empty()); // yerel erişim: hiçbir şey
         // başka müşteri numarası: red
         assert_ne!(e.p.handle(&merkez_req("/cihazlar", "7654321")).status, 200);
         // denetimde gerçek istemci IP'si
@@ -1647,9 +1645,9 @@ mod tests {
         assert_eq!(loc(&e.p.handle(&req("GET", "/cihazlar", &[], None))), "/giris");
         setup_and_login(&e, "mudur", "sahip-parola-12");
         uzak_adresli(&e);
-        // bağlı: yerelden giriş formu da yok, yönlendirme notu var
-        let g = e.p.handle(&req("GET", "/giris", &[], None)).body;
-        assert!(!g.contains("action=\"/giris\"") && g.contains("panel.wificorrect.com"));
+        // bağlı: giriş formu da not da yok (2026-10-10: tamamen erişimsiz)
+        let g = e.p.handle(&req("GET", "/giris", &[], None));
+        assert!(g.status == 404 && g.body.is_empty());
         assert_ne!(e.p.handle(&req("POST", "/giris", &[("kullanici", MUSTERI), ("parola", "sahip-parola-12")], None)).status, 303);
     }
 
@@ -1673,7 +1671,7 @@ mod tests {
         let e = env();
         setup_and_login(&e, "mudur", "sahip-parola-12");
         let reddedildi = |r: Resp| {
-            r.status == 200 && r.body.contains("yalnızca <a href=\"https://panel.wificorrect.com\"") && !r.headers.iter().any(|(k, _)| k == "Set-Cookie")
+            r.status == 404 && r.body.is_empty() && !r.headers.iter().any(|(k, _)| k == "Set-Cookie")
         };
         let mut c = Config::load(&e.p.cfg_path).unwrap();
         c.uzak.enabled = false;
@@ -1709,7 +1707,7 @@ mod tests {
         // (b) daha önce verilmiş geçerli çerez yerelden işe yaramaz
         for t in [&atok, &mtok] {
             let r = e.p.handle(&yerel(req("GET", "/cihazlar", &[], Some(t))));
-            assert!(r.body.contains("yalnızca <a href=\"https://panel.wificorrect.com\"") && !r.body.contains("Bağlı cihazlar"));
+            assert!(r.status == 404 && r.body.is_empty());
         }
         // (c) yerel istekteki X-Forwarded-For hiçbir yere yazılmaz
         let mut r = yerel(req("POST", "/oturumlar/at", &[], Some(&mtok)));
@@ -1899,12 +1897,9 @@ mod tests {
         });
         assert!(e.p.handle(&req("POST", "/giris", &[("kullanici", MUSTERI), ("parola", "yanlis-parola")], None)).body.contains("hatalı"));
         let r = e.p.handle(&req("POST", "/giris", &[("kullanici", MUSTERI), ("parola", "sahip-parola-12")], None));
-        assert_eq!(r.status, 303);
-        assert!(loc(&r).starts_with("/?m="), "{}", loc(&r));
-        let mut q = req("GET", "/", &[], None);
-        q.query = crate::portal::parse_query(loc(&r).split_once('?').unwrap().1);
-        let sayfa = e.p.handle(&q).body; // bağlı cihaz: yalnızca merkez sayfası + eşleşti mesajı
-        assert!(sayfa.contains("Cihaz eşleşti") && sayfa.contains("panel.wificorrect.com"), "{sayfa}");
+        // eşleşme sonucu bir kez gösterilir (yerel oturum çerezi yok); sonra yerel erişim kapalı
+        assert!(r.status == 200 && r.body.contains("Cihaz eşleşti") && r.body.contains("panel.wificorrect.com"), "{}", r.body);
+        assert!(!r.headers.iter().any(|(k, _)| k == "Set-Cookie"));
         let m = crate::merkez::oku(&e.p.merkez_path).unwrap();
         assert_eq!((m.numara.as_str(), m.cihaz_anahtari.as_str()), (MUSTERI, "k-1"));
         let c = Config::load(&e.p.cfg_path).unwrap();
@@ -1914,7 +1909,7 @@ mod tests {
         // bağlandıktan sonra: müşteri girişi yalnızca panel.wificorrect.com'dan (cihazda form yok)
         e.p.http = merkez_yok();
         let r = e.p.handle(&req("POST", "/giris", &[("kullanici", MUSTERI), ("parola", "sahip-parola-12")], None));
-        assert!(r.status != 303 && r.body.contains("panel.wificorrect.com"));
+        assert!(r.status == 404 && r.body.is_empty());
         // müşteri ağı
         let mut r = req("GET", "/giris", &[], None);
         r.ip = "10.50.0.23".into();
