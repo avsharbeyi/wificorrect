@@ -78,6 +78,26 @@ class Oturumlar:
                 s["gerekce"] = (metin, bitis)
 
 
+class GecisBelirtecleri:
+    """panel → cihaz.wificorrect.com geçişi: tek kullanımlık, 60 sn (URL'de taşınır, çerez değil)."""
+    SURE = 60
+
+    def __init__(self):
+        self._b, self.lock = {}, threading.Lock()
+
+    def uret(self, numara, simdi):
+        t = secrets.token_urlsafe(32)
+        with self.lock:
+            self._b = {k: v for k, v in self._b.items() if v[1] > simdi}
+            self._b[t] = (numara, simdi + self.SURE)
+        return t
+
+    def tuket(self, token, simdi):
+        with self.lock:
+            v = self._b.pop(token or "", None)
+        return v[0] if v and v[1] > simdi else None
+
+
 class GirisKilidi:
     """IP başına ve hesap başına kayan pencere: `limit` deneme `pencere` sn içinde → kilit. Deneme doğrulamadan ÖNCE
     sayılır; başarılı giriş yalnızca kendi denemesini ve o hesabın sayacını siler."""

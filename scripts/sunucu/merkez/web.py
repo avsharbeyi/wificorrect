@@ -123,6 +123,9 @@ class Taban:
     def menu(self, ot):
         return ""
 
+    def giris_sonrasi(self, kimlik):
+        return "/"
+
     def sayfalar(self, ot, token, yontem, yol, sorgu, form, ip):
         return None
 
@@ -182,7 +185,7 @@ class Taban:
             return yanit_html(self._giris_html(f"{self.kullanici_etiketi} veya parola hatalı."), 401)
         self.kilit.succeed(ip, kul, simdi)
         self.girdi(kimlik, ip)
-        return yonlendir("/", (self.cerez, self.oturum_ac(kimlik, simdi)))
+        return yonlendir(self.giris_sonrasi(kimlik), (self.cerez, self.oturum_ac(kimlik, simdi)))
 
     def _gerekce(self, ot, token, yontem, sorgu, form, ip, simdi):
         if yontem == "GET":
