@@ -678,6 +678,7 @@ impl Panel {
     fn admin_kilidi(&self, cfg: &Config, req: &Req, o: &Oturum, now: f64) -> Resp {
         let anahtar = format!("admin-kilidi:{}", o.user);
         if !self.guard.allowed(&req.ip, &anahtar, now) {
+            self.audit(cfg, req, Some(o), "PANEL_ADMIN_HATALI", "kilit=1");
             return self.admin_kilidi_formu(cfg, req, o, "Çok fazla hatalı deneme. 15 dakika sonra tekrar deneyin.");
         }
         let pw = req.form.get("parola").map_or("", String::as_str);
@@ -1114,30 +1115,31 @@ impl Panel {
             ));
             let st = |missing: bool| if missing { "eksik" } else { "tanımlı" };
             let twilio_missing = !cfg.twilio_missing().is_empty();
-            body.push_str(&format!(
-                "<section class=\"kart grup\"><h2>Durum</h2><div>{}</div></section>",
-                facts(&[
-                    ("Mod", if cfg.sms.mock { "Deneme (SMS gönderilmiyor)".into() } else { "Gerçek SMS".into() }),
-                    ("NetGSM bilgileri", st(cfg.netgsm.password.is_empty() || cfg.netgsm.usercode.is_empty()).into()),
-                    ("Twilio (yabancı numaralar)", if cfg.twilio.enabled { st(twilio_missing).into() } else { "kapalı".into() }),
-                    ("Son yedek", yedek),
-                    ("Uzak erişim", h(&crate::uzak::durum(cfg, (self.clock)()))),
-                    (
-                        "Sunucuya tanıtma komutu",
-                        match (
-                            crate::uzak::ensure_key(&self.uzak_key).and_then(|k| crate::uzak::public_key(&k)),
-                            crate::uzak::yedek_anahtari(&self.yedek_key),
-                        ) {
-                            (Ok(wg), Ok(ssh)) => format!(
-                                "<code style=\"user-select:all;overflow-wrap:anywhere\">{}</code><br><span class=\"not\">Merkez sunucuda bir kez \
-                                 çalıştırın; çıkan değerleri Uzak erişim ve Yedek hedefi alanlarına girin.</span>",
-                                h(&crate::uzak::sunucu_komutu(&cfg.main.site_name, &wg, &ssh))
-                            ),
-                            (Err(e), _) | (_, Err(e)) => format!("<span class=\"durum kotu\">{}</span>", h(&e)),
-                        },
-                    ),
-                ])
-            ));
+            let mut durum = vec![
+                ("Mod", if cfg.sms.mock { "Deneme (SMS gönderilmiyor)".into() } else { "Gerçek SMS".into() }),
+                ("NetGSM bilgileri", st(cfg.netgsm.password.is_empty() || cfg.netgsm.usercode.is_empty()).into()),
+                ("Twilio (yabancı numaralar)", if cfg.twilio.enabled { st(twilio_missing).into() } else { "kapalı".into() }),
+                ("Son yedek", yedek),
+                ("Uzak erişim", h(&crate::uzak::durum(cfg, (self.clock)()))),
+            ];
+            // bağlı cihazda uzak erişim ve yedek merkez bağlanırken kurulur: elle tanıtma komutu gereksiz (alanlar salt okunur)
+            if !bagli {
+                durum.push((
+                    "Sunucuya tanıtma komutu",
+                    match (
+                        crate::uzak::ensure_key(&self.uzak_key).and_then(|k| crate::uzak::public_key(&k)),
+                        crate::uzak::yedek_anahtari(&self.yedek_key),
+                    ) {
+                        (Ok(wg), Ok(ssh)) => format!(
+                            "<code style=\"user-select:all;overflow-wrap:anywhere\">{}</code><br><span class=\"not\">Merkez sunucuda bir kez \
+                             çalıştırın; çıkan değerleri Uzak erişim ve Yedek hedefi alanlarına girin.</span>",
+                            h(&crate::uzak::sunucu_komutu(&cfg.main.site_name, &wg, &ssh))
+                        ),
+                        (Err(e), _) | (_, Err(e)) => format!("<span class=\"durum kotu\">{}</span>", h(&e)),
+                    },
+                ));
+            }
+            body.push_str(&format!("<section class=\"kart grup\"><h2>Durum</h2><div>{}</div></section>", facts(&durum)));
         }
         body.push_str("<div class=\"kaydet\"><button>Kaydet</button><p class=\"not\">Kaydedince giriş sayfası yeni ayarlarla yeniden başlatılır; bağlı müşteriler düşmez.</p></div></form>");
         if admin {
@@ -1147,19 +1149,27 @@ impl Panel {
                  yeni gün yoksa da zincir gönderilir; sunucu bağlantısı böylece denenmiş olur. Sonuç yukarıdaki Durum'da görünür.</p>{}</section>",
                 post_button(o, "/admin-ayarlari/yedekle", "Şimdi yedekle", &[], "ikincil")
             ));
-            body.push_str(&format!(
-                "<section class=\"kart\" style=\"margin-top:48px\"><h2>Fabrika ayarları</h2><p class=\"not\">Cihazı ISO'dan kurulduktan hemen \
-                 sonraki haline döndürür: bütün ayarlar (işletme adı ve unvanı, SMS bilgileri, yedek, metinler, yasaklı listeler) ürün \
-                 varsayılanına döner, admin dışındaki hesaplar silinir ve açılışta giriş ekranı gelir, portlar varsayılana döner \
-                 (Ethernet 1 internet alır, Ethernet 2 verir, Wi-Fi kapalı), bağlı müşterilerin oturumları kapanır. 5651 kayıtları önce \
-                 (bugün dahil) mühürlenip uzak sunucuya gönderilir, sonra cihazdan silinir; işletme sahibi kayıtlarını sunucudaki panelden \
-                 görmeye devam eder. Uzak yedek kapalıysa ya da bir gün gönderilemezse işlem iptal olur ve hiçbir şey silinmez. \
-                 Geri alınamaz.</p><form class=\"satir\" method=\"post\" action=\"/admin-ayarlari/fabrika\">{}\
-                 <div><label for=\"fp\">Admin parolası</label><input type=\"password\" id=\"fp\" name=\"parola\" autocomplete=\"current-password\" required></div>\
-                 <label class=\"secim\"><input type=\"checkbox\" name=\"onay\" value=\"1\" required> Bütün ayarların silineceğini anladım</label>\
-                 <button class=\"tehlike\">Fabrika ayarlarına döndür</button></form></section>",
-                csrf_input(o)
-            ));
+            if bagli {
+                // panelden bağlı cihazda fabrika yok (merkezde sahipsiz bağlı kalırdı); serbest bırakma ctl fabrika'yı çalıştırır
+                body.push_str(
+                    "<section class=\"kart\" style=\"margin-top:48px\"><h2>Fabrika ayarları</h2><p class=\"not\">Fabrika ayarına dönmek için \
+                     cihazı yönetim merkezinden serbest bırakın; cihaz kayıtlarını gönderip kendiliğinden fabrika ayarına döner.</p></section>",
+                );
+            } else {
+                body.push_str(&format!(
+                    "<section class=\"kart\" style=\"margin-top:48px\"><h2>Fabrika ayarları</h2><p class=\"not\">Cihazı ISO'dan kurulduktan hemen \
+                     sonraki haline döndürür: bütün ayarlar (işletme adı ve unvanı, SMS bilgileri, yedek, metinler, yasaklı listeler) ürün \
+                     varsayılanına döner, admin dışındaki hesaplar silinir ve açılışta giriş ekranı gelir, portlar varsayılana döner \
+                     (Ethernet 1 internet alır, Ethernet 2 verir, Wi-Fi kapalı), bağlı müşterilerin oturumları kapanır. 5651 kayıtları önce \
+                     (bugün dahil) mühürlenip uzak sunucuya gönderilir, sonra cihazdan silinir; işletme sahibi kayıtlarını sunucudaki panelden \
+                     görmeye devam eder. Uzak yedek kapalıysa ya da bir gün gönderilemezse işlem iptal olur ve hiçbir şey silinmez. \
+                     Geri alınamaz.</p><form class=\"satir\" method=\"post\" action=\"/admin-ayarlari/fabrika\">{}\
+                     <div><label for=\"fp\">Admin parolası</label><input type=\"password\" id=\"fp\" name=\"parola\" autocomplete=\"current-password\" required></div>\
+                     <label class=\"secim\"><input type=\"checkbox\" name=\"onay\" value=\"1\" required> Bütün ayarların silineceğini anladım</label>\
+                     <button class=\"tehlike\">Fabrika ayarlarına döndür</button></form></section>",
+                    csrf_input(o)
+                ));
+            }
         }
         self.page(cfg, req, Some(o), if admin { "Admin ayarları" } else { "Ayarlar" }, &body)
     }
@@ -2334,8 +2344,7 @@ mod tests {
         assert!(!e.p.handle(&get("/ayarlar", &[], &otok)).body.contains("uzak.")); // işletme sahibi görmez
         let (tok, csrf) = setup_and_login(&e, "admin", "hizmet-parola-1");
         let page = e.p.handle(&get("/admin-ayarlari", &[], &tok)).body;
-        assert!(page.contains("sudo wificorrect-sunucu cihaz-ekle bocafe-goztepe ") && page.contains("ssh-ed25519 "));
-        assert!(e.root.join("wg.key").exists() && e.root.join("yedek_anahtar.pub").exists()); // anahtarlar cihazda üretildi
+        assert!(!page.contains("tanıtma") && !page.contains("sudo wificorrect-sunucu")); // bağlıyken elle tanıtma yok
         // bağlı cihazda uzak erişim salt okunur (merkez bağlanırken yazar; tünelden kapatan panele erişimini keserdi)
         assert!(!page.contains("name=\"uzak.") && page.contains("10.99.0.11</b> (merkez bağlantısıyla kuruldu)"));
         let r = e.p.handle(&req("POST", "/admin-ayarlari", &[("csrf", &csrf), ("uzak.sunucu", ""), ("uzak.adres", "10.99.0.17"), ("sms.mock", "1")], Some(&tok)));
@@ -2387,6 +2396,32 @@ mod tests {
         e.p.clock = Box::new(|| 1_790_705_134.0 + 1801.0);
         let r = e.p.handle(&req("GET", "/admin", &[], Some(&tok)));
         assert!(r.status == 200 && r.body.contains("action=\"/admin-kilidi\"") && !r.body.contains("name=\"limits.sms_global_day\""));
+    }
+
+    #[test]
+    fn admin_kilidi_hatali_deneme_kilidi() {
+        let e = env();
+        let (tok, csrf) = setup_and_login(&e, "mudur", "sahip-parola-12");
+        let ac = |pw: &str| e.p.handle(&req("POST", "/admin-kilidi", &[("csrf", &csrf), ("parola", pw), ("donus", "/admin")], Some(&tok)));
+        for _ in 0..5 {
+            assert!(ac("yanlis-parola-1").body.contains("hatalı"));
+        }
+        let r = ac("hizmet-parola-1");
+        assert!(r.body.contains("Çok fazla") && loc(&r).is_empty());
+        assert!(e.p.handle(&req("GET", "/admin", &[], Some(&tok))).body.contains("action=\"/admin-kilidi\""));
+        let audit = std::fs::read_to_string(e.root.join("5651/gunluk/2026-09-29/denetim.csv")).unwrap();
+        assert!(audit.lines().any(|l| l.contains("PANEL_ADMIN_HATALI") && l.contains("kilit=1")) && !audit.contains("PANEL_ADMIN_ACILDI"));
+    }
+
+    #[test]
+    fn admin_ayarlari_bagliyken_fabrika_formu_yok() {
+        let e = env();
+        let (tok, csrf) = setup_and_login(&e, "admin", "hizmet-parola-1");
+        let a = e.p.handle(&req("GET", "/admin", &[], Some(&tok))).body;
+        assert!(!a.contains("action=\"/admin-ayarlari/fabrika\"") && a.contains("serbest bırakın") && !a.contains("tanıtma"));
+        // elle gönderilse de bağlıyken reddedilir
+        let r = e.p.handle(&req("POST", "/admin-ayarlari/fabrika", &[("csrf", &csrf), ("parola", "hizmet-parola-1"), ("onay", "1")], Some(&tok)));
+        assert!(loc(&r).contains("e=1") && !e.calls.lock().unwrap().iter().any(|c| c.join(" ").contains("ctl fabrika")));
     }
 
     #[test]
