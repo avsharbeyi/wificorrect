@@ -563,10 +563,13 @@ impl Panel {
             return text(403, "Yasak"); // müşteri ağından panel yok
         }
         let now = (self.clock)();
-        // Kimlik başlıkları yalnızca merkezin tünel adresinden gelirse geçerli; başka kaynakta yok sayılır.
-        let merkezden = merkez_adresi(&cfg).is_some_and(|m| m == req.ip);
+        // Kimlik başlıkları yalnızca açık tünelden, merkezin tünel adresinden gelirse geçerli; başka kaynakta yok sayılır.
+        // Tünel kapalıysa (ayar ya da "wfc" arayüzü yok) 10.99.0.1'e yanıt varsayılan yoldan gider: kaynak taklit edilebilir.
+        let tunel = cfg.uzak.enabled && crate::uzak::adres_ok(cfg.uzak.adres.trim()) && self.sys.join("wfc").exists();
+        let merkezden = tunel && merkez_adresi(&cfg).is_some_and(|m| m == req.ip);
+        let ileten = req.ileten_ip.as_deref().filter(|s| s.parse::<std::net::IpAddr>().is_ok());
         let req = &Req {
-            ip: if merkezden { req.ileten_ip.clone().unwrap_or_else(|| req.ip.clone()) } else { req.ip.clone() },
+            ip: if merkezden { ileten.unwrap_or(&req.ip).to_string() } else { req.ip.clone() },
             merkez_kullanici: if merkezden { req.merkez_kullanici.clone() } else { None },
             ileten_ip: None,
             ..clone_req(req)
@@ -1455,7 +1458,7 @@ mod tests {
         let root = std::env::temp_dir().join(format!("wfc-panel-{}-{}", std::process::id(), N.fetch_add(1, Ordering::SeqCst)));
         let _ = std::fs::remove_dir_all(&root);
         std::fs::create_dir_all(&root).unwrap();
-        let cfg = format!("[main]\nsite_name = 'Bocafe'\nlog_root = '{0}/5651'\nstate_root = '{0}/state'\n[uzak]\nadres = '10.99.0.11'\n", root.display());
+        let cfg = format!("[main]\nsite_name = 'Bocafe'\nlog_root = '{0}/5651'\nstate_root = '{0}/state'\n[uzak]\nenabled = true\nsunucu = 'vpn.wificorrect.com:51820'\nsunucu_anahtar = '{UZAK_KEY}'\nadres = '10.99.0.11'\n", root.display());
         std::fs::write(root.join("ayarlar.toml"), cfg).unwrap();
         let calls = Arc::new(Mutex::new(vec![]));
         let c2 = calls.clone();
@@ -1474,6 +1477,8 @@ mod tests {
         p.filtre_conf = root.join("yasak.conf");
         p.merkez_path = root.join("merkez.json");
         p.http = merkez_yok();
+        p.sys = root.join("sys"); // testler gerçek arayüzlere bakmasın; "wfc" = tünel arayüzü var
+        std::fs::create_dir_all(p.sys.join("wfc")).unwrap();
         Env { p, calls, root }
     }
 
@@ -1502,10 +1507,17 @@ mod tests {
               ileten_ip: Some("203.0.113.9".into()), ..Default::default() }
     }
 
+    const UZAK_KEY: &str = "aBcDeFgHiJkLmNoPqRsTuVwXyZ0123456789+/abcdE=";
+
+    /// Tünel açık: ayar (açık, eksiksiz, adres 10.99.0.11) ve "wfc" arayüzü
     fn uzak_adresli(e: &Env) {
         let mut c = Config::load(&e.p.cfg_path).unwrap();
+        c.uzak.enabled = true;
+        c.uzak.sunucu = "vpn.wificorrect.com:51820".into();
+        c.uzak.sunucu_anahtar = UZAK_KEY.into();
         c.uzak.adres = "10.99.0.11".into();
         c.save(&e.p.cfg_path).unwrap();
+        std::fs::create_dir_all(e.p.sys.join("wfc")).unwrap();
     }
 
     fn loc(r: &Resp) -> &str {
@@ -1589,6 +1601,62 @@ mod tests {
         let mut c = merkez_req("/cikis", MUSTERI);
         (c.method, c.token, c.form) = ("POST".into(), Some(tok), [("csrf".to_string(), csrf)].into_iter().collect());
         assert_eq!(loc(&e.p.handle(&c)), "/_cikis");
+    }
+
+    /// Tünel kapalıyken (ayar ya da arayüz yok) 10.99.0.1 kaynağı dükkân ağından taklit edilebilir: başlığa güvenilmez.
+    #[test]
+    fn tunel_yokken_merkez_basligi_yok_sayilir() {
+        let e = env();
+        setup_and_login(&e, "mudur", "sahip-parola-12");
+        let reddedildi = |r: Resp| {
+            r.status == 200 && r.body.contains("yalnızca <a href=\"https://panel.wificorrect.com\"") && !r.headers.iter().any(|(k, _)| k == "Set-Cookie")
+        };
+        let mut c = Config::load(&e.p.cfg_path).unwrap();
+        c.uzak.enabled = false;
+        c.save(&e.p.cfg_path).unwrap();
+        assert!(reddedildi(e.p.handle(&merkez_req("/cihazlar", MUSTERI))));
+        assert!(reddedildi(e.p.handle(&merkez_req("/cihazlar", "7654321")))); // numara sorgulanamaz
+        uzak_adresli(&e);
+        std::fs::remove_dir(e.p.sys.join("wfc")).unwrap(); // wg-quick başlamadı
+        assert!(reddedildi(e.p.handle(&merkez_req("/cihazlar", MUSTERI))));
+        assert!(reddedildi(e.p.handle(&merkez_req("/cihazlar", "7654321"))));
+        uzak_adresli(&e);
+        assert_eq!(e.p.handle(&merkez_req("/cihazlar", MUSTERI)).status, 200);
+    }
+
+    #[test]
+    fn bagliyken_yerel_kaynak_reddedilir() {
+        let e = env();
+        let yerel = |mut r: Req| {
+            (r.ip, r.merkez_kullanici, r.ileten_ip) = (IP.into(), None, None);
+            r
+        };
+        let denetim = || std::fs::read_to_string(e.root.join("5651/gunluk/2026-09-29/denetim.csv")).unwrap_or_default();
+        // bağlı değil: yerel kaynakta X-Forwarded-For denetime girmez
+        let mut r = yerel(req("POST", "/giris", &[("kullanici", "admin"), ("parola", "yanlis-parola")], None));
+        r.ileten_ip = Some("198.51.100.7".into());
+        e.p.handle(&r);
+        assert!(denetim().contains(&format!("ip={IP}")) && !denetim().contains("198.51.100.7"));
+        let (atok, _) = setup_and_login(&e, "admin", "hizmet-parola-1");
+        let (mtok, _) = setup_and_login(&e, "mudur", "sahip-parola-12");
+        // (a) doğru parolalı yerel admin girişi: oturum yok
+        let r = e.p.handle(&yerel(req("POST", "/giris", &[("kullanici", "admin"), ("parola", "hizmet-parola-1")], None)));
+        assert!(r.status != 303 && !r.headers.iter().any(|(k, _)| k == "Set-Cookie"));
+        // (b) daha önce verilmiş geçerli çerez yerelden işe yaramaz
+        for t in [&atok, &mtok] {
+            let r = e.p.handle(&yerel(req("GET", "/cihazlar", &[], Some(t))));
+            assert!(r.body.contains("yalnızca <a href=\"https://panel.wificorrect.com\"") && !r.body.contains("Bağlı cihazlar"));
+        }
+        // (c) yerel istekteki X-Forwarded-For hiçbir yere yazılmaz
+        let mut r = yerel(req("POST", "/oturumlar/at", &[], Some(&mtok)));
+        r.ileten_ip = Some("198.51.100.7".into());
+        e.p.handle(&r);
+        assert!(!denetim().contains("198.51.100.7"));
+        // merkezden de IP olmayan X-Forwarded-For kabul edilmez: kaynak adres yazılır
+        let mut r = merkez_req("/cihazlar", MUSTERI);
+        r.ileten_ip = Some("kotu-deger".into());
+        e.p.handle(&r);
+        assert!(!denetim().contains("kotu-deger") && denetim().contains("ip=10.99.0.1"));
     }
 
     /// Sayfadaki id'ler: aynı id iki kez olursa etiketler yanlış alana bağlanır.
@@ -1683,6 +1751,7 @@ mod tests {
         let mut fdb = vec![0xaa, 0xbb, 0xcc, 0xdd, 0xee, 0x01, 1, 0, 0x3d, 0x21, 0, 0, 0, 0, 0, 0];
         fdb.extend([0xaa, 0xbb, 0xcc, 0xdd, 0xee, 0x02, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0]);
         std::fs::write(sys.join(&cfg.main.iface).join("brforward"), fdb).unwrap();
+        std::fs::create_dir_all(sys.join("wfc")).unwrap();
         e.p.sys = sys;
         let s = e.p.handle(&req("GET", "/cihazlar", &[], Some(&tok))).body;
         let satir = |ad: &str| s.split("<tr>").find(|r| r.contains(ad)).unwrap().to_string();
@@ -1847,7 +1916,8 @@ mod tests {
         let r = e.p.handle(&req("POST", "/admin-ayarlari", &[("csrf", &csrf), ("netgsm.password", "gizli-sifre-1"), ("netgsm.usercode", "8503027084"), ("sms.mock", "1"), ("netgsm.msgheader", "COK-UZUN-BASLIK-OLMAZ")], Some(&tok)));
         assert!(r.status == 200 && r.body.contains("Geçersiz değer")); // geçersiz → hiçbir şey kaydedilmez
         assert_eq!(Config::load(&e.p.cfg_path).unwrap().netgsm.password, "");
-        e.p.handle(&req("POST", "/admin-ayarlari", &[("csrf", &csrf), ("netgsm.password", "gizli-sifre-1"), ("netgsm.usercode", "8503027084"), ("sms.mock", "1")], Some(&tok)));
+        // uzak.enabled işaretli gelir (formdaki kutu): kapanırsa panel tünelden de kapanır
+        e.p.handle(&req("POST", "/admin-ayarlari", &[("csrf", &csrf), ("netgsm.password", "gizli-sifre-1"), ("netgsm.usercode", "8503027084"), ("sms.mock", "1"), ("uzak.enabled", "1")], Some(&tok)));
         let c = Config::load(&e.p.cfg_path).unwrap();
         assert_eq!((c.netgsm.password.as_str(), c.netgsm.usercode.as_str()), ("gizli-sifre-1", "8503027084"));
         let page = e.p.handle(&req("GET", "/admin-ayarlari", &[], Some(&tok))).body;
@@ -2213,10 +2283,10 @@ mod tests {
             v.extend_from_slice(f);
             e.p.handle(&req("POST", "/admin-ayarlari", &v, Some(&tok)))
         };
-        // eksik bilgiyle açılamaz
-        assert!(loc(&post(&[("uzak.enabled", "1"), ("sms.mock", "1")])).contains("e=1"));
-        assert!(!Config::load(&e.p.cfg_path).unwrap().uzak.enabled);
-        let k = "aBcDeFgHiJkLmNoPqRsTuVwXyZ0123456789+/abcdE=";
+        // eksik bilgiyle açık kalamaz
+        assert!(loc(&post(&[("uzak.enabled", "1"), ("uzak.sunucu", ""), ("sms.mock", "1")])).contains("e=1"));
+        assert_eq!(Config::load(&e.p.cfg_path).unwrap().uzak.sunucu, "vpn.wificorrect.com:51820");
+        let k = UZAK_KEY;
         let r = post(&[("uzak.enabled", "1"), ("uzak.sunucu", "vpn.wificorrect.com:51820"), ("uzak.sunucu_anahtar", k), ("uzak.adres", "10.99.0.17"), ("sms.mock", "1")]);
         assert!(!loc(&r).contains("e=1"), "{}", loc(&r));
         let c = Config::load(&e.p.cfg_path).unwrap();

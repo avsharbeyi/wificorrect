@@ -14,6 +14,8 @@ delete table inet wfc
 table inet wfc {
 	chain input {
 		type filter hook input priority filter; policy drop;
+		# VPN ağı (10.99.0.0/24) yalnızca tünelden gelir: dükkân ağından merkez adresi (10.99.0.1) taklit edilemesin
+		iifname != "wfc" ip saddr 10.99.0.0/24 drop
 		ct state established,related accept
 		ct state invalid drop
 		iif lo accept
