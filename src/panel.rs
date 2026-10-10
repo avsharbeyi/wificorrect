@@ -209,6 +209,64 @@ fn b(v: bool) -> String {
     if v { "1" } else { "0" }.into()
 }
 
+/// bit/sn → Mb/sn, 1 ondalık, Türkçe ("38,4")
+fn mbps(bps: u64) -> String {
+    format!("{:.1}", bps as f64 / 1e6).replace('.', ",")
+}
+
+/// bayt → MB (10⁶), tam sayı, binlik nokta ("4.820")
+fn mb(bayt: u64) -> String {
+    let s = ((bayt + 500_000) / 1_000_000).to_string();
+    let mut out = String::new();
+    for (i, c) in s.chars().enumerate() {
+        if i > 0 && (s.len() - i) % 3 == 0 {
+            out.push('.');
+        }
+        out.push(c);
+    }
+    out
+}
+
+/// Ölçüm bundan eskiyse kaydedici durmuş sayılır (5 sn'de bir yazar).
+const OLCUM_ESKI_SN: f64 = 30.0;
+/// Yenileme açıldıktan sonra kendiliğinden gelen (oto=1) bakışlar bu süre denetime yazılmaz.
+const YENILE_PENCERE_SN: f64 = 900.0;
+
+/// Bağlı kullanıcılar sıralaması: anlık hız (varsayılan), bugün MB, bağlanma saati.
+fn sira(req: &Req) -> &'static str {
+    match req.query.get("sira").map(String::as_str) {
+        Some("mb") => "mb",
+        Some("saat") => "saat",
+        _ => "hiz",
+    }
+}
+
+fn sorgu_bir(req: &Req, k: &str) -> bool {
+    req.query.get(k).is_some_and(|v| v == "1")
+}
+
+/// Bağlı kullanıcılar adresi; grup sayfasında bölüme atlar.
+fn oturumlar_url(req: &Req, sira: &str, yenile: bool, oto: bool) -> String {
+    let (yol, cipa) = if req.path == "/cihazlar" { ("/cihazlar", "#oturumlar") } else { ("/oturumlar", "") };
+    format!("{yol}?sira={sira}{}{}{cipa}", if yenile { "&yenile=1" } else { "" }, if oto { "&oto=1" } else { "" })
+}
+
+/// Yenileme açıkken yalnızca bağlı kullanıcılar sayfası 10 sn'de bir kendini yeniler (betik yok; CSP).
+fn yenile_meta(req: &Req) -> String {
+    if !matches!(req.path.as_str(), "/cihazlar" | "/oturumlar") || !sorgu_bir(req, "yenile") {
+        return String::new();
+    }
+    format!("<meta http-equiv=\"refresh\" content=\"10;url={}\">", h(&oturumlar_url(req, sira(req), true, true)))
+}
+
+/// ↓, ↑, bugün MB hücreleri; ölçüm yoksa tire.
+fn olcum_hucreleri(c: Option<&crate::trafik::Cihaz>) -> [String; 3] {
+    match c {
+        Some(c) => [mbps(c.indir_bps), mbps(c.yukle_bps), mb(c.bugun_bayt)],
+        None => ["—".into(), "—".into(), "—".into()],
+    }
+}
+
 fn get_field(c: &Config, key: &str) -> String {
     match key {
         "main.site_name" => c.main.site_name.clone(),
@@ -380,6 +438,8 @@ pub struct Panel {
     yedek_key: std::path::PathBuf,
     /// Yönetim merkezi bağı (testte geçici)
     pub merkez_path: std::path::PathBuf,
+    /// Kaydedicinin 5 sn'de bir yazdığı hız / bugünkü kullanım ölçümü (testte geçici)
+    trafik_path: std::path::PathBuf,
     /// Yönetim merkezi HTTP istemcisi (testte sahte)
     pub http: Box<crate::merkez::Http>,
     /// İlk bağlanma tek seferde (iki eşzamanlı giriş iki ayrı cihaz anahtarı almasın)
@@ -534,6 +594,7 @@ impl Panel {
             uzak_key: crate::uzak::KEY.into(),
             yedek_key: crate::uzak::YEDEK_KEY.into(),
             merkez_path: crate::merkez::PATH.into(),
+            trafik_path: crate::trafik::DURUM_YOLU.into(),
             http: Box::new(crate::merkez::curl),
             baglan_kilit: std::sync::Mutex::new(()),
         }
@@ -581,6 +642,7 @@ impl Panel {
         });
         let mut v: HashMap<&str, String> = HashMap::new();
         v.insert("baslik", h(title));
+        v.insert("bas_ek", if o.is_some() { yenile_meta(req) } else { String::new() });
         // cihaz bir müşteriye bağlanmadan işletme adı yok (eski/örnek ayardaki ad görünmesin)
         v.insert("site", h(if crate::merkez::oku(&self.merkez_path).is_none() { "WifiCorrect" } else { &cfg.main.site_name }));
         v.insert("govde", if o.is_some() { String::new() } else { "yalin".into() });
@@ -1087,32 +1149,100 @@ impl Panel {
         self.page(cfg, req, Some(o), "Özet", &body)
     }
 
+    /// Meta yenilemesinden (oto=1) gelen istek ve bu oturumda yenileme 15 dk içinde açılmış/yenilenmiş: bakış kaydedilmez.
+    /// Elle yazılmış / yer imi oto=1 (yenilemeyi açmamış oturum) normal bakış sayılır.
+    fn oto_yenileme(&self, req: &Req, o: &Oturum, now: f64) -> bool {
+        sorgu_bir(req, "oto") && (0.0..YENILE_PENCERE_SN).contains(&(now - o.yenile_acildi))
+    }
+
     fn oturumlar_sayfa(&self, cfg: &Config, req: &Req, o: &Oturum, now: f64) -> Resp {
-        self.audit(cfg, req, Some(o), "PANEL_OTURUMLAR", "");
-        let mut list: Vec<_> = ortak::load_sessions(&cfg.main.state_root).into_iter().collect();
-        list.sort_by(|a, b| a.1.start_epoch.total_cmp(&b.1.start_epoch));
+        let (yenile, oto, sira) = (sorgu_bir(req, "yenile"), sorgu_bir(req, "oto"), sira(req));
+        if !self.oto_yenileme(req, o, now) {
+            // düğmeyle açılış bir kez "Otomatik yenilemeyi açtı"; pencere dışındaki oto=1 normal bakış ve pencereyi yeniler
+            self.audit(cfg, req, Some(o), if yenile && !oto { "PANEL_OTURUMLAR_YENILE" } else { "PANEL_OTURUMLAR" }, "");
+            if let (true, Some(t)) = (yenile, &req.token) {
+                self.oturumlar.set_yenile(t, now);
+            }
+        }
+        let ses = ortak::load_sessions(&cfg.main.state_root);
         let bagli = std::fs::read(self.sys.join(&cfg.main.iface).join("brforward")).map(|b| ortak::kopruye_bagli(&b)).unwrap_or_default();
-        let rows: Vec<Vec<String>> = list
-            .iter()
-            .map(|(mac, s)| {
-                let (tel, ad) = (format!("+{}", s.phone), format!("{} {}", s.ad, s.soyad));
-                let left = ((s.expires_epoch - now).max(0.0) as u64) / 60;
-                vec![
-                    if bagli.contains(mac) { "<span class=\"rozet bagli\">Bağlı</span>".into() } else { "<span class=\"rozet\">Bağlı değil</span>".into() },
-                    h(&tel),
-                    h(&ad),
-                    format!("<code>{}</code>", h(mac)),
-                    if s.ip.is_empty() { "<span class=\"not\">beklemede</span>".into() } else { h(&s.ip) },
-                    h(&s.start.get(..16).unwrap_or("").replace('T', " ")),
-                    format!("{}g {}sa", left / 1440, left / 60 % 24),
-                    post_button(o, "/oturumlar/at", "Bağlantıyı kes", &[("mac", mac)], "tehlike"),
-                ]
-            })
-            .collect();
+        let rozet = |mac: &str| -> String {
+            if bagli.contains(mac) { "<span class=\"rozet bagli\">Bağlı</span>".into() } else { "<span class=\"rozet\">Bağlı değil</span>".into() }
+        };
+        let durum = crate::trafik::oku(&self.trafik_path).filter(|d| now - d.zaman <= OLCUM_ESKI_SN);
+        let olcum = |mac: &str| durum.as_ref().and_then(|d| d.cihazlar.get(mac));
+        // (anlık hız, bugün bayt, başlangıç, hücreler)
+        let mut satirlar: Vec<(u64, u64, f64, Vec<String>)> = vec![];
+        for (mac, s) in &ses {
+            let c = olcum(mac);
+            let [indir, yukle, bugun] = olcum_hucreleri(c);
+            let left = ((s.expires_epoch - now).max(0.0) as u64) / 60;
+            let hucreler = vec![
+                rozet(mac),
+                h(&format!("+{}", s.phone)),
+                h(&format!("{} {}", s.ad, s.soyad)),
+                format!("<code>{}</code>", h(mac)),
+                if s.ip.is_empty() { "<span class=\"not\">beklemede</span>".into() } else { h(&s.ip) },
+                indir,
+                yukle,
+                bugun,
+                h(&s.start.get(..16).unwrap_or("").replace('T', " ")),
+                format!("{}g {}sa", left / 1440, left / 60 % 24),
+                String::new(), // Yavaşlat
+                post_button(o, "/oturumlar/at", "Bağlantıyı kes", &[("mac", mac)], "tehlike"),
+            ];
+            satirlar.push((c.map_or(0, |c| c.indir_bps + c.yukle_bps), c.map_or(0, |c| c.bugun_bayt), s.start_epoch, hucreler));
+        }
+        // izinli cihazlar portal açmaz (oturum yok): ağda kirası ya da ölçümü varsa tabloda; IP kiradan
+        let izinli = Config::devices(&cfg.allow);
+        let kiralar = ortak::parse_leases(&std::fs::read_to_string(&cfg.main.leases_file).unwrap_or_default());
+        let ip_of: std::collections::BTreeMap<String, String> =
+            crate::trafik::ip_mac(std::iter::empty(), &izinli, &kiralar).into_iter().map(|(ip, mac)| (mac, ip)).collect();
+        for (mac, not) in izinli.iter().filter(|(mac, _)| !ses.contains_key(*mac)) {
+            let c = olcum(mac);
+            let Some(ip) = ip_of.get(mac).or(c.map(|c| &c.ip)).filter(|ip| !ip.is_empty()) else { continue };
+            let ad = if not.trim().is_empty() { "İzinli cihaz".to_string() } else { format!("İzinli cihaz · {}", not.trim()) };
+            let [indir, yukle, bugun] = olcum_hucreleri(c);
+            let hucreler = vec![rozet(mac), String::new(), h(&ad), format!("<code>{}</code>", h(mac)), h(ip), indir, yukle, bugun,
+                                String::new(), String::new(), String::new(), String::new()];
+            satirlar.push((c.map_or(0, |c| c.indir_bps + c.yukle_bps), c.map_or(0, |c| c.bugun_bayt), f64::INFINITY, hucreler));
+        }
+        satirlar.sort_by(|a, b| a.2.total_cmp(&b.2)); // bağlanma saati; eşitlikte de bu sıra kalır
+        match sira {
+            "mb" => satirlar.sort_by_key(|s| std::cmp::Reverse(s.1)),
+            "hiz" => satirlar.sort_by_key(|s| std::cmp::Reverse(s.0)),
+            _ => {}
+        }
+        let rows: Vec<Vec<String>> = satirlar.into_iter().map(|s| s.3).collect();
+        let secenek = |k: &str, ad: &str| {
+            format!("<a class=\"{}\" href=\"{}\">{ad}</a>", if k == sira { "dugme" } else { "dugme ikincil" }, h(&oturumlar_url(req, k, yenile, false)))
+        };
+        let arac = format!(
+            "<div class=\"eylemler arac\"><span class=\"not\">Sırala:</span>{}{}{}<span class=\"ayrac\"></span>\
+             <a class=\"{}\" href=\"{}\">⟳ 10 sn'de bir yenile: {}</a></div>",
+            secenek("hiz", "Anlık hız"),
+            secenek("mb", "Bugün MB"),
+            secenek("saat", "Bağlanma saati"),
+            if yenile { "dugme" } else { "dugme ikincil" },
+            h(&oturumlar_url(req, sira, !yenile, false)),
+            if yenile { "açık" } else { "kapalı" },
+        );
+        let olcum_notu = match &durum {
+            Some(d) => format!("Ölçüm {} sn önce", (now - d.zaman).max(0.0).round() as u64),
+            None => "Ölçüm alınamıyor: hız ve bugünkü kullanım şu an gösterilemiyor.".into(),
+        };
         let body = format!(
             "<p class=\"not\">Bağlantısı kesilen cihaz internete çıkamaz; yeniden SMS ile giriş yapması gerekir. \
-             <b>Bağlı</b>: cihaz son 5 dakikada ağda görüldü.</p><p class=\"not\">Bu sayfadaki her görüntüleme, arama ve indirme kimin yaptığıyla birlikte kaydedilir ve hizmet sağlayıcı tarafından denetlenir.</p>{}",
-            table(&["Durum", "Telefon", "Ad soyad", "MAC", "IP", "Başlangıç", "Kalan", ""], &rows, "Bağlı kullanıcı yok")
+             <b>Bağlı</b>: cihaz son 5 dakikada ağda görüldü. Hız: son 10 saniyenin ortalaması (megabit/saniye). \
+             Bugün: gece 00:00'dan beri indirilen + yüklenen (MB).</p>\
+             <p class=\"not\">Bu sayfadaki her görüntüleme, arama ve indirme kimin yaptığıyla birlikte kaydedilir ve hizmet sağlayıcı tarafından denetlenir.</p>{arac}{}\
+             <p class=\"not\">{}</p>",
+            table(
+                &["Durum", "Telefon", "Ad soyad", "MAC", "IP", "↓ İndirme Mb/sn", "↑ Yükleme Mb/sn", "Bugün MB", "Başlangıç", "Kalan", "Yavaşlat", ""],
+                &rows,
+                "Bağlı kullanıcı yok"
+            ),
+            h(&olcum_notu)
         );
         self.page(cfg, req, Some(o), "Bağlı kullanıcılar", &body)
     }
@@ -1675,7 +1805,7 @@ mod tests {
         let root = std::env::temp_dir().join(format!("wfc-panel-{}-{}", std::process::id(), N.fetch_add(1, Ordering::SeqCst)));
         let _ = std::fs::remove_dir_all(&root);
         std::fs::create_dir_all(&root).unwrap();
-        let cfg = format!("[main]\nsite_name = 'Bocafe'\nlog_root = '{0}/5651'\nstate_root = '{0}/state'\n[uzak]\nenabled = true\nsunucu = 'vpn.wificorrect.com:51820'\nsunucu_anahtar = '{UZAK_KEY}'\nadres = '10.99.0.11'\n", root.display());
+        let cfg = format!("[main]\nsite_name = 'Bocafe'\nlog_root = '{0}/5651'\nstate_root = '{0}/state'\nleases_file = '{0}/leases'\n[uzak]\nenabled = true\nsunucu = 'vpn.wificorrect.com:51820'\nsunucu_anahtar = '{UZAK_KEY}'\nadres = '10.99.0.11'\n", root.display());
         std::fs::write(root.join("ayarlar.toml"), cfg).unwrap();
         let calls = Arc::new(Mutex::new(vec![]));
         let c2 = calls.clone();
@@ -1693,6 +1823,7 @@ mod tests {
         p.yedek_key = root.join("yedek_anahtar");
         p.filtre_conf = root.join("yasak.conf");
         p.merkez_path = root.join("merkez.json");
+        p.trafik_path = root.join("trafik.json");
         p.http = merkez_yok();
         p.sys = root.join("sys"); // testler gerçek arayüzlere bakmasın; "wfc" = tünel arayüzü var
         std::fs::create_dir_all(p.sys.join("wfc")).unwrap();
@@ -1980,6 +2111,156 @@ mod tests {
         assert!(satir("Ayşe").contains("<span class=\"rozet bagli\">Bağlı</span>"));
         assert!(!satir("Mehmet").contains("rozet bagli") && satir("Mehmet").contains("Bağlı değil"));
         assert_eq!(ortak::kopruye_bagli(&[1, 2, 3]), BTreeSet::new()); // yarım kayıt yok sayılır
+    }
+
+    const SAAT: f64 = 1_790_705_134.0;
+
+    /// Sahte oturumlar (mac, ad, başlangıç) ve trafik.json (mac → indir, yükle, bugün; zaman = test saati - yaş; yaş yoksa dosya yok).
+    fn trafikli(e: &Env, kisiler: &[(&str, &str, f64)], olcum: &[(&str, u64, u64, u64)], yas: Option<f64>) {
+        let cfg = Config::load(&e.p.cfg_path).unwrap();
+        let mut ses = ortak::Sessions::new();
+        for (mac, ad, bas) in kisiler {
+            ses.insert(mac.to_string(), ortak::Session {
+                phone: "905334553132".into(), ad: ad.to_string(), soyad: "Y".into(), ip: "10.50.0.23".into(),
+                session_id: "s".into(), start: "2026-09-29T20:00:00+03:00".into(), start_epoch: *bas, expires_epoch: 9e9,
+            });
+        }
+        ortak::save_sessions(&cfg.main.state_root, &ses).unwrap();
+        let _ = std::fs::remove_file(&e.p.trafik_path);
+        if let Some(yas) = yas {
+            let cihazlar = olcum
+                .iter()
+                .map(|(mac, i, y, b)| (mac.to_string(), crate::trafik::Cihaz { ip: "10.50.0.23".into(), indir_bps: *i, yukle_bps: *y, bugun_bayt: *b }))
+                .collect();
+            crate::trafik::yaz(&e.p.trafik_path, &crate::trafik::Durum { zaman: SAAT - yas, cihazlar, hiz_hata: None }).unwrap();
+        }
+    }
+
+    fn satir_of(s: &str, ad: &str) -> String {
+        s.split("<tr>").find(|r| r.contains(ad)).unwrap_or_else(|| panic!("{ad} satırı yok")).to_string()
+    }
+
+    #[test]
+    fn hiz_ve_mb_sutunlari() {
+        let e = env();
+        let (tok, _) = setup_and_login(&e, "mudur", "sahip-parola-12");
+        trafikli(&e, &[("aa:bb:cc:dd:ee:01", "Ayşe", 1.0)], &[("aa:bb:cc:dd:ee:01", 38_400_000, 2_100_000, 4_820_000_000)], Some(2.0));
+        let s = e.p.handle(&req("GET", "/cihazlar", &[], Some(&tok))).body;
+        let r = satir_of(&s, "Ayşe");
+        assert!(r.contains("<td>38,4</td>") && r.contains("<td>2,1</td>") && r.contains("<td>4.820</td>"), "{r}");
+        let basliklar = ["Durum", "Telefon", "Ad soyad", "MAC", "IP", "↓ İndirme Mb/sn", "↑ Yükleme Mb/sn", "Bugün MB", "Başlangıç", "Kalan", "Yavaşlat", ""];
+        let thead: String = basliklar.iter().map(|b| format!("<th>{}</th>", h(b))).collect();
+        assert!(s.contains(&thead), "başlıklar");
+        assert_eq!((mbps(0), mbps(38_449_999), mbps(1_250_000_000)), ("0,0".into(), "38,4".into(), "1250,0".into()));
+        assert_eq!((mb(0), mb(999_999_999), mb(12_345_678_000_000)), ("0".into(), "1.000".into(), "12.345.678".into()));
+    }
+
+    #[test]
+    fn varsayilan_siralama_anlik_hiz() {
+        let e = env();
+        let (tok, _) = setup_and_login(&e, "mudur", "sahip-parola-12");
+        // Ayşe: erken bağlandı, yavaş ama bugün çok indirdi; Mehmet: sonra bağlandı, şu an hızlı
+        trafikli(
+            &e,
+            &[("aa:bb:cc:dd:ee:01", "Ayşe", 1.0), ("aa:bb:cc:dd:ee:02", "Mehmet", 2.0)],
+            &[("aa:bb:cc:dd:ee:01", 1_000_000, 0, 9_000_000_000), ("aa:bb:cc:dd:ee:02", 20_000_000, 1_000_000, 1_000_000)],
+            Some(3.0),
+        );
+        let once = |q: &[(&str, &str)], ilk: &str, son: &str| {
+            let s = e.p.handle(&get("/cihazlar", q, &tok)).body;
+            assert!(s.find(ilk).unwrap() < s.find(son).unwrap(), "{q:?}: {ilk} önce olmalı");
+            s
+        };
+        let s = once(&[], "Mehmet", "Ayşe");
+        // seçili sıralama dolu düğme, diğerleri ikincil; yenileme kapalı
+        assert!(s.contains("<a class=\"dugme\" href=\"/cihazlar?sira=hiz#oturumlar\">Anlık hız</a>"), "seçili sıralama");
+        assert!(s.contains("<a class=\"dugme ikincil\" href=\"/cihazlar?sira=mb#oturumlar\">Bugün MB</a>"));
+        assert!(s.contains("href=\"/cihazlar?sira=hiz&amp;yenile=1#oturumlar\">⟳ 10 sn'de bir yenile: kapalı</a>"), "yenile bağlantısı");
+        once(&[("sira", "hiz")], "Mehmet", "Ayşe");
+        once(&[("sira", "mb")], "Ayşe", "Mehmet");
+        let s = once(&[("sira", "saat")], "Ayşe", "Mehmet");
+        assert!(s.contains("<a class=\"dugme\" href=\"/cihazlar?sira=saat#oturumlar\">Bağlanma saati</a>"));
+        once(&[("sira", "<script>")], "Mehmet", "Ayşe"); // bilinmeyen değer: varsayılan
+    }
+
+    #[test]
+    fn izinli_cihaz_satiri() {
+        let e = env();
+        let (tok, _) = setup_and_login(&e, "mudur", "sahip-parola-12");
+        let mut c = Config::load(&e.p.cfg_path).unwrap();
+        c.allow = vec![Device { mac: "aa:bb:cc:dd:ee:99".into(), name: "Kasa".into() }, Device { mac: "aa:bb:cc:dd:ee:98".into(), name: String::new() }];
+        c.save(&e.p.cfg_path).unwrap();
+        std::fs::write(&c.main.leases_file, "1 aa:bb:cc:dd:ee:99 10.50.0.7 kasa 01\n1 aa:bb:cc:dd:ee:98 10.50.0.8 * 01\n").unwrap();
+        trafikli(&e, &[("aa:bb:cc:dd:ee:01", "Ayşe", 1.0)], &[("aa:bb:cc:dd:ee:99", 5_500_000, 300_000, 2_000_000)], Some(1.0));
+        let s = e.p.handle(&req("GET", "/cihazlar", &[], Some(&tok))).body;
+        let r = satir_of(&s, "İzinli cihaz · Kasa");
+        assert!(r.contains("<code>aa:bb:cc:dd:ee:99</code>") && r.contains("10.50.0.7") && r.contains("<td>5,5</td>") && r.contains("<td>0,3</td>"), "{r}");
+        assert!(r.starts_with("<td><span class=\"rozet") && r.contains("</span></td><td></td><td>İzinli cihaz · Kasa</td>"), "telefon boş: {r}");
+        assert!(!r.contains("Bağlantıyı kes"));
+        let r = satir_of(&s, "aa:bb:cc:dd:ee:98");
+        assert!(r.contains("<td>İzinli cihaz</td>") && r.contains("10.50.0.8") && r.contains("<td>—</td>"), "notsuz, ölçümsüz: {r}");
+        assert!(satir_of(&s, "Ayşe").contains("Bağlantıyı kes"));
+    }
+
+    #[test]
+    fn olcum_yoksa_tire_ve_not() {
+        let e = env();
+        let (tok, _) = setup_and_login(&e, "mudur", "sahip-parola-12");
+        let ayse = [("aa:bb:cc:dd:ee:01", "Ayşe", 1.0)];
+        let olcum = [("aa:bb:cc:dd:ee:01", 38_400_000, 2_100_000, 4_820_000_000)];
+        for yas in [None, Some(31.0)] {
+            trafikli(&e, &ayse, &olcum, yas);
+            let s = e.p.handle(&req("GET", "/cihazlar", &[], Some(&tok))).body;
+            let r = satir_of(&s, "Ayşe");
+            assert_eq!(r.matches("<td>—</td>").count(), 3, "{yas:?}: {r}");
+            assert!(!r.contains("38,4") && s.contains("Ölçüm alınamıyor") && !s.contains("sn önce"), "{yas:?}");
+        }
+        trafikli(&e, &ayse, &olcum, Some(5.0));
+        let s = e.p.handle(&req("GET", "/cihazlar", &[], Some(&tok))).body;
+        assert!(satir_of(&s, "Ayşe").contains("<td>38,4</td>") && s.contains("Ölçüm 5 sn önce") && !s.contains("Ölçüm alınamıyor"));
+    }
+
+    #[test]
+    fn yenileme_meta_ve_denetim() {
+        let mut e = env();
+        let saat = Arc::new(std::sync::atomic::AtomicU64::new(SAAT.to_bits()));
+        let s2 = saat.clone();
+        e.p.clock = Box::new(move || f64::from_bits(s2.load(Ordering::SeqCst)));
+        let ilerle = |sn: f64| saat.store((f64::from_bits(saat.load(Ordering::SeqCst)) + sn).to_bits(), Ordering::SeqCst);
+        let (tok, _) = setup_and_login(&e, "mudur", "sahip-parola-12");
+        let say = |olay: &str| {
+            let csv = std::fs::read_to_string(e.root.join("5651/gunluk/2026-09-29/denetim.csv")).unwrap_or_default();
+            csv.lines().filter(|l| l.split(';').nth(1) == Some(olay)).count()
+        };
+        const META: &str = "<meta http-equiv=\"refresh\" content=\"10;url=/cihazlar?sira=hiz&amp;yenile=1&amp;oto=1#oturumlar\">";
+        let s = e.p.handle(&get("/cihazlar", &[], &tok)).body;
+        assert!(!s.contains("http-equiv=\"refresh\"") && say("PANEL_OTURUMLAR") == 1 && say("PANEL_OTURUMLAR_YENILE") == 0);
+        let s = e.p.handle(&get("/cihazlar", &[("yenile", "1")], &tok)).body;
+        assert!(s.contains(META), "meta");
+        assert!(s.contains("href=\"/cihazlar?sira=hiz#oturumlar\">⟳ 10 sn'de bir yenile: açık</a>"), "açıkken yenilesiz bağlantı");
+        assert!(s.contains("href=\"/cihazlar?sira=mb&amp;yenile=1#oturumlar\""), "sıralama yenilemeyi korur");
+        assert_eq!((say("PANEL_OTURUMLAR_YENILE"), say("PANEL_OTURUMLAR")), (1, 1));
+        for _ in 0..3 {
+            ilerle(10.0);
+            assert!(e.p.handle(&get("/cihazlar", &[("sira", "hiz"), ("yenile", "1"), ("oto", "1")], &tok)).body.contains(META));
+        }
+        assert_eq!((say("PANEL_OTURUMLAR_YENILE"), say("PANEL_OTURUMLAR")), (1, 1), "pencere içinde kayıt yok");
+        // /oturumlar sayfası da kendine yeniler; başka sayfa yenilemez
+        let s = e.p.handle(&get("/oturumlar", &[("sira", "mb"), ("yenile", "1"), ("oto", "1")], &tok)).body;
+        assert!(s.contains("<meta http-equiv=\"refresh\" content=\"10;url=/oturumlar?sira=mb&amp;yenile=1&amp;oto=1\">"), "oturumlar meta");
+        assert!(!e.p.handle(&get("/kayitlar", &[("yenile", "1")], &tok)).body.contains("http-equiv=\"refresh\""));
+        assert_eq!(say("PANEL_OTURUMLAR"), 1);
+        ilerle(901.0);
+        e.p.handle(&get("/cihazlar", &[("sira", "hiz"), ("yenile", "1"), ("oto", "1")], &tok));
+        assert_eq!(say("PANEL_OTURUMLAR"), 2, "pencere doldu: normal bakış");
+        ilerle(10.0);
+        e.p.handle(&get("/cihazlar", &[("sira", "hiz"), ("yenile", "1"), ("oto", "1")], &tok));
+        assert_eq!(say("PANEL_OTURUMLAR"), 2, "pencere yenilendi");
+        // yenilemeyi hiç açmamış oturum (yer imi / elle yazılmış oto=1) kuralı delemez
+        let (tok2, _) = setup_and_login(&e, "mudur", "sahip-parola-12");
+        e.p.handle(&get("/cihazlar", &[("sira", "hiz"), ("yenile", "1"), ("oto", "1")], &tok2));
+        assert_eq!((say("PANEL_OTURUMLAR"), say("PANEL_OTURUMLAR_YENILE")), (3, 1));
+        assert_eq!(hareketler::olay_adi("PANEL_OTURUMLAR_YENILE"), "Otomatik yenilemeyi açtı");
     }
 
     #[test]

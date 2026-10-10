@@ -69,7 +69,6 @@ pub fn gun_yaz(state_root: &str, g: &GunToplam) -> std::io::Result<()> {
     ortak::write_atomic(&gun_yolu(state_root), &data)
 }
 
-#[allow(dead_code)] // panel (sonraki adım)
 pub fn oku(path: &Path) -> Option<Durum> {
     serde_json::from_str(&std::fs::read_to_string(path).ok()?).ok()
 }
