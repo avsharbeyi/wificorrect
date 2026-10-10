@@ -445,13 +445,44 @@ fn menu_simgesi(yol: &str) -> &'static str {
     }
 }
 
+const SIMGE_TAMAM: &str = "M12 3a9 9 0 1 0 0 18 9 9 0 0 0 0-18zM8 12l3 3 5-6";
+const SIMGE_DUNYA: &str = "M12 3a9 9 0 1 0 0 18 9 9 0 0 0 0-18zM3 12h18M12 3c3 3.5 3 14.5 0 18M12 3c-3 3.5-3 14.5 0 18";
+const SIMGE_KISILER: &str = "M9 11a4 4 0 1 0 0-8 4 4 0 0 0 0 8zM2 21v-1a6 6 0 0 1 12 0v1M16 3.5a4 4 0 0 1 0 7.5M22 21v-1a6 6 0 0 0-4-5.6";
+const SIMGE_MUHUR: &str = "M9 3h6v5l3 4H6l3-4zM4 16h16v3H4zM7 22h10";
+const SIMGE_DUKKAN: &str = "M3 9l1.5-5h15L21 9M3 9h18v1a3 3 0 0 1-6 0 3 3 0 0 1-6 0 3 3 0 0 1-6 0zM5 13v8h14v-8M10 21v-5h4v5";
+const SIMGE_METIN: &str = "M4 4h16v12H8l-4 4z";
+const SIMGE_FIS: &str = "M9 2v6M15 2v6M6 8h12v4a6 6 0 0 1-12 0zM12 18v4";
+const SIMGE_SUNUCU: &str = "M3 4h18v7H3zM3 13h18v7H3zM7 7.5h.01M7 16.5h.01";
+const SIMGE_ANAHTAR: &str = "M8 11a4 4 0 1 0 0 8 4 4 0 0 0 0-8zM11 13l9-9M16 8l3 3M18 6l2 2";
+const SIMGE_GOZ: &str = "M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7S2 12 2 12zM12 9a3 3 0 1 0 0 6 3 3 0 0 0 0-6z";
+
+/// Grup sayfasının üstündeki bölüm kutucuklarının simgesi (bölüm id'sine göre)
+fn bolum_simgesi(id: &str) -> &'static str {
+    match id {
+        "oturumlar" => SIMGE_WIFI,
+        "yasak" => SIMGE_YASAK,
+        "izinli" => SIMGE_TAMAM,
+        "yasakli-siteler" => SIMGE_DUNYA,
+        "gunler" => SIMGE_KAYIT,
+        "site-ara" => SIMGE_ARA,
+        "kullanicilar" => SIMGE_KISILER,
+        "talep" => SIMGE_MUHUR,
+        "isletme" => SIMGE_DUKKAN,
+        "portal-metinleri" => SIMGE_METIN,
+        "portlar" => SIMGE_FIS,
+        "sistem" => SIMGE_SUNUCU,
+        "sifre-degistir" => SIMGE_ANAHTAR,
+        "admin-ayarlari" => SIMGE_AYAR,
+        "panel-hareketleri" => SIMGE_GOZ,
+        _ => SIMGE_KAYIT,
+    }
+}
+
 /// Özet'in üstündeki kısayol kutuları: (bağlantı, simge, ad)
 const KISAYOLLAR: &[(&str, &str, &str)] = &[
     ("/cihazlar#oturumlar", SIMGE_WIFI, "Bağlı kullanıcılar"),
-    ("/kayitlar#gunler", SIMGE_KAYIT, "Kayıtlar"),
     ("/kayitlar#site-ara", SIMGE_ARA, "Site / IP ara"),
     ("/cihazlar#yasakli-siteler", SIMGE_YASAK, "Yasaklı siteler"),
-    ("/ayarlar#isletme", SIMGE_AYAR, "Ayarlar"),
 ];
 
 /// Özet listelerinde en çok bu kadar satır; fazlası "Tümü" bağlantısıyla
@@ -608,8 +639,8 @@ impl Panel {
             })
             .collect();
         drop(parca);
-        let atla: String = bolumler.iter().map(|(_, _, id, baslik, _)| format!("<a href=\"#{id}\">{}</a>", h(baslik))).collect();
-        let mut body = format!("<nav class=\"bolum-atla\" aria-label=\"Bu sayfadaki bölümler\">{atla}</nav>");
+        let atla: String = bolumler.iter().map(|(_, _, id, baslik, _)| format!("<a href=\"#{id}\">{}{}</a>", simge(bolum_simgesi(id)), h(baslik))).collect();
+        let mut body = format!("<nav class=\"kisayol\" aria-label=\"Bu sayfadaki bölümler\">{atla}</nav>");
         for ((_, _, id, baslik, _), govde) in bolumler.iter().zip(&govdeler) {
             body.push_str(&format!(
                 "<section class=\"bolum\" id=\"{id}\" aria-labelledby=\"b-{id}\"><h2 class=\"bolum-baslik\" id=\"b-{id}\">{}</h2>{govde}</section>",
@@ -1974,9 +2005,10 @@ mod tests {
         assert!(yeni.contains("<b>Zeynep Ak</b><span>19:40</span>") && !yeni.contains("Eski"), "{yeni}");
         assert!(s.contains("<dt>Bağlı kullanıcı</dt><dd>1</dd>") && s.contains("<dt>Bugün yeni üye</dt><dd>1</dd>"));
         assert!(!s.contains("905334553132") && !s.contains("aa:bb:cc"), "özette telefon ve MAC yok");
-        for k in ["/cihazlar#oturumlar", "/kayitlar#site-ara", "/ayarlar#isletme"] {
+        for k in ["/cihazlar#oturumlar", "/kayitlar#site-ara", "/cihazlar#yasakli-siteler"] {
             assert!(s.contains(&format!("<a href=\"{k}\">")), "{k}");
         }
+        assert!(!s.contains("href=\"/kayitlar#gunler\"") && !s.contains("href=\"/ayarlar#isletme\""), "menüde olanlar kısayolda yok");
         assert!(kutu("SMS ve Disk").contains("Bugün SMS") && s.contains("for=\"menu-ac\""));
         let audit = std::fs::read_to_string(e.root.join("5651/gunluk/2026-09-29/denetim.csv")).unwrap();
         assert!(audit.contains("PANEL_OZET"));
