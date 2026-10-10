@@ -1251,8 +1251,14 @@ impl Panel {
             }
         }
         let mut body = format!("<form method=\"post\" action=\"{}\">{}", if admin { "/admin-ayarlari" } else { "/ayarlar" }, csrf_input(o));
+        // tek grup (Ayarlar → İşletme): grup adı bölüm başlığıyla aynı, tekrar yazılmaz
+        let tek = groups.len() == 1;
         for (g, inner) in &groups {
-            body.push_str(&format!("<section class=\"kart grup\"><h2>{}</h2><div>{inner}</div></section>", h(g)));
+            if tek {
+                body.push_str(&format!("<section class=\"kart\"><div>{inner}</div></section>"));
+            } else {
+                body.push_str(&format!("<section class=\"kart grup\"><h2>{}</h2><div>{inner}</div></section>", h(g)));
+            }
         }
         if admin {
             let (yedek, fabrika) = self.son_durum(cfg);
@@ -1291,7 +1297,8 @@ impl Panel {
             }
             body.push_str(&format!("<section class=\"kart grup\"><h2>Durum</h2><div>{}</div></section>", facts(&durum)));
         }
-        body.push_str("<div class=\"kaydet\"><button>Kaydet</button><p class=\"not\">Kaydedince giriş sayfası yeni ayarlarla yeniden başlatılır; bağlı müşteriler düşmez.</p></div></form>");
+        body.push_str(if tek { "<div class=\"kaydet tek\"><button>" } else { "<div class=\"kaydet\"><button>" });
+        body.push_str("Kaydet</button><p class=\"not\">Kaydedince giriş sayfası yeni ayarlarla yeniden başlatılır; bağlı müşteriler düşmez.</p></div></form>");
         if admin {
             body.push_str(&format!(
                 "<section class=\"kart\" style=\"margin-top:48px\"><h2>Uzak yedek</h2><p class=\"not\">Mühürlenmiş, henüz \
