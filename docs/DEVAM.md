@@ -14,8 +14,25 @@ Bu dosya, projeye yeni bir oturumda/hesapta devam eden ajan içindir. Önce bunu
 - Cihaz testleri **cihazda** koşar: `bash scripts/test.sh wificorrect [süzgeç]` (~5 dk; aynı anda iki tane çalıştırma).
   Cihaza kurulum: `bash scripts/gelistir.sh` + `ssh wificorrect 'systemctl restart wificorrect-panel wificorrect-portal wificorrect-kaydedici'`.
   Merkez testleri: `sh scripts/sunucu/merkez/tests/hepsi.sh python`.
-- Merkez kurulumu: `C:\Users\HUAWEI\Desktop\wificorrect\rza\.superpowers\sunucu-guncelle.sh` (`git archive uzak-panel` ile;
-  önce veritabanı yedeği, sonra `kur.sh` — Caddyfile doğrulanmadan kurulmaz). Kullanıcı çalıştırır (sudo).
+- Merkez kurulumu: `scripts/sunucu/merkez-guncelle.sh` (şu anki daldan; önce veritabanı yedeği, sonra `kur.sh` —
+  Caddyfile doğrulanmadan kurulmaz). Kullanıcı çalıştırır (sudo).
+
+## Yeni bilgisayar kurulumu (2026-10-10'da başka PC'ye geçildi)
+- Gerekenler: Git for Windows (Git Bash), Python 3, GitHub CLI (`gh auth login`, hesap avsharbeyi), Claude Code.
+  Rust gerekmez (derleme ve testler cihazda).
+- Repo: `git clone https://github.com/avsharbeyi/wificorrect.git` → `git checkout uzak-panel`.
+- SSH: `~/.ssh/config`'e
+  ```
+  Host wificorrect
+      HostName 192.168.1.110
+      User root
+      IdentityFile ~/.ssh/bocafe
+  ```
+  Anahtarlar: `~/.ssh/bocafe` (cihaz root) ve `~/.ssh/gbserver` (sunucu). Ya eski PC'den güvenli yolla kopyalanır ya da yeni
+  PC'de yeni anahtar üretilip açık anahtar cihazın `/root/.ssh/authorized_keys`'ine ve sunucuda
+  `gbserver`'ın `~/.ssh/authorized_keys`'ine eklenir.
+- Ağ: cihaz (192.168.1.110) ve sunucu (192.168.1.109) SSH'ı yalnızca dükkânın modem ağından. Dışarıdan çalışılıyorsa
+  WireGuard yönetici bağlantısı (`wificorrect-disaridan.conf`) açılır; o zaman cihaz `10.99.0.11`, sunucu `10.99.0.1`.
 
 ## Ürün özeti
 WifiCorrect: işletmelere yıllık abonelikle satılan 5651 uyumlu, SMS (NetGSM) doğrulamalı misafir internet cihazı.
