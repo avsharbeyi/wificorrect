@@ -1158,8 +1158,10 @@ impl Panel {
     fn oturumlar_sayfa(&self, cfg: &Config, req: &Req, o: &Oturum, now: f64) -> Resp {
         let (yenile, oto, sira) = (sorgu_bir(req, "yenile"), sorgu_bir(req, "oto"), sira(req));
         if !self.oto_yenileme(req, o, now) {
-            // düğmeyle açılış bir kez "Otomatik yenilemeyi açtı"; pencere dışındaki oto=1 normal bakış ve pencereyi yeniler
-            self.audit(cfg, req, Some(o), if yenile && !oto { "PANEL_OTURUMLAR_YENILE" } else { "PANEL_OTURUMLAR" }, "");
+            // düğmeyle açılış bir kez "Otomatik yenilemeyi açtı" (pencere zaten açıksa — yenileme açıkken sıralama, F5 — normal bakış);
+            // pencere dışındaki oto=1 normal bakış ve pencereyi yeniler
+            let acik = (0.0..YENILE_PENCERE_SN).contains(&(now - o.yenile_acildi));
+            self.audit(cfg, req, Some(o), if yenile && !oto && !acik { "PANEL_OTURUMLAR_YENILE" } else { "PANEL_OTURUMLAR" }, "");
             if let (true, Some(t)) = (yenile, &req.token) {
                 self.oturumlar.set_yenile(t, now);
             }
@@ -2245,21 +2247,25 @@ mod tests {
             assert!(e.p.handle(&get("/cihazlar", &[("sira", "hiz"), ("yenile", "1"), ("oto", "1")], &tok)).body.contains(META));
         }
         assert_eq!((say("PANEL_OTURUMLAR_YENILE"), say("PANEL_OTURUMLAR")), (1, 1), "pencere içinde kayıt yok");
+        // yenileme açıkken sıralama tıklaması (yenile=1, oto yok): normal bakış, ikinci "yenilemeyi açtı" değil
+        let s = e.p.handle(&get("/cihazlar", &[("sira", "mb"), ("yenile", "1")], &tok)).body;
+        assert!(s.contains("http-equiv=\"refresh\""));
+        assert_eq!((say("PANEL_OTURUMLAR_YENILE"), say("PANEL_OTURUMLAR")), (1, 2), "sıralama tıklaması");
         // /oturumlar sayfası da kendine yeniler; başka sayfa yenilemez
         let s = e.p.handle(&get("/oturumlar", &[("sira", "mb"), ("yenile", "1"), ("oto", "1")], &tok)).body;
         assert!(s.contains("<meta http-equiv=\"refresh\" content=\"10;url=/oturumlar?sira=mb&amp;yenile=1&amp;oto=1\">"), "oturumlar meta");
         assert!(!e.p.handle(&get("/kayitlar", &[("yenile", "1")], &tok)).body.contains("http-equiv=\"refresh\""));
-        assert_eq!(say("PANEL_OTURUMLAR"), 1);
+        assert_eq!(say("PANEL_OTURUMLAR"), 2);
         ilerle(901.0);
         e.p.handle(&get("/cihazlar", &[("sira", "hiz"), ("yenile", "1"), ("oto", "1")], &tok));
-        assert_eq!(say("PANEL_OTURUMLAR"), 2, "pencere doldu: normal bakış");
+        assert_eq!(say("PANEL_OTURUMLAR"), 3, "pencere doldu: normal bakış");
         ilerle(10.0);
         e.p.handle(&get("/cihazlar", &[("sira", "hiz"), ("yenile", "1"), ("oto", "1")], &tok));
-        assert_eq!(say("PANEL_OTURUMLAR"), 2, "pencere yenilendi");
+        assert_eq!(say("PANEL_OTURUMLAR"), 3, "pencere yenilendi");
         // yenilemeyi hiç açmamış oturum (yer imi / elle yazılmış oto=1) kuralı delemez
         let (tok2, _) = setup_and_login(&e, "mudur", "sahip-parola-12");
         e.p.handle(&get("/cihazlar", &[("sira", "hiz"), ("yenile", "1"), ("oto", "1")], &tok2));
-        assert_eq!((say("PANEL_OTURUMLAR"), say("PANEL_OTURUMLAR_YENILE")), (3, 1));
+        assert_eq!((say("PANEL_OTURUMLAR"), say("PANEL_OTURUMLAR_YENILE")), (4, 1));
         assert_eq!(hareketler::olay_adi("PANEL_OTURUMLAR_YENILE"), "Otomatik yenilemeyi açtı");
     }
 
