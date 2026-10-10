@@ -128,7 +128,7 @@ kapı mantığına dokunmaz; reddedilen giriş öncesi paketler de sayılabilir 
 - Taslak (onaylandı): bölüm açıklama notu → üstte *Sırala: Anlık hız / Bugün MB / Bağlanma saati* düğmeleri ve sağda
   *"⟳ 10 sn'de bir yenile: açık/kapalı"* → tablo: Durum, Telefon, Ad soyad, MAC, IP, ↓ Mb/sn, ↑ Mb/sn, Bugün MB, Başlangıç,
   Kalan, Yavaşlat, Bağlantıyı kes → altta "Ölçüm N sn önce".
-- 10 Mb/sn'yi geçen anlık hız vurgulanır (kırmızı, *benim kararım* eşik).
+- Anlık hız için renk vurgusu yok (kullanıcı kararı); sıralama en yükleneni zaten üste getirir.
 - Sıralama ve yenileme sorgu parametresiyle: `/cihazlar?sira=hiz|mb|saat&yenile=1#oturumlar`. Yenileme açıkken
   sayfa başına `<meta http-equiv="refresh" content="10">` (şablona `$bas_ek` yer tutucusu).
 - **Denetim ve yenileme** (kullanıcı kararı): yenileme düğmesiyle açılınca bir kez `PANEL_OTURUMLAR_YENILE`
@@ -155,7 +155,7 @@ Deneme bitince ad alanı, test öğeleri ve test sınırı silinir. Canlıya ilk
 ## Açık sorular
 
 Yok (gözden geçirmede çıkan üç soru kullanıcıyla kapatıldı: yenilemede tek kayıt, izinli cihazlar tabloda,
-Yavaşlatılmış cihazlar bölümü).
+Yavaşlatılmış cihazlar bölümü). Spec 2026-10-10 kullanıcı tarafından onaylandı (hız vurgusu çıkarılarak).
 
 ## Uygulayıcıya bırakılanlar
 
