@@ -1242,8 +1242,10 @@ impl Panel {
             Some(d) => format!("Ölçüm {} sn önce", (now - d.zaman).max(0.0).round() as u64),
             None => "Ölçüm alınamıyor: hız ve bugünkü kullanım şu an gösterilemiyor.".into(),
         };
+        // yavaşlatma uygulanamıyorsa tablodaki "≤ N Mb/sn" rozetleri yanıltmasın (Yavaşlatılmış bölümündeki uyarının aynısı)
+        let hata = durum.as_ref().and_then(|d| d.hiz_hata.as_ref()).map(|e| format!("<div class=\"mesaj hata\">{}</div>", h(e))).unwrap_or_default();
         let body = format!(
-            "<p class=\"not\">Bağlantısı kesilen cihaz internete çıkamaz; yeniden SMS ile giriş yapması gerekir. \
+            "{hata}<p class=\"not\">Bağlantısı kesilen cihaz internete çıkamaz; yeniden SMS ile giriş yapması gerekir. \
              <b>Bağlı</b>: cihaz son 5 dakikada ağda görüldü. Hız: son 10 saniyenin ortalaması (megabit/saniye). \
              Bugün: gece 00:00'dan beri indirilen + yüklenen (MB).</p>\
              <p class=\"not\">Bu sayfadaki her görüntüleme, arama ve indirme kimin yaptığıyla birlikte kaydedilir ve hizmet sağlayıcı tarafından denetlenir.</p>{arac}{}\
@@ -3086,14 +3088,23 @@ mod tests {
 
     #[test]
     fn hiz_hatasi_panelde_gorunur() {
-        let e = env();
+        let mut e = env();
+        e.p.clock = Box::new(|| SAAT);
         let (tok, _) = setup_and_login(&e, "mudur", "sahip-parola-12");
         let s = e.p.handle(&get("/cihazlar", &[], &tok)).body;
-        assert!(!bolum_of(&s, "yavaslatilmis").contains("mesaj hata"));
+        assert!(!bolum_of(&s, "yavaslatilmis").contains("mesaj hata") && !bolum_of(&s, "oturumlar").contains("mesaj hata"));
         let d = crate::trafik::Durum { zaman: SAAT - 2.0, cihazlar: Default::default(), hiz_hata: Some("Yavaşlatma uygulanamadı: <tc> yok".into()) };
         crate::trafik::yaz(&e.p.trafik_path, &d).unwrap();
         let s = e.p.handle(&get("/cihazlar", &[], &tok)).body;
         let b = bolum_of(&s, "yavaslatilmis");
         assert!(b.starts_with(" aria-labelledby=\"b-yavaslatilmis\"><h2 class=\"bolum-baslik\" id=\"b-yavaslatilmis\">Yavaşlatılmış cihazlar</h2><div class=\"mesaj hata\">Yavaşlatma uygulanamadı: &lt;tc&gt; yok</div>"), "{b}");
+        // Bağlı kullanıcılar tablosunun üstünde de (ölçüm tazeyken)
+        let b = bolum_of(&s, "oturumlar");
+        let uyari = "<div class=\"mesaj hata\">Yavaşlatma uygulanamadı: &lt;tc&gt; yok</div>";
+        assert!(b.contains(uyari) && b.find(uyari) < b.find("Bağlı kullanıcı yok"), "{b}");
+        let d = crate::trafik::Durum { zaman: SAAT - 100.0, ..d };
+        crate::trafik::yaz(&e.p.trafik_path, &d).unwrap();
+        let s = e.p.handle(&get("/cihazlar", &[], &tok)).body;
+        assert!(!bolum_of(&s, "oturumlar").contains("mesaj hata")); // eski ölçüm: tablo da ölçüm göstermez
     }
 }

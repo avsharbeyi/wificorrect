@@ -197,13 +197,17 @@ pub struct Kaydedici {
     pub trafik_yolu: PathBuf,
     pub uygulanan_yolu: PathBuf,
     pub nft_f: Box<dyn Fn(&str) -> bool + Send + Sync>,
-    /// komut çıktısı (nft setleri, tc kökleri); testte sahte
-    pub capture: Box<dyn Fn(&[&str]) -> String + Send + Sync>,
+    /// komut çıktısı (nft setleri, tc kökleri), süre sınırlı: asılı nft/tc 5651 döngüsünü durdurmasın (`None` = okunamadı); testte sahte
+    pub capture: Box<dyn Fn(&[&str]) -> Option<String> + Send + Sync>,
+    /// ayar dosyası (panel izinli listeyi buraya yazar); değişince yalnızca izinli liste yeniden okunur
+    pub ayar_yolu: PathBuf,
+    ayar_mtime: Option<SystemTime>,
 }
 
 impl Kaydedici {
     pub fn new(cfg: Config, runner: Box<Runner>) -> Kaydedici {
         let olcer = trafik::Olcer::new(trafik::gun_oku(&cfg.main.state_root)); // bugünkü MB yeniden başlatmada kaybolmasın
+        let ayar_yolu = PathBuf::from(std::env::var("WFC_AYAR").unwrap_or_else(|_| crate::ayar::PATH.to_string()));
         Kaydedici {
             allow: Config::devices(&cfg.allow),
             cfg,
@@ -231,7 +235,9 @@ impl Kaydedici {
             trafik_yolu: trafik::DURUM_YOLU.into(),
             uygulanan_yolu: hiz::UYGULANAN_YOLU.into(),
             nft_f: Box::new(hiz::nft_dosya),
-            capture: Box::new(ortak::capture),
+            capture: Box::new(|c: &[&str]| ortak::capture_timeout(c, 5)),
+            ayar_yolu: ayar_yolu.clone(),
+            ayar_mtime: std::fs::metadata(&ayar_yolu).and_then(|m| m.modified()).ok(),
         }
     }
 
@@ -239,6 +245,24 @@ impl Kaydedici {
     pub fn refresh(&mut self) {
         self.reload_leases();
         self.reload_sessions_if_changed();
+        self.reload_allow_if_changed();
+    }
+
+    /// Panel izinli cihaz ekleyip/kaldırınca kaydedici yeniden başlamaz: ayar dosyası değiştiyse yalnızca izinli liste
+    /// yenilenir (yoksa yeni izinli cihazın hızı görünmez, yavaşlatması 5 sn içinde geri alınırdı). Okunamazsa eski liste kalır.
+    fn reload_allow_if_changed(&mut self) {
+        let mtime = std::fs::metadata(&self.ayar_yolu).and_then(|m| m.modified()).ok();
+        if mtime == self.ayar_mtime {
+            return;
+        }
+        self.ayar_mtime = mtime;
+        match Config::load(&self.ayar_yolu.to_string_lossy()) {
+            Ok(c) => {
+                self.allow = Config::devices(&c.allow);
+                self.cfg.allow = c.allow;
+            }
+            Err(e) => eprintln!("kaydedici: izinli liste yenilenemedi: {e}"),
+        }
     }
 
     fn reload_leases(&mut self) {
@@ -432,7 +456,8 @@ impl Kaydedici {
             return;
         }
         let lan = self.cfg.main.iface.clone();
-        if [lan.as_str(), wan].iter().any(|d| !(self.capture)(&["tc", "qdisc", "show", "dev", d, "root"]).contains("htb 1:")) {
+        // okunamayan (asılı/süresi dolan) tc yok sayılır: sağlam kökler boşuna yeniden kurulmasın
+        if [lan.as_str(), wan].iter().any(|d| (self.capture)(&["tc", "qdisc", "show", "dev", d, "root"]).is_some_and(|o| !o.contains("htb 1:"))) {
             let _ = std::fs::remove_file(&self.uygulanan_yolu);
         }
     }
@@ -441,7 +466,8 @@ impl Kaydedici {
     /// en çok dakikada bir yeniden denenir (her denemede tc kökleri silinip kurulur; 5 sn'de bir kuyrukları boşaltmasın).
     fn hiz_turu(&mut self, now: f64) {
         let tablo = self.hiz_tablosu();
-        let set = |ad: &str| (self.capture)(&["nft", "-j", "list", "set", "inet", "wfc_hiz", ad]);
+        // okunamayan set boş sayılır; ikisi birden boşsa ölçer okuma hatası sayar, geçmişe dokunmaz
+        let set = |ad: &str| (self.capture)(&["nft", "-j", "list", "set", "inet", "wfc_hiz", ad]).unwrap_or_default();
         let (indir, yukle) = (set("indir"), set("yukle"));
         if tablo {
             let wan = crate::ag::load(&self.ag_path).wan;
@@ -773,7 +799,8 @@ mod tests {
         k.trafik_yolu = root.join("trafik.json");
         k.uygulanan_yolu = root.join("hiz_uygulanan");
         k.nft_f = Box::new(|_: &str| true);
-        k.capture = Box::new(|_: &[&str]| String::new());
+        k.capture = Box::new(|_: &[&str]| Some(String::new()));
+        k.ayar_yolu = root.join("ayarlar.toml"); // yok: izinli liste yukarıdaki metinden
         k.leases = [("10.50.0.40", "aa:bb:cc:dd:ee:40"), ("10.50.0.2", "aa:bb:cc:dd:ee:99")]
             .into_iter()
             .map(|(a, b)| (a.to_string(), b.to_string()))
@@ -1138,7 +1165,7 @@ mod tests {
             c2.lock().unwrap().push(c.join(" "));
             c[0] != "nft" || *t2.lock().unwrap()
         });
-        k.capture = Box::new(move |c: &[&str]| if c[0] == "tc" { k2.lock().unwrap().clone() } else { String::new() });
+        k.capture = Box::new(move |c: &[&str]| Some(if c[0] == "tc" { k2.lock().unwrap().clone() } else { String::new() }));
         (tablo, calls, kok)
     }
 
@@ -1181,5 +1208,55 @@ mod tests {
         assert_eq!(tc_sayisi(&calls), n); // denetim 30 sn'de bir
         k.hiz_turu(T + 61.0);
         assert!(tc_sayisi(&calls) > n);
+    }
+
+    #[test]
+    fn yeni_izinli_cihaz_kaydediciye_yansir() {
+        // panel izinli cihaz ekledi (ayarlar.toml + kira), kaydedici yeniden başlamadı; cihaz yavaşlatıldı
+        let (mut k, root, _) = setup();
+        let (_, _, kok) = hiz_kur(&mut k, &root);
+        *kok.lock().unwrap() = "qdisc htb 1: root refcnt 2".into();
+        k.capture = {
+            let k2 = kok.clone();
+            Box::new(move |c: &[&str]| {
+                Some(match c[0] {
+                    "tc" => k2.lock().unwrap().clone(),
+                    _ => set_json(c[c.len() - 1], &[("10.50.0.30", 1000)]),
+                })
+            })
+        };
+        k.hiz_turu(T); // eski liste: M3 yok
+        std::fs::write(&k.cfg.main.leases_file, format!("1 {M3} 10.50.0.30 kasa 01\n")).unwrap();
+        let metin = format!(
+            "[main]\nlog_root = '{0}/5651'\nstate_root = '{0}/state'\nleases_file = '{0}/leases'\n[[allow]]\nmac = 'aa:bb:cc:dd:ee:99'\nname = 'AP'\n[[allow]]\nmac = '{M3}'\nname = 'Kasa'\n",
+            root.display()
+        );
+        std::fs::write(&k.ayar_yolu, metin).unwrap();
+        let mut s = crate::hiz::oku(&k.cfg.main.state_root);
+        s.insert(M3.into(), crate::hiz::Sinir { hiz: 2, ad: "İzinli cihaz · Kasa".into(), zaman: String::new(), kim: "y".into() });
+        crate::hiz::kaydet(&k.cfg.main.state_root, &s).unwrap();
+        for i in 1..4 {
+            k.refresh();
+            k.hiz_turu(T + 5.0 * i as f64);
+        }
+        let d = crate::trafik::oku(&k.trafik_yolu).unwrap();
+        assert_eq!(d.cihazlar.get(M3).map(|c| c.ip.as_str()), Some("10.50.0.30"), "{:?}", d.cihazlar.keys());
+        let iz = std::fs::read_to_string(&k.uygulanan_yolu).unwrap();
+        assert!(iz.contains("ip daddr 10.50.0.30 ") && iz.contains("rate 2mbit"), "{iz}"); // sınır geri alınmadı
+        // bozuk ayar dosyası: liste korunur
+        std::fs::write(&k.ayar_yolu, "[[allow]\nbozuk").unwrap();
+        k.refresh();
+        k.hiz_turu(T + 30.0);
+        assert!(std::fs::read_to_string(&k.uygulanan_yolu).unwrap().contains("ip daddr 10.50.0.30 "));
+    }
+
+    #[test]
+    fn tc_koku_okunamazsa_plan_izi_kalir() {
+        let (mut k, root, _) = setup();
+        hiz_kur(&mut k, &root);
+        std::fs::write(&k.uygulanan_yolu, "plan").unwrap();
+        k.capture = Box::new(|_: &[&str]| None); // tc asıldı, süre doldu
+        k.kok_denetle("enp3s0");
+        assert!(k.uygulanan_yolu.exists());
     }
 }
