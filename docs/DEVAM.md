@@ -10,7 +10,7 @@ Bu dosya, projeye yeni bir oturumda/hesapta devam eden ajan içindir. Önce bunu
 - **Asla** parola, API anahtarı, belirteç girme/kullanma — kullanıcı sohbete yazsa bile. `openwrt/serverp` dosyasını okuma.
 - Gerçek SMS yalnızca kullanıcı açıkça onaylarsa. `/srv/5651` dosyalarını silme. Ağ/güvenlik duvarı değişikliği yalnızca
   ölü adam anahtarıyla (yedek + `systemd-run --on-active=300` geri alma + YENİ bağlantıyla doğrula + iptal).
-- Sırlar repoya girmez (repo **herkese açık**: github.com/avsharbeyi/wificorrect).
+- Sırlar repoya girmez (repo **herkese açık**: github.com/bilgisayargoztepe-lgtm/wificorrect).
 - Cihaz testleri **cihazda** koşar: `bash scripts/test.sh wificorrect [süzgeç]` (~5 dk; aynı anda iki tane çalıştırma).
   Cihaza kurulum: `bash scripts/gelistir.sh` + `ssh wificorrect 'systemctl restart wificorrect-panel wificorrect-portal wificorrect-kaydedici'`.
   Merkez testleri: `sh scripts/sunucu/merkez/tests/hepsi.sh python`.
@@ -18,9 +18,9 @@ Bu dosya, projeye yeni bir oturumda/hesapta devam eden ajan içindir. Önce bunu
   Caddyfile doğrulanmadan kurulmaz). Kullanıcı çalıştırır (sudo).
 
 ## Yeni bilgisayar kurulumu (2026-10-10'da başka PC'ye geçildi)
-- Gerekenler: Git for Windows (Git Bash), Python 3, GitHub CLI (`gh auth login`, hesap avsharbeyi), Claude Code.
+- Gerekenler: Git for Windows (Git Bash), Python 3, GitHub CLI (`gh auth login`, hesap bilgisayargoztepe-lgtm), Claude Code.
   Rust gerekmez (derleme ve testler cihazda).
-- Repo: `git clone https://github.com/avsharbeyi/wificorrect.git` → `git checkout uzak-panel`.
+- Repo: `git clone https://github.com/bilgisayargoztepe-lgtm/wificorrect.git` → `git checkout uzak-panel`.
 - SSH: `~/.ssh/config`'e
   ```
   Host wificorrect
@@ -61,7 +61,7 @@ Bitenler (canlıda):
 1. **Kullanıcının telefondan denemesi** (2026-10-10'da istendi, sonucu gelmedi): panel.wificorrect.com → 1537344 → cihaz
    paneli açılmalı → Admin ayarları admin parolası sorar → Çıkış panel girişine döner. Sorun varsa sistematik hata ayıkla.
 2. **GitHub testleri**: e011902'nin `test`/`iso` çalışmaları `paket` adımında 125 (Docker, büyük olasılıkla geçici) ile düştü,
-   yeniden başlatıldı: `gh run list -R avsharbeyi/wificorrect --branch uzak-panel`. Yeşil değilse sebebi bul.
+   yeniden başlatıldı: `gh run list -R bilgisayargoztepe-lgtm/wificorrect --branch uzak-panel`. Yeşil değilse sebebi bul.
 3. **main'e birleştirme**: `uzak-panel` → `main` için PR aç (kullanıcı onayıyla), eski PR #2'yi kapat. Sonra **v0.3.0**:
    kullanıcı GitHub değişkeni `WFC_SSH_PUB`'a açık SSH anahtarını girmeli (yoksa sürüm derlemesi durur), etiket onayı.
 4. Önerilen sonraki özellikler (kullanıcı listeden seçecek): donanım bekçisi (watchdog — J1900 donuyor), merkezden uzaktan
