@@ -1,6 +1,5 @@
 //! nft sayaç setlerinden (indir/yükle) cihaz başına hız ve günlük toplam.
 //! Saf mantık + küçük dosya IO'su; okuyucu/yazıcı döngüsü kaydedici'de.
-#![allow(dead_code)]
 
 use crate::ortak;
 use serde::{Deserialize, Serialize};
@@ -70,6 +69,7 @@ pub fn gun_yaz(state_root: &str, g: &GunToplam) -> std::io::Result<()> {
     ortak::write_atomic(&gun_yolu(state_root), &data)
 }
 
+#[allow(dead_code)] // panel (sonraki adım)
 pub fn oku(path: &Path) -> Option<Durum> {
     serde_json::from_str(&std::fs::read_to_string(path).ok()?).ok()
 }
@@ -77,6 +77,26 @@ pub fn oku(path: &Path) -> Option<Durum> {
 pub fn yaz(path: &Path, d: &Durum) -> std::io::Result<()> {
     let data = serde_json::to_vec(d).map_err(std::io::Error::other)?;
     ortak::write_atomic(path, &data)
+}
+
+/// IP → MAC: oturumlar ((ip, mac); DHCP o IP'yi başka cihaza vermediyse) + kirada IP'si olan izinli cihazlar.
+pub fn ip_mac<'a>(
+    oturumlar: impl IntoIterator<Item = (&'a String, &'a String)>,
+    izinli: &BTreeMap<String, String>,
+    kiralar: &BTreeMap<String, String>,
+) -> BTreeMap<String, String> {
+    let mut out = BTreeMap::new();
+    for (ip, mac) in oturumlar {
+        if !ip.is_empty() && kiralar.get(ip).is_none_or(|o| o == mac) {
+            out.insert(ip.clone(), mac.clone());
+        }
+    }
+    for (ip, mac) in kiralar {
+        if izinli.contains_key(mac) {
+            out.entry(ip.clone()).or_insert_with(|| mac.clone());
+        }
+    }
+    out
 }
 
 type Gecmis = VecDeque<(f64, u64)>;
@@ -170,6 +190,10 @@ impl Olcer {
         }
         for (mac, c) in cihazlar.iter_mut() {
             c.bugun_bayt = self.gun.bayt.get(mac).copied().unwrap_or(0);
+        }
+        // Setlerden düşen (zaman aşımı) IP'nin geçmişi unutulur; iki set birden boşsa okuma hatası sayılır, dokunulmaz.
+        if !indir.is_empty() || !yukle.is_empty() {
+            self.ipler.retain(|ip, _| indir.contains_key(ip) || yukle.contains_key(ip));
         }
         Durum { zaman: t, cihazlar, hiz_hata: None }
     }
@@ -279,5 +303,36 @@ mod tests {
         assert_eq!(gun_oku(root).bayt[A], 7);
         assert_eq!(gun_oku("/yok/boyle/dizin").gun, "");
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn setlerden_dusen_ip_unutulur_okuma_hatasinda_kalir() {
+        let mut o = Olcer::new(GunToplam::default());
+        let g = "2026-10-10";
+        let mut m = ipmac(A);
+        m.insert("10.50.0.5".into(), B.into());
+        o.ornek(0.0, g, &harita(IP, 1000), &BTreeMap::new(), &m);
+        o.ornek(5.0, g, &BTreeMap::new(), &BTreeMap::new(), &m); // iki set de boş: okuma hatası sayılır
+        assert!(o.ipler.contains_key(IP));
+        o.ornek(10.0, g, &harita("10.50.0.5", 10), &BTreeMap::new(), &m);
+        assert!(!o.ipler.contains_key(IP));
+        assert!(o.ipler.contains_key("10.50.0.5"));
+        assert_eq!(o.gun_toplam().bayt[A], 0); // günlük toplam silinmez
+    }
+
+    #[test]
+    fn ip_mac_oturum_ve_izinli_kira() {
+        let oturum = BTreeMap::from([("10.50.0.23".to_string(), A.to_string()), ("10.50.0.40".to_string(), B.to_string())]);
+        let izinli = BTreeMap::from([("aa:bb:cc:dd:ee:99".to_string(), "AP".to_string())]);
+        let kira = BTreeMap::from([
+            ("10.50.0.40".to_string(), "aa:bb:cc:dd:ee:40".to_string()), // oturumun IP'si başka cihazda
+            ("10.50.0.2".to_string(), "aa:bb:cc:dd:ee:99".to_string()),
+            ("10.50.0.3".to_string(), "aa:bb:cc:dd:ee:03".to_string()), // izinsiz, oturumsuz
+        ]);
+        let m = ip_mac(oturum.iter(), &izinli, &kira);
+        assert_eq!(
+            m,
+            BTreeMap::from([("10.50.0.23".to_string(), A.to_string()), ("10.50.0.2".to_string(), "aa:bb:cc:dd:ee:99".to_string())])
+        );
     }
 }

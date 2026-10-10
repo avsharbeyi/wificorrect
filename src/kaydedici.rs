@@ -5,6 +5,7 @@
 
 use crate::ayar::Config;
 use crate::ortak::{self, Row, Runner, Session};
+use crate::{hiz, trafik};
 use std::collections::{BTreeMap, HashMap};
 use std::io::{BufRead, BufReader, Read};
 use std::os::unix::io::AsRawFd;
@@ -17,6 +18,8 @@ use std::time::{Duration, Instant, SystemTime};
 
 const MAX_OPEN_FLOWS: usize = 200_000; // NEW zaman önbelleği sınırı
 const QUEUE: usize = 100_000; // dolarsa okuyucu bekler → çekirdek ENOBUFS → LOG_BOSLUK
+/// Sayaç tablosu (`inet wfc_hiz`); yoksa kaydedici yalnızca bunu yükler.
+const HIZ_NFT: &str = "/etc/wificorrect/hiz.nft";
 
 /// Yalnızca müşteri ağından başlayan akışlar; süzme çekirdekte (BPF). -b: ani yükte olaylar tamponda beklesin.
 pub fn ct_cmd(subnet: &str) -> Vec<String> {
@@ -182,10 +185,20 @@ pub struct Kaydedici {
     merkez_son: f64,
     /// son bilinen hizmet durumu (lisans); değişince misafir oturumları kapanır / denetime yazılır
     lisans_acik: Option<bool>,
+    /// Trafik ölçümü ve yavaşlatma (5 sn); yollar ve nft yükleyicisi testte değiştirilir
+    olcer: trafik::Olcer,
+    gun_son: f64,
+    /// son uzlaştırmanın hatası (trafik.json'a, panelde uyarı) ve zamanı
+    hiz_hata: Option<String>,
+    hiz_hata_zaman: f64,
+    pub trafik_yolu: PathBuf,
+    pub uygulanan_yolu: PathBuf,
+    pub nft_f: Box<dyn Fn(&str) -> bool + Send + Sync>,
 }
 
 impl Kaydedici {
     pub fn new(cfg: Config, runner: Box<Runner>) -> Kaydedici {
+        let olcer = trafik::Olcer::new(trafik::gun_oku(&cfg.main.state_root)); // bugünkü MB yeniden başlatmada kaybolmasın
         Kaydedici {
             allow: Config::devices(&cfg.allow),
             cfg,
@@ -204,6 +217,13 @@ impl Kaydedici {
             merkez_path: crate::merkez::PATH.into(),
             merkez_son: f64::NEG_INFINITY,
             lisans_acik: None,
+            olcer,
+            gun_son: f64::NEG_INFINITY,
+            hiz_hata: None,
+            hiz_hata_zaman: f64::NEG_INFINITY,
+            trafik_yolu: trafik::DURUM_YOLU.into(),
+            uygulanan_yolu: hiz::UYGULANAN_YOLU.into(),
+            nft_f: Box::new(hiz::nft_dosya),
         }
     }
 
@@ -331,6 +351,71 @@ impl Kaydedici {
                 eprintln!("kaydedici: kişi dosyası yazılamadı: {e}");
             }
         }
+    }
+
+    /// IP → MAC: oturumlar + kirada IP'si olan izinli cihazlar (hız tablosu ve yavaşlatma için).
+    fn ip_mac(&self) -> BTreeMap<String, String> {
+        trafik::ip_mac(self.by_ip.iter().map(|(ip, (mac, _))| (ip, mac)), &self.allow, &self.leases)
+    }
+
+    /// 5 sn adımı: set sayaçlarından cihaz başına hız ve bugünkü toplam → trafik.json (son yavaşlatma hatasıyla).
+    /// Günlük toplam dakikada bir diske (kaydedici/cihaz yeniden başlarsa bugünkü MB kaybolmasın).
+    pub fn trafik_adimi(&mut self, now: f64, indir_json: &str, yukle_json: &str) -> trafik::Durum {
+        let ip_mac = self.ip_mac();
+        let zaman = ortak::now_iso(now);
+        let (indir, yukle) = (trafik::parse_set(indir_json), trafik::parse_set(yukle_json));
+        let mut d = self.olcer.ornek(now, ortak::day_of(&zaman), &indir, &yukle, &ip_mac);
+        d.hiz_hata = self.hiz_hata.clone();
+        if let Err(e) = trafik::yaz(&self.trafik_yolu, &d) {
+            eprintln!("kaydedici: {} yazılamadı: {e}", self.trafik_yolu.display());
+        }
+        if now - self.gun_son >= 60.0 {
+            self.gun_son = now;
+            if let Err(e) = trafik::gun_yaz(&self.cfg.main.state_root, self.olcer.gun_toplam()) {
+                eprintln!("kaydedici: günlük trafik toplamı yazılamadı: {e}");
+            }
+        }
+        d
+    }
+
+    /// Yavaşlatma uzlaştırması (değişiklik yoksa komut çalışmaz); hata bir sonraki trafik.json'a yazılır.
+    pub fn hiz_adimi(&mut self, wan: &str) -> Result<bool, String> {
+        let ip_of: BTreeMap<String, String> = self.ip_mac().into_iter().map(|(ip, mac)| (mac, ip)).collect();
+        let r = hiz::uygula(&self.cfg, wan, &ip_of, &*self.runner, &*self.nft_f, &self.uygulanan_yolu);
+        let hata = r.as_ref().err().cloned();
+        if hata.is_some() && hata != self.hiz_hata {
+            eprintln!("kaydedici: {}", hata.as_deref().unwrap_or(""));
+        }
+        self.hiz_hata = hata;
+        r
+    }
+
+    /// `inet wfc_hiz` yoksa (paket güncellemesi sonrası ilk çalışma) yalnızca o tablo yüklenir; diğer tablolara dokunulmaz.
+    /// Yeni tablonun sınıf zinciri boş olduğundan parmak izi silinir: sonraki uzlaştırma kuralları yeniden yazar.
+    fn hiz_tablosu(&mut self) {
+        let c = |a: &[&str]| a.iter().map(|s| s.to_string()).collect::<Vec<_>>();
+        if (self.runner)(&c(&["nft", "list", "table", "inet", "wfc_hiz"])) {
+            return;
+        }
+        let _ = std::fs::remove_file(&self.uygulanan_yolu);
+        if !(self.runner)(&c(&["nft", "-f", HIZ_NFT])) {
+            eprintln!("kaydedici: {HIZ_NFT} yüklenemedi");
+        }
+    }
+
+    /// Gerçek 5 sn turu: tablo → sayaçlar → uzlaştırma → trafik.json. Uzlaştırma hata verdiyse en çok dakikada bir
+    /// yeniden denenir (her denemede tc kökleri silinip kurulur; 5 sn'de bir kuyrukları boşaltmasın).
+    fn hiz_turu(&mut self, now: f64) {
+        self.hiz_tablosu();
+        let set = |ad: &str| ortak::capture(&["nft", "-j", "list", "set", "inet", "wfc_hiz", ad]);
+        let (indir, yukle) = (set("indir"), set("yukle"));
+        if self.hiz_hata.is_none() || now - self.hiz_hata_zaman >= 60.0 {
+            let wan = crate::ag::load(&self.ag_path).wan;
+            if self.hiz_adimi(&wan).is_err() {
+                self.hiz_hata_zaman = now;
+            }
+        }
+        self.trafik_adimi(now, &indir, &yukle);
     }
 
     /// Süresi dolanı kapat; IP'si değişeni taşı (taşınamazsa kapat); IP'si başkasına verileni beklemeye al.
@@ -560,7 +645,7 @@ pub fn run(cfg: Config) -> ExitCode {
     }
     drop(tx);
     eprintln!("kaydedici: başladı");
-    let (mut next_maint, mut last_loop) = (0.0, Instant::now());
+    let (mut next_maint, mut next_hiz, mut last_loop) = (0.0, 0.0, Instant::now());
     loop {
         k.refresh();
         let mut items = vec![];
@@ -586,6 +671,10 @@ pub fn run(cfg: Config) -> ExitCode {
         if now >= next_maint {
             k.maintain(now);
             next_maint = now + 30.0;
+        }
+        if now >= next_hiz {
+            k.hiz_turu(now); // ilk turda (açılışta) sayaç tablosu da denetlenir
+            next_hiz = now + 5.0;
         }
         let took = t0.elapsed().as_secs_f64();
         if took > 3.0 {
@@ -641,6 +730,9 @@ mod tests {
         k.merkez_path = root.join("merkez.json"); // bağlı, lisansı açık cihaz
         crate::merkez::kaydet(&k.merkez_path, &crate::merkez::Merkez { numara: "4511643".into(), son_eslesme: 9e9, ..Default::default() }).unwrap();
         k.by_ip.insert("10.50.0.23".into(), (M1.into(), sess("5334553132", "10.50.0.23", 9e9, "s1")));
+        k.trafik_yolu = root.join("trafik.json");
+        k.uygulanan_yolu = root.join("hiz_uygulanan");
+        k.nft_f = Box::new(|_: &str| true);
         k.leases = [("10.50.0.40", "aa:bb:cc:dd:ee:40"), ("10.50.0.2", "aa:bb:cc:dd:ee:99")]
             .into_iter()
             .map(|(a, b)| (a.to_string(), b.to_string()))
@@ -929,6 +1021,68 @@ mod tests {
         let audit = std::fs::read_to_string(root.join(format!("5651/gunluk/{}/denetim.csv", ortak::day_of(&ortak::now_iso(1010.0))))).unwrap();
         assert!(audit.contains("LISANS_KAPALI") && audit.contains("LISANS_ACIK"));
         assert_eq!(audit.matches("LISANS_KAPALI").count(), 2); // geçişte + yarışta kapanan oturum; boş turlarda satır yok
+    }
+
+    /// `nft -j list set` biçiminde set çıktısı.
+    fn set_json(ad: &str, ogeler: &[(&str, u64)]) -> String {
+        let e: Vec<String> = ogeler.iter().map(|(ip, b)| format!(r#"{{"elem": {{"val": "{ip}", "counter": {{"packets": 1, "bytes": {b}}}}}}}"#)).collect();
+        format!(r#"{{"nftables": [{{"metainfo": {{}}}}, {{"set": {{"family": "inet", "name": "{ad}", "table": "wfc_hiz", "elem": [{}]}}}}]}}"#, e.join(", "))
+    }
+
+    const T: f64 = 1_791_640_000.0;
+    const M3: &str = "aa:bb:cc:dd:ee:03";
+
+    #[test]
+    fn trafik_adimi_json_yazar() {
+        let (mut k, _root, _) = setup();
+        k.allow.insert(M3.into(), "Kasa".into());
+        k.leases.insert("10.50.0.30".into(), M3.into());
+        // oturumu var ama DHCP IP'yi başka (izinsiz) cihaza vermiş: sayılmaz
+        k.by_ip.insert("10.50.0.40".into(), (M2.into(), sess("5550000000", "10.50.0.40", 9e9, "s2")));
+        let ipler = |ek: u64| set_json("indir", &[("10.50.0.23", 1000 + ek), ("10.50.0.30", 500 + ek / 2), ("10.50.0.40", 700 + ek), ("10.50.0.77", 9 + ek)]);
+        k.trafik_adimi(T, &ipler(0), &set_json("yukle", &[("10.50.0.23", 100)]));
+        let d = k.trafik_adimi(T + 10.0, &ipler(12_500_000), &set_json("yukle", &[("10.50.0.23", 100 + 1_250_000)]));
+        let yazilan = crate::trafik::oku(&k.trafik_yolu).unwrap();
+        assert_eq!(yazilan.cihazlar.keys().collect::<Vec<_>>(), vec![M1, M3]);
+        assert_eq!(yazilan.zaman, T + 10.0);
+        let c = &yazilan.cihazlar[M1];
+        assert_eq!((c.ip.as_str(), c.indir_bps, c.yukle_bps), ("10.50.0.23", 10_000_000, 1_000_000));
+        assert_eq!(c.bugun_bayt, 12_500_000 + 1_250_000);
+        assert_eq!(yazilan.cihazlar[M3].indir_bps, 5_000_000);
+        assert_eq!(d.cihazlar[M1], *c);
+        assert_eq!(yazilan.hiz_hata, None);
+        // günlük toplam ilk adımda ve sonra dakikada bir diske
+        let gun = |k: &Kaydedici| crate::trafik::gun_oku(&k.cfg.main.state_root).bayt.get(M1).copied();
+        assert_eq!(gun(&k), Some(0));
+        k.trafik_adimi(T + 15.0, &ipler(13_000_000), &set_json("yukle", &[("10.50.0.23", 100 + 1_250_000)]));
+        assert_eq!(gun(&k), Some(0));
+        k.trafik_adimi(T + 61.0, &ipler(13_000_000), &set_json("yukle", &[("10.50.0.23", 100 + 1_250_000)]));
+        assert_eq!(gun(&k), Some(13_000_000 + 1_250_000));
+    }
+
+    #[test]
+    fn tc_hatasi_trafik_jsona_yazilir() {
+        let (mut k, _root, _) = setup();
+        k.runner = Box::new(|c: &[String]| c[0] != "tc" || c[2] == "del");
+        let mut s = crate::hiz::Sinirlar::new();
+        s.insert(M1.into(), crate::hiz::Sinir { hiz: 5, ad: "A B".into(), zaman: String::new(), kim: "y".into() });
+        crate::hiz::kaydet(&k.cfg.main.state_root, &s).unwrap();
+        let e = k.hiz_adimi("enp3s0").unwrap_err();
+        assert!(e.starts_with("Yavaşlatma uygulanamadı: "), "{e}");
+        let d = k.trafik_adimi(T, &set_json("indir", &[("10.50.0.23", 1)]), &set_json("yukle", &[]));
+        assert_eq!(d.hiz_hata.as_deref(), Some(e.as_str()));
+        assert_eq!(crate::trafik::oku(&k.trafik_yolu).unwrap().hiz_hata, Some(e));
+        // düzelince uyarı kalkar; nft metni oturumdaki IP'yle
+        let son = Arc::new(Mutex::new(String::new()));
+        let s2 = son.clone();
+        k.runner = Box::new(|_: &[String]| true);
+        k.nft_f = Box::new(move |t: &str| {
+            *s2.lock().unwrap() = t.to_string();
+            true
+        });
+        assert_eq!(k.hiz_adimi("enp3s0"), Ok(true));
+        assert!(son.lock().unwrap().contains("ip daddr 10.50.0.23 "));
+        assert_eq!(k.trafik_adimi(T + 5.0, "", "").hiz_hata, None);
     }
 
 }
