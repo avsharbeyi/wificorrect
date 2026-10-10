@@ -386,12 +386,12 @@ pub struct Panel {
     baglan_kilit: std::sync::Mutex<()>,
 }
 
-const MENU: &[(&str, &str)] = &[("/", "Özet"), ("/cihazlar", "Cihazlar"), ("/kayitlar", "Kayıtlar"), ("/ayarlar", "Ayarlar"), ("/admin", "Admin ayarları")];
+const MENU: &[(&str, &str)] = &[("/", "Özet"), ("/cihazlar", "Kullanıcılar"), ("/kayitlar", "Kayıtlar"), ("/ayarlar", "Ayarlar"), ("/admin", "Admin")];
 
 /// Menü grupları tek sayfadır; eski sayfalar bu sayfada alt alta bölüm olur (2026-10-08, kullanıcı isteği).
 /// (grup, eski yol, bölüm id, başlık, yalnızca admin). Eski yollar ayrıca açılır (hata/arama sonucu, ayrıntı).
 const BOLUMLER: &[(&str, &str, &str, &str, bool)] = &[
-    ("/cihazlar", "/oturumlar", "oturumlar", "Bağlı cihazlar", false),
+    ("/cihazlar", "/oturumlar", "oturumlar", "Bağlı kullanıcılar", false),
     ("/cihazlar", "/yasak", "yasak", "Yasaklı cihazlar", false),
     ("/cihazlar", "/izinli", "izinli", "İzinli cihazlar", false),
     ("/cihazlar", "/yasakli-siteler", "yasakli-siteler", "Yasaklı siteler", false),
@@ -429,7 +429,6 @@ const SIMGE_AYAR: &str = "M4 6h16M4 12h16M4 18h16M9 4v4M15 10v4M7 16v4";
 const SIMGE_KILIT: &str = "M6 11h12v10H6zM8 11V7a4 4 0 0 1 8 0v4";
 const SIMGE_ARA: &str = "M11 4a7 7 0 1 0 0 14 7 7 0 0 0 0-14zM16 16l5 5";
 const SIMGE_YASAK: &str = "M12 3a9 9 0 1 0 0 18 9 9 0 0 0 0-18zM5.6 5.6l12.8 12.8";
-const SIMGE_METIN: &str = "M4 4h16v12H8l-4 4z";
 const SIMGE_MENU: &str = "M3 6h18M3 12h18M3 18h18";
 
 fn simge(d: &str) -> String {
@@ -448,11 +447,10 @@ fn menu_simgesi(yol: &str) -> &'static str {
 
 /// Özet'in üstündeki kısayol kutuları: (bağlantı, simge, ad)
 const KISAYOLLAR: &[(&str, &str, &str)] = &[
-    ("/cihazlar#oturumlar", SIMGE_WIFI, "Bağlı cihazlar"),
+    ("/cihazlar#oturumlar", SIMGE_WIFI, "Bağlı kullanıcılar"),
     ("/kayitlar#gunler", SIMGE_KAYIT, "Kayıtlar"),
     ("/kayitlar#site-ara", SIMGE_ARA, "Site / IP ara"),
     ("/cihazlar#yasakli-siteler", SIMGE_YASAK, "Yasaklı siteler"),
-    ("/ayarlar#portal-metinleri", SIMGE_METIN, "Portal metinleri"),
     ("/ayarlar#isletme", SIMGE_AYAR, "Ayarlar"),
 ];
 
@@ -730,7 +728,7 @@ impl Panel {
                 admin_donus(req.form.get("donus").unwrap_or(&req.path))
             )
         };
-        self.page(cfg, req, Some(o), "Admin ayarları", &body)
+        self.page(cfg, req, Some(o), "Admin", &body)
     }
 
     fn admin_kilidi(&self, cfg: &Config, req: &Req, o: &Oturum, now: f64) -> Resp {
@@ -1016,7 +1014,7 @@ impl Panel {
                 .map(|s| format!("<li><b>{}</b><span>{} · {}</span></li>", h(&format!("{} {}", s.ad, s.soyad)), h(&s.ip), h(&kisa_zaman(&s.start, &today))))
                 .collect(),
             bagli.len(),
-            "Şu an bağlı cihaz yok.",
+            "Şu an bağlı kullanıcı yok.",
             "/cihazlar#oturumlar",
         );
         let yeni_html = liste(
@@ -1039,9 +1037,9 @@ impl Panel {
         let body = format!(
             "<nav class=\"kisayol\" aria-label=\"Kısayollar\">{kisayol}</nav>{uyari_html}\
              <div class=\"ozet-izgara\">\
-             <section class=\"kutu\"><h2>Bağlı Cihazlar</h2>{bagli_html}</section>\
+             <section class=\"kutu\"><h2>Bağlı Kullanıcılar</h2>{bagli_html}</section>\
              <div class=\"ozet-sag\">\
-             <section class=\"kutu\"><dl class=\"sayilar\"><div><dt>Bağlı cihaz</dt><dd>{}</dd></div>\
+             <section class=\"kutu\"><dl class=\"sayilar\"><div><dt>Bağlı kullanıcı</dt><dd>{}</dd></div>\
              <div><dt>Bugün farklı kullanıcı</dt><dd>{}</dd></div><div><dt>Bugün yeni üye</dt><dd>{}</dd></div></dl></section>\
              <section class=\"kutu\"><h2>Bugün Yeni Üyeler</h2>{yeni_html}</section>\
              </div></div>\
@@ -1083,9 +1081,9 @@ impl Panel {
         let body = format!(
             "<p class=\"not\">Bağlantısı kesilen cihaz internete çıkamaz; yeniden SMS ile giriş yapması gerekir. \
              <b>Bağlı</b>: cihaz son 5 dakikada ağda görüldü.</p><p class=\"not\">Bu sayfadaki her görüntüleme, arama ve indirme kimin yaptığıyla birlikte kaydedilir ve hizmet sağlayıcı tarafından denetlenir.</p>{}",
-            table(&["Durum", "Telefon", "Ad soyad", "MAC", "IP", "Başlangıç", "Kalan", ""], &rows, "Bağlı cihaz yok")
+            table(&["Durum", "Telefon", "Ad soyad", "MAC", "IP", "Başlangıç", "Kalan", ""], &rows, "Bağlı kullanıcı yok")
         );
-        self.page(cfg, req, Some(o), "Bağlı cihazlar", &body)
+        self.page(cfg, req, Some(o), "Bağlı kullanıcılar", &body)
     }
 
     fn at(&self, cfg: &Config, req: &Req, o: &Oturum, now: f64) -> Resp {
@@ -1970,13 +1968,13 @@ mod tests {
 
         let s = e.p.handle(&req("GET", "/", &[], Some(&tok))).body;
         let kutu = |baslik: &str| s.split(&format!("<h2>{baslik}</h2>")).nth(1).unwrap().split("</section>").next().unwrap().to_string();
-        let bagli = kutu("Bağlı Cihazlar");
+        let bagli = kutu("Bağlı Kullanıcılar");
         assert!(bagli.contains("<b>Ayşe Yılmaz</b><span>10.50.0.23 · 20:14</span>") && !bagli.contains("Mehmet"), "{bagli}");
         let yeni = kutu("Bugün Yeni Üyeler");
         assert!(yeni.contains("<b>Zeynep Ak</b><span>19:40</span>") && !yeni.contains("Eski"), "{yeni}");
-        assert!(s.contains("<dt>Bağlı cihaz</dt><dd>1</dd>") && s.contains("<dt>Bugün yeni üye</dt><dd>1</dd>"));
+        assert!(s.contains("<dt>Bağlı kullanıcı</dt><dd>1</dd>") && s.contains("<dt>Bugün yeni üye</dt><dd>1</dd>"));
         assert!(!s.contains("905334553132") && !s.contains("aa:bb:cc"), "özette telefon ve MAC yok");
-        for k in ["/cihazlar#oturumlar", "/kayitlar#site-ara", "/ayarlar#portal-metinleri"] {
+        for k in ["/cihazlar#oturumlar", "/kayitlar#site-ara", "/ayarlar#isletme"] {
             assert!(s.contains(&format!("<a href=\"{k}\">")), "{k}");
         }
         assert!(kutu("SMS ve Disk").contains("Bugün SMS") && s.contains("for=\"menu-ac\""));
@@ -2382,12 +2380,12 @@ mod tests {
         e.p.handle(&get("/kullanicilar", &[("q", "ayşe")], &tok));
         assert!(e.p.handle(&get("/kullanicilar", &[], &tok)).body.contains("hizmet sağlayıcı tarafından denetlenir"));
         let r = e.p.handle(&get("/panel-hareketleri", &[], &tok)); // sahip kendi izini admin parolası olmadan göremez/silemez
-        assert!(r.body.contains("action=\"/admin-kilidi\"") && !r.body.contains("Bağlı cihazlara baktı"));
+        assert!(r.body.contains("action=\"/admin-kilidi\"") && !r.body.contains("Bağlı kullanıcılara baktı"));
         assert!(!e.p.handle(&get("/", &[], &tok)).body.contains("/panel-hareketleri"));
         e.p.handle(&req("POST", "/cikis", &[("csrf", &csrf)], Some(&tok)));
         let (atok, _) = setup_and_login(&e, "admin", "hizmet-parola-1");
         let page = e.p.handle(&get("/panel-hareketleri", &[("kim", MUSTERI), ("kisisel", "1")], &atok)).body;
-        assert!(page.contains("Bağlı cihazlara baktı") && page.contains("Kullanıcı listesine baktı") && page.contains("ara=ayşe"));
+        assert!(page.contains("Bağlı kullanıcılara baktı") && page.contains("Kullanıcı listesine baktı") && page.contains("ara=ayşe"));
         assert!(!page.contains(">Giriş<")); // yalnızca kişisel veri filtresi
         let page = e.p.handle(&get("/panel-hareketleri", &[], &atok)).body;
         assert!(page.contains("İşletme sahibi") && page.contains(">7<") && page.contains("Çıkış")); // müşteri: 7 kişisel veri bakışı (bağlı cihazlar + 2 liste + arama + 3 özet: iki girişte ve yukarıda)
