@@ -2344,6 +2344,7 @@ mod tests {
             hostapd: e.root.join("hostapd.conf"),
             issue: e.root.join("issue"),
             durum: e.root.join("durum"),
+            hiz_uygulanan: e.root.join("hiz_uygulanan"),
         };
         let (tok, csrf) = setup_and_login(&e, "mudur", "sahip-parola-12"); // kafe sahibi de port değiştirebilir
         let page = e.p.handle(&req("GET", "/portlar", &[], Some(&tok))).body;

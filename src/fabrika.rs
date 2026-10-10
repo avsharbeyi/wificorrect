@@ -185,6 +185,7 @@ mod tests {
             hostapd: root.join("hostapd.conf"),
             issue: root.join("issue"),
             durum: root.join("durum"),
+            hiz_uygulanan: root.join("hiz_uygulanan"),
         };
         ag::save(&y.ag, &Ag { wan: "enp1s0".into(), lan: vec!["enp3s0".into()], ..Ag::default() }).unwrap();
         let calls: Arc<Mutex<Vec<String>>> = Arc::default();
@@ -265,6 +266,7 @@ mod tests {
             hostapd: root.join("hostapd.conf"),
             issue: root.join("issue"),
             durum: root.join("durum"),
+            hiz_uygulanan: root.join("hiz_uygulanan"),
         };
         let r = fabrika(&cfg, &cfg_path.to_string_lossy(), &root.join("hesaplar.json").to_string_lossy(), &root.join("merkez.json"),
                         &|_: &crate::merkez::Merkez| Ok(()), &root.join("yasak.conf"), &y, 1_791_000_000.0, &runner);

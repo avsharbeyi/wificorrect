@@ -191,9 +191,14 @@ pub struct Kaydedici {
     /// son uzlaştırmanın hatası (trafik.json'a, panelde uyarı) ve zamanı
     hiz_hata: Option<String>,
     hiz_hata_zaman: f64,
+    /// sayaç tablosu son turda var mıydı (yalnızca değişince günlüğe) ve son tc kök denetimi
+    hiz_tablo_var: Option<bool>,
+    kok_son: f64,
     pub trafik_yolu: PathBuf,
     pub uygulanan_yolu: PathBuf,
     pub nft_f: Box<dyn Fn(&str) -> bool + Send + Sync>,
+    /// komut çıktısı (nft setleri, tc kökleri); testte sahte
+    pub capture: Box<dyn Fn(&[&str]) -> String + Send + Sync>,
 }
 
 impl Kaydedici {
@@ -221,9 +226,12 @@ impl Kaydedici {
             gun_son: f64::NEG_INFINITY,
             hiz_hata: None,
             hiz_hata_zaman: f64::NEG_INFINITY,
+            hiz_tablo_var: None,
+            kok_son: f64::NEG_INFINITY,
             trafik_yolu: trafik::DURUM_YOLU.into(),
             uygulanan_yolu: hiz::UYGULANAN_YOLU.into(),
             nft_f: Box::new(hiz::nft_dosya),
+            capture: Box::new(ortak::capture),
         }
     }
 
@@ -392,27 +400,59 @@ impl Kaydedici {
 
     /// `inet wfc_hiz` yoksa (paket güncellemesi sonrası ilk çalışma) yalnızca o tablo yüklenir; diğer tablolara dokunulmaz.
     /// Yeni tablonun sınıf zinciri boş olduğundan parmak izi silinir: sonraki uzlaştırma kuralları yeniden yazar.
-    fn hiz_tablosu(&mut self) {
+    /// Yüklenemezse `false`: o turda yavaşlatma adımı hiç çalışmaz (tc'ye dokunulmaz); günlüğe yalnızca durum değişince.
+    fn hiz_tablosu(&mut self) -> bool {
         let c = |a: &[&str]| a.iter().map(|s| s.to_string()).collect::<Vec<_>>();
-        if (self.runner)(&c(&["nft", "list", "table", "inet", "wfc_hiz"])) {
+        let var = (self.runner)(&c(&["nft", "list", "table", "inet", "wfc_hiz"])) || {
+            let ok = (self.runner)(&c(&["nft", "-f", HIZ_NFT]));
+            if ok {
+                let _ = std::fs::remove_file(&self.uygulanan_yolu);
+            }
+            ok
+        };
+        if self.hiz_tablo_var != Some(var) {
+            if !var {
+                eprintln!("kaydedici: {HIZ_NFT} yüklenemedi; hız ölçümü ve yavaşlatma duruyor");
+            } else if self.hiz_tablo_var.is_some() {
+                eprintln!("kaydedici: {HIZ_NFT} yüklendi");
+            }
+            self.hiz_tablo_var = Some(var);
+        }
+        if !var {
+            self.hiz_hata = Some("Yavaşlatma uygulanamadı: hız tablosu (hiz.nft) yüklenemedi".into());
+            self.hiz_hata_zaman = f64::NEG_INFINITY; // tablo gelince hemen uzlaştır
+        }
+        var
+    }
+
+    /// tc kökleri dışarıdan gittiyse (arayüz yeniden kuruldu, elle silindi) plan izi silinir: sonraki uzlaştırma yeniden kurar.
+    /// Plan her zaman HTB kökü kurduğundan iki arayüzde de `htb 1:` beklenir.
+    fn kok_denetle(&mut self, wan: &str) {
+        if !self.uygulanan_yolu.exists() {
             return;
         }
-        let _ = std::fs::remove_file(&self.uygulanan_yolu);
-        if !(self.runner)(&c(&["nft", "-f", HIZ_NFT])) {
-            eprintln!("kaydedici: {HIZ_NFT} yüklenemedi");
+        let lan = self.cfg.main.iface.clone();
+        if [lan.as_str(), wan].iter().any(|d| !(self.capture)(&["tc", "qdisc", "show", "dev", d, "root"]).contains("htb 1:")) {
+            let _ = std::fs::remove_file(&self.uygulanan_yolu);
         }
     }
 
-    /// Gerçek 5 sn turu: tablo → sayaçlar → uzlaştırma → trafik.json. Uzlaştırma hata verdiyse en çok dakikada bir
-    /// yeniden denenir (her denemede tc kökleri silinip kurulur; 5 sn'de bir kuyrukları boşaltmasın).
+    /// Gerçek 5 sn turu: tablo → sayaçlar → (30 sn'de bir kök denetimi) → uzlaştırma → trafik.json. Uzlaştırma hata verdiyse
+    /// en çok dakikada bir yeniden denenir (her denemede tc kökleri silinip kurulur; 5 sn'de bir kuyrukları boşaltmasın).
     fn hiz_turu(&mut self, now: f64) {
-        self.hiz_tablosu();
-        let set = |ad: &str| ortak::capture(&["nft", "-j", "list", "set", "inet", "wfc_hiz", ad]);
+        let tablo = self.hiz_tablosu();
+        let set = |ad: &str| (self.capture)(&["nft", "-j", "list", "set", "inet", "wfc_hiz", ad]);
         let (indir, yukle) = (set("indir"), set("yukle"));
-        if self.hiz_hata.is_none() || now - self.hiz_hata_zaman >= 60.0 {
+        if tablo {
             let wan = crate::ag::load(&self.ag_path).wan;
-            if self.hiz_adimi(&wan).is_err() {
-                self.hiz_hata_zaman = now;
+            if now - self.kok_son >= 30.0 {
+                self.kok_son = now;
+                self.kok_denetle(&wan);
+            }
+            if self.hiz_hata.is_none() || now - self.hiz_hata_zaman >= 60.0 {
+                if self.hiz_adimi(&wan).is_err() {
+                    self.hiz_hata_zaman = now;
+                }
             }
         }
         self.trafik_adimi(now, &indir, &yukle);
@@ -733,6 +773,7 @@ mod tests {
         k.trafik_yolu = root.join("trafik.json");
         k.uygulanan_yolu = root.join("hiz_uygulanan");
         k.nft_f = Box::new(|_: &str| true);
+        k.capture = Box::new(|_: &[&str]| String::new());
         k.leases = [("10.50.0.40", "aa:bb:cc:dd:ee:40"), ("10.50.0.2", "aa:bb:cc:dd:ee:99")]
             .into_iter()
             .map(|(a, b)| (a.to_string(), b.to_string()))
@@ -1085,4 +1126,60 @@ mod tests {
         assert_eq!(k.trafik_adimi(T + 5.0, "", "").hiz_hata, None);
     }
 
+    /// hiz_turu için: runner'da tablo var/yok ve tc çağrıları sayılır, tc kökü çıktısı ayarlanır.
+    fn hiz_kur(k: &mut Kaydedici, root: &std::path::Path) -> (Arc<Mutex<bool>>, Arc<Mutex<Vec<String>>>, Arc<Mutex<String>>) {
+        let mut s = crate::hiz::Sinirlar::new();
+        s.insert(M1.into(), crate::hiz::Sinir { hiz: 5, ad: "A B".into(), zaman: String::new(), kim: "y".into() });
+        crate::hiz::kaydet(&k.cfg.main.state_root, &s).unwrap();
+        k.ag_path = root.join("yok-ag.toml"); // WAN enp3s0
+        let (tablo, calls, kok) = (Arc::new(Mutex::new(true)), Arc::new(Mutex::new(Vec::new())), Arc::new(Mutex::new(String::new())));
+        let (t2, c2, k2) = (tablo.clone(), calls.clone(), kok.clone());
+        k.runner = Box::new(move |c: &[String]| {
+            c2.lock().unwrap().push(c.join(" "));
+            c[0] != "nft" || *t2.lock().unwrap()
+        });
+        k.capture = Box::new(move |c: &[&str]| if c[0] == "tc" { k2.lock().unwrap().clone() } else { String::new() });
+        (tablo, calls, kok)
+    }
+
+    fn tc_sayisi(calls: &Arc<Mutex<Vec<String>>>) -> usize {
+        calls.lock().unwrap().iter().filter(|c| c.starts_with("tc ")).count()
+    }
+
+    #[test]
+    fn hiz_tablosu_yuklenemezse_tc_ye_dokunulmaz() {
+        let (mut k, root, _) = setup();
+        let (tablo, calls, _) = hiz_kur(&mut k, &root);
+        *tablo.lock().unwrap() = false; // nft list table ve nft -f başarısız
+        for i in 0..30 {
+            k.hiz_turu(T + 5.0 * i as f64);
+        }
+        assert_eq!(tc_sayisi(&calls), 0);
+        assert!(calls.lock().unwrap().iter().any(|c| c == "nft -f /etc/wificorrect/hiz.nft")); // yüklemeyi denemeye devam
+        let d = crate::trafik::oku(&k.trafik_yolu).unwrap();
+        assert!(d.hiz_hata.unwrap().contains("hiz.nft"));
+        // tablo gelince beklemeden uzlaştırılır
+        *tablo.lock().unwrap() = true;
+        k.hiz_turu(T + 200.0);
+        assert!(tc_sayisi(&calls) > 0);
+        assert_eq!(crate::trafik::oku(&k.trafik_yolu).unwrap().hiz_hata, None);
+    }
+
+    #[test]
+    fn tc_koku_gidince_yeniden_kurulur() {
+        let (mut k, root, _) = setup();
+        let (_, calls, kok) = hiz_kur(&mut k, &root);
+        *kok.lock().unwrap() = "qdisc htb 1: root refcnt 2 r2q 10 default 0x1 direct_packets_stat 0".into();
+        k.hiz_turu(T);
+        let n = tc_sayisi(&calls);
+        assert!(n > 0 && k.uygulanan_yolu.exists());
+        k.hiz_turu(T + 5.0);
+        k.hiz_turu(T + 30.0);
+        assert_eq!(tc_sayisi(&calls), n); // kökler yerinde: komut yok
+        *kok.lock().unwrap() = "qdisc fq_codel 0: root refcnt 2".into(); // köprü yeniden kuruldu
+        k.hiz_turu(T + 35.0);
+        assert_eq!(tc_sayisi(&calls), n); // denetim 30 sn'de bir
+        k.hiz_turu(T + 61.0);
+        assert!(tc_sayisi(&calls) > n);
+    }
 }

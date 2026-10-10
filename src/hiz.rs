@@ -83,6 +83,9 @@ pub fn parmak_izi(p: &Plan) -> String {
     s
 }
 
+/// Hata anında: hiç kimse sınıflandırılmasın.
+pub const SINIF_BOSALT: &str = "flush chain inet wfc_hiz sinif\n";
+
 /// `nft -f` için geçici dosya (gerçek `nft_f`).
 const NFT_GECICI: &str = "/run/wificorrect/hiz.nft.tmp";
 
@@ -116,16 +119,22 @@ pub fn uygula(
         return Ok(false);
     }
     let _ = std::fs::remove_file(uygulanan);
+    // Yarım kalırsa güvenli tarafa: eski sınıf kuralları eski IP'leri yeni plandaki (başkasının) sınıfına yollayabilir;
+    // sınıf zinciri boşaltılır → kimse yavaşlatılmaz (yavaşlatılmamış biri asla yavaşlamasın).
+    let acik_birak = |hata: String| {
+        nft_f(SINIF_BOSALT);
+        Err(format!("Yavaşlatma uygulanamadı: {hata}"))
+    };
     for d in [lan, wan] {
         runner(&["tc".into(), "qdisc".into(), "del".into(), "dev".into(), d.into(), "root".into()]); // kök yoksa hata: önemsiz
     }
     for c in &p.tc {
         if !runner(c) {
-            return Err(format!("Yavaşlatma uygulanamadı: {}", c.join(" ")));
+            return acik_birak(c.join(" "));
         }
     }
     if !nft_f(&p.nft) {
-        return Err("Yavaşlatma uygulanamadı: nft sınıf kuralları yüklenemedi".into());
+        return acik_birak("nft sınıf kuralları yüklenemedi".into());
     }
     ortak::write_atomic(uygulanan, iz.as_bytes()).map_err(|e| format!("Yavaşlatma uygulandı, kaydı yazılamadı: {e}"))?;
     Ok(true)
@@ -333,6 +342,41 @@ mod tests {
         assert!(uygula(&cfg, "enp3s0", &ip(M1, "10.50.0.24"), &*r, &nft_f, &yol).is_err());
         *tc_ok.lock().unwrap() = true;
         assert_eq!(uygula(&cfg, "enp3s0", &ip(M1, "10.50.0.23"), &*r, &nft_f, &yol), Ok(true));
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn yarim_kalan_uygulama_sinif_zincirini_bosaltir() {
+        // A (M1) kaldırıldı, B (M2) eklendi: yeni planda B 1:10'a düşer; WAN tc'si başarısız olursa eski "A → 1:10" kuralı
+        // kalmamalı (A, B'nin 2 Mb'lik sınıfına girerdi)
+        let (cfg, root) = kur("yarim");
+        let tc_ok = Arc::new(Mutex::new(true));
+        let (_calls, r) = runner(tc_ok.clone());
+        let nftler = RefCell::new(Vec::<String>::new());
+        let nft_ok = RefCell::new(true);
+        let nft_f = |t: &str| {
+            nftler.borrow_mut().push(t.to_string());
+            *nft_ok.borrow()
+        };
+        let yol = root.join("uygulanan");
+        let mut s = oku(&cfg.main.state_root);
+        s.remove(M2);
+        kaydet(&cfg.main.state_root, &s).unwrap();
+        let mut ipler = ip(M1, "10.50.0.23");
+        ipler.insert(M2.into(), "10.50.0.24".into());
+        assert_eq!(uygula(&cfg, "enp3s0", &ipler, &*r, &nft_f, &yol), Ok(true));
+        let mut s = oku(&cfg.main.state_root);
+        s.remove(M1);
+        s.insert(M2.into(), Sinir { hiz: 2, ad: String::new(), zaman: String::new(), kim: "y".into() });
+        kaydet(&cfg.main.state_root, &s).unwrap();
+        let r2 = |c: &[String]| !(c[0] == "tc" && c[2] != "del" && c.contains(&"enp3s0".to_string()));
+        assert!(uygula(&cfg, "enp3s0", &ipler, &r2, &nft_f, &yol).is_err());
+        assert_eq!(nftler.borrow().last().unwrap(), SINIF_BOSALT);
+        // nft yüklemesi başarısız olsa da boşaltma denenir
+        *nft_ok.borrow_mut() = false;
+        assert!(uygula(&cfg, "enp3s0", &ipler, &*r, &nft_f, &yol).is_err());
+        let n = nftler.borrow();
+        assert!(n[n.len() - 2].contains("ip daddr 10.50.0.24 ") && n[n.len() - 1] == SINIF_BOSALT);
         let _ = std::fs::remove_dir_all(&root);
     }
 }
