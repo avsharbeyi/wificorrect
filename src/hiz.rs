@@ -7,7 +7,6 @@ use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
-#[allow(dead_code)] // panel (sonraki adım)
 pub const HIZLAR: [u32; 5] = [1, 2, 5, 10, 20];
 /// Uygulanmış planın parmak izi (yeniden başlatmada silinir; bkz. `uygula`).
 pub const UYGULANAN_YOLU: &str = "/run/wificorrect/hiz_uygulanan";
@@ -36,7 +35,6 @@ pub fn oku(state_root: &str) -> Sinirlar {
         .unwrap_or_default()
 }
 
-#[allow(dead_code)] // panel (sonraki adım)
 pub fn kaydet(state_root: &str, s: &Sinirlar) -> std::io::Result<()> {
     let data = serde_json::to_vec_pretty(s).map_err(std::io::Error::other)?;
     ortak::write_atomic(&yol(state_root), &data)
