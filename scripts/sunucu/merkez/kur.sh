@@ -11,7 +11,7 @@ install -d -m 755 $L /var/lib/wificorrect /var/lib/wificorrect/istatistik
 install -d -o root -g wcpanel -m 750 /var/lib/wificorrect/detay /var/lib/wificorrect/kuyruk-sonuc
 install -d -o wcpanel -g wcpanel -m 700 /var/lib/wificorrect/merkez /var/lib/wificorrect/kuyruk
 rm -f $L/panel.py $L/panel_auth.py $L/hesap.py   # eski kafe paneli
-install -m 644 common.py ozet.py detay.py guvenlik.py veri.py kayitlar.py web.py musteri.py yonetim.py api.py $L/
+install -m 644 common.py ozet.py detay.py guvenlik.py veri.py kayitlar.py web.py musteri.py yonetim.py api.py cihaz.py $L/
 install -m 755 merkez.py istatistik.py durum.py kuyruk.py yonetici.py $L/
 ln -sf $L/istatistik.py /usr/local/sbin/wc-istatistik
 ln -sf $L/durum.py /usr/local/sbin/wc-durum
@@ -20,7 +20,10 @@ ln -sf $L/yonetici.py /usr/local/sbin/wc-yonetici
 rm -f /usr/local/sbin/wc-hesap
 install -m 644 wc-merkez.service wc-kuyruk.path wc-kuyruk.service wc-durum.service wc-durum.timer \
   wc-istatistik.service wc-istatistik.timer /etc/systemd/system/
+# geçersiz Caddyfile canlı siteleri düşürmesin: önce doğrula, canlı dosyaya dokunmadan dur
+caddy validate --adapter caddyfile --config Caddyfile >/dev/null 2>&1 || { echo "HATA: Caddyfile geçersiz, kurulum durdu (canlı Caddyfile değişmedi):" >&2; caddy validate --adapter caddyfile --config Caddyfile >&2 || true; exit 1; }
 [ -f /etc/caddy/Caddyfile ] && cp -n /etc/caddy/Caddyfile /etc/caddy/Caddyfile.eski
+[ -f /etc/caddy/Caddyfile ] && cp -p /etc/caddy/Caddyfile "/etc/caddy/Caddyfile.yedek-$(date +%Y%m%d-%H%M%S)"
 install -m 644 Caddyfile /etc/caddy/Caddyfile
 install -m 755 hotspot-arsiv-saklama /etc/cron.daily/
 install -m 644 fail2ban-wc-merkez-filtre.conf /etc/fail2ban/filter.d/wc-merkez.conf

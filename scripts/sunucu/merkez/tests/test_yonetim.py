@@ -49,9 +49,14 @@ def test_yeni_musteri_parola_bir_kez():
     with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
         app, v, _, c, _ = kur(tmp)
         f = Y.al(app, "/yeni", c)
-        r = Y.gonder(app, "/yeni", c, {"csrf": Y.csrf(f), "not": "Bocafe <Göztepe>"})
+        assert 'name="parola"' in f[2].decode()
+        r = Y.gonder(app, "/yeni", c, {"csrf": Y.csrf(f), "not": "x", "parola": "kisa", "parola2": "kisa"})
+        assert r[0] == 400 and v.musteriler() == []  # parola en az 10 karakter
+        r = Y.gonder(app, "/yeni", c, {"csrf": Y.csrf(f), "not": "x", "parola": "musteri-parola-1", "parola2": "baska-parola-1"})
+        assert r[0] == 400 and v.musteriler() == []  # iki parola aynı olmalı
+        r = Y.gonder(app, "/yeni", c, {"csrf": Y.csrf(f), "not": "Bocafe <Göztepe>", "parola": "musteri-parola-1", "parola2": "musteri-parola-1"})
         numara, pw = re.findall(r'class="sir">([^<]+)<', r[2].decode())
-        assert r[0] == 200 and re.fullmatch(r"[1-9][0-9]{6}", numara) and v.parola_dogrula(int(numara), pw)
+        assert r[0] == 200 and re.fullmatch(r"[1-9][0-9]{6}", numara) and pw == "musteri-parola-1" and v.parola_dogrula(int(numara), pw)
         assert pw in Y.al(app, f"/m/{numara}", c)[2].decode()  # 2026-10-04: parola yönetimde görünür (kullanıcı isteği)
         assert "Bocafe &lt;Göztepe&gt;" in Y.al(app, "/", c)[2].decode()
         assert v.hareketler(int(numara))[0]["olay"] == "MUSTERI_ACILDI"
@@ -80,9 +85,8 @@ def test_parola_sifirla_serbest_birak_uyelik():
         v.cihaz_bagla(n, WG, SSH)
         f = Y.al(app, f"/m/{n}", c)
         t = Y.csrf(f)
-        r = Y.gonder(app, f"/m/{n}/parola-sifirla", c, {"csrf": t})
-        yeni = re.search(r'class="sir">([^<]+)<', r[2].decode()).group(1)
-        assert v.parola_dogrula(n, yeni) and not v.parola_dogrula(n, pw)
+        r = Y.gonder(app, f"/m/{n}/parola-sifirla", c, {"csrf": t, "parola": "yeni-musteri-1", "parola2": "yeni-musteri-1"})
+        assert r[0] == 303 and v.parola_dogrula(n, "yeni-musteri-1") and not v.parola_dogrula(n, pw)
         assert Y.gonder(app, f"/m/{n}/serbest", c, {"csrf": t, "onay": "123"})[0] == 400  # numara yazılmadı
         assert Y.gonder(app, f"/m/{n}/serbest", c, {"csrf": t, "onay": str(n)})[0] == 303
         assert v.bagli_cihaz(n)["durum"] == "serbest_birakiliyor" and isler == []
@@ -195,11 +199,46 @@ def test_sifirlama_sayfasi_ve_lisans_tarihi_kaydi():
         app, v, _, c, _ = kur(tmp)
         n, _ = v.musteri_ekle()
         t = Y.csrf(Y.al(app, f"/m/{n}", c))
-        s = Y.gonder(app, f"/m/{n}/parola-sifirla", c, {"csrf": t})[2].decode()
-        assert "yalnızca şimdi" not in s and "müşteri sayfasında" in s
+        r = Y.gonder(app, f"/m/{n}/parola-sifirla", c, {"csrf": t, "parola": "kisa", "parola2": "kisa"})
+        assert r[0] == 400 and "10" in r[2].decode()  # kısa parola reddedilir, rastgele parola üretilmez
         Y.gonder(app, f"/m/{n}/lisans", c, {"csrf": t, "islem": "tarih", "tarih": "20270101"})
         assert v.hareketler(n)[0]["ayrinti"] == "bitis=2027-01-01"  # girilen değil, kaydedilen tarih
         assert "gününden sonra" in Y.al(app, f"/m/{n}", c)[2].decode()
+
+
+def test_tek_admin_parolasi_sayfasi():
+    with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
+        app, v, _, c, _ = kur(tmp)
+        n, _ = v.musteri_ekle()
+        v.cihaz_bagla(n, WG, SSH)
+        assert f"/m/{n}/admin-parola" not in Y.al(app, f"/m/{n}", c)[2].decode()  # cihaz başına admin parolası yok
+        s = Y.al(app, "/admin-parolasi", c)[2].decode()
+        assert 'href="/admin-parolasi"' in Y.al(app, "/", c)[2].decode() and "tanımsız" in s
+        t = Y.csrf(Y.al(app, "/admin-parolasi", c))
+        r = Y.gonder(app, "/admin-parolasi", c, {"csrf": t, "parola": "benim-admin-parolam", "parola2": "baska"})
+        assert r[0] == 400 and v.admin_parolasi() is None
+        Y.gonder(app, "/admin-parolasi", c, {"csrf": t, "parola": "benim-admin-parolam", "parola2": "benim-admin-parolam"})
+        a = v.admin_parolasi()
+        assert a is not None and "tanımlı" in Y.al(app, "/admin-parolasi", c)[2].decode()
+        assert all("benim-admin-parolam" not in h["ayrinti"] for h in v.hareketler())
+        assert any(h["olay"] == "ADMIN_PAROLASI" for h in v.hareketler())
+
+
+def test_sms_ayarlari_sayfasi():
+    with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
+        app, v, _, c, _ = kur(tmp)
+        s = Y.al(app, "/sms", c)[2].decode()
+        assert 'name="usercode"' in s and 'name="password"' in s
+        t = Y.csrf(Y.al(app, "/sms", c))
+        r = Y.gonder(app, "/sms", c, {"csrf": t, "usercode": "850", "msgheader": "BASLIK"})  # deneme modu kapalı, şifre yok
+        assert r[0] == 400 and "password" in r[2].decode() and v.sms_ayari() is None
+        Y.gonder(app, "/sms", c, {"csrf": t, "usercode": "8503027084", "password": "gizli-1", "msgheader": "gztp.blgsyr"})
+        assert v.sms_ayari()["password"] == "gizli-1" and v.sms_ayari()["mock"] is False
+        s = Y.al(app, "/sms", c)[2].decode()
+        assert "gizli-1" not in s and "tanımlı" in s  # şifre geri gösterilmez
+        Y.gonder(app, "/sms", c, {"csrf": t, "usercode": "8503027084", "password": "", "msgheader": "gztp.blgsyr", "mock": "1"})
+        assert v.sms_ayari()["password"] == "gizli-1" and v.sms_ayari()["mock"] is True  # boş şifre = aynı kalır
+        assert any(h["olay"] == "SMS_AYARI" and "gizli-1" not in h["ayrinti"] for h in v.hareketler())
 
 
 if __name__ == "__main__":

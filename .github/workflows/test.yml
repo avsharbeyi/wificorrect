@@ -24,3 +24,14 @@ jobs:
         with:
           python-version: "3.13"
       - run: sh scripts/sunucu/merkez/tests/hepsi.sh python
+
+  paket:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - run: sudo apt-get update -q && sudo apt-get install -y -q wireguard-tools openssh-client
+      - uses: dtolnay/rust-toolchain@1.85
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo build --release --locked
+      - run: sh scripts/paket.sh target/release/wificorrect 0.0.0-ci dist
+      - run: sh scripts/paket-test.sh dist/wificorrect_0.0.0-ci_amd64.deb

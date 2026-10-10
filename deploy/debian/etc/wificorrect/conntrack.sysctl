@@ -3,3 +3,7 @@
 net.netfilter.nf_conntrack_acct = 1
 net.netfilter.nf_conntrack_timestamp = 1
 net.netfilter.nf_conntrack_max = 65536
+# conntrack -E'nin olay soketi varsayılan alma tamponuyla açılır: "-b" yalnızca olay almayan ikinci sokete uygulanıyor
+# (conntrack-tools 1.4.8, cihazda ölçüldü 2026-10-05: olay soketi 208 KB, 244 olay düştü → LOG_BOSLUK).
+# Kaydedici bu ayardan sonra başlar; çekirdek değeri ikiye katlar (16 MB).
+net.core.rmem_default = 8388608

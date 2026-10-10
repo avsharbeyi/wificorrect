@@ -29,6 +29,25 @@ def _epoch(iso):
         return None
 
 
+def parola_alanlari(etiket="Parola"):
+    """Yönetici parolayı iki kez yazar (yanlış yazılan parola müşteriye/cihaza gitmesin)."""
+    return (f'<label for="p1">{etiket} (en az {guvenlik.EN_AZ} karakter)</label>'
+            '<input id="p1" name="parola" type="password" autocomplete="new-password" required>'
+            '<label for="p2">Parola (tekrar)</label>'
+            '<input id="p2" name="parola2" type="password" autocomplete="new-password" required>')
+
+
+def parola_formdan(form):
+    """Dönen: (parola, hata). Kısa ya da iki alan farklıysa hata."""
+    pw, pw2 = form.get("parola", ""), form.get("parola2", "")
+    if len(pw) < guvenlik.EN_AZ:
+        return None, f"Parola en az {guvenlik.EN_AZ} karakter olmalı."
+    if pw != pw2:
+        return None, "İki parola aynı değil."
+    return pw, ""
+
+
+
 def once(sn):
     dk = int(sn) // 60
     return f"{dk} dk önce" if dk < 120 else (f"{dk // 60} saat önce" if dk < 2880 else f"{dk // 1440} gün önce")
@@ -69,7 +88,7 @@ class Yonetim(web.Taban):
 
     def menu(self, ot):
         return ('<a href="/">Müşteriler</a><a href="/yeni">Yeni müşteri</a><a href="/hareketler">Hareketler</a>'
-                '<a href="/eski-arsivler">Eski arşivler</a><a href="/hesabim">Hesabım</a>')
+                '<a href="/sms">SMS ayarları</a><a href="/admin-parolasi">Admin parolası</a><a href="/eski-arsivler">Eski arşivler</a><a href="/hesabim">Hesabım</a>')
 
     # --- yardımcılar ---
     def _durum(self):
@@ -114,6 +133,10 @@ class Yonetim(web.Taban):
             return yanit_html(self.sayfa("Hareketler", kart("<h1>Hareketler</h1>" + self._hareket_tablosu(self.veri.hareketler())), ot, genis=True))
         if yol == "/eski-arsivler":
             return self.eski_arsivler(ot, yontem, form, ip)
+        if yol == "/sms":
+            return self.sms(ot, yontem, form, ip)
+        if yol == "/admin-parolasi":
+            return self.admin_parolasi(ot, yontem, form, ip)
         if yol == "/hesabim":
             return self.hesabim(ot, yontem, form, ip)
         m = re.fullmatch(r"/m/([0-9]{7})(/.*)?", yol)
@@ -123,12 +146,12 @@ class Yonetim(web.Taban):
         if (yontem, alt) == ("GET", "/"):
             return self.musteri_sayfasi(ot, n)
         if (yontem, alt) == ("POST", "/parola-sifirla"):
-            pw = self.veri.parola_sifirla(n)
+            pw, hata = parola_formdan(form)
+            if hata:
+                return yanit_html(self.mesaj(ot, "Parola kaydedilmedi", hata), 400)
+            self.veri.parola_koy(n, pw)
             self.veri.hareket("admin", ip, "PAROLA_SIFIRLANDI", n)
-            return yanit_html(self.sayfa("Parola sıfırlandı", kart(
-                f'<h1>Müşteri {n}: yeni parola</h1><p>Parola</p><p class="sir">{e(pw)}</p>'
-                '<p class="alt">Parola müşteri sayfasında da görünür. Merkezi panelde hemen, cihazda ertesi sabah '
-                f'06:00 eşitlemesinden sonra geçerlidir.</p><p><a href="/m/{n}">← Müşteri sayfası</a></p>'), ot))
+            return yonlendir(f"/m/{n}")
         if (yontem, alt) == ("POST", "/serbest"):
             return self.serbest(ot, n, form, ip)
         if (yontem, alt) == ("POST", "/lisans"):
@@ -188,8 +211,12 @@ class Yonetim(web.Taban):
                 '<h1>Yeni müşteri</h1><form method="post" action="/yeni">'
                 f'<input type="hidden" name="csrf" value="{e(ot["csrf"])}">'
                 '<label for="n">Not (isteğe bağlı, yalnızca siz görürsünüz)</label>'
-                '<input id="n" name="not" maxlength="200" placeholder="ör. Ahmet Bey, Kadıköy"><button>Oluştur</button></form>'), ot))
-        n, pw = self.veri.musteri_ekle(form.get("not", ""))
+                '<input id="n" name="not" maxlength="200" placeholder="ör. Ahmet Bey, Kadıköy">'
+                + parola_alanlari("Müşteri parolası") + '<button>Oluştur</button></form>'), ot))
+        pw, hata = parola_formdan(form)
+        if hata:
+            return yanit_html(self.mesaj(ot, "Müşteri açılmadı", hata), 400)
+        n, pw = self.veri.musteri_ekle(form.get("not", ""), parola=pw)
         self.veri.hareket("admin", ip, "MUSTERI_ACILDI", n)
         return yanit_html(self.sayfa("Müşteri açıldı", kart(
             f'<h1>Müşteri açıldı</h1><p>Müşteri numarası</p><p class="sir">{n}</p><p>Parola</p><p class="sir">{e(pw)}</p>'
@@ -217,8 +244,7 @@ class Yonetim(web.Taban):
                 ("Tünel adresi", e(c["tunel_ip"] or "—")), ("Sürüm", e(c["surum"] or "—")),
                 ("Bağlanma", e(c["baglanma"][:16])), ("Son eşitleme", e(c["son_eslesme"][:16] or "—")),
                 ("Son gelen gün", son), ("Arşiv", e(detay.boyut(d.get("boyut", 0)))),
-                ("Cihaz paneli", f'<a href="https://{e(c["tunel_ip"])}:8443">https://{e(c["tunel_ip"])}:8443</a> (VPN gerekli)'
-                 if c["tunel_ip"] else "—")])
+                ("Cihaz paneli", '<a href="https://panel.wificorrect.com">panel.wificorrect.com</a> (müşteri numarası ve parolasıyla)')])
             cihaz += (f'<form method="post" action="/m/{n}/serbest"><input type="hidden" name="csrf" value="{cs}">'
                       f'<label for="o">Cihazı serbest bırakmak için müşteri numarasını yazın ({n})</label>'
                       '<input id="o" name="onay" inputmode="numeric" autocomplete="off" required>'
@@ -238,7 +264,9 @@ class Yonetim(web.Taban):
                     '<p class="alt">Lisansı biten ya da askıya alınan cihaz misafirlere internet vermez; cihaz bunu bitiş gününden sonra '
                     'kendisi uygular, askıya alma/uzatma en geç 30 dakikada (askıdayken) ya da ertesi 06:00\'da cihaza iner.</p>'
                     f'<form method="post" action="/m/{n}/parola-sifirla"><input type="hidden" name="csrf" value="{cs}">'
-                    '<button>Parola sıfırla</button></form>'
+                    + parola_alanlari("Yeni müşteri parolası") +
+                    '<button>Parolayı değiştir</button><p class="alt">Merkezi panelde hemen, cihazda bir sonraki '
+                    'eşitlemeden (her gün 06:00) sonra geçerlidir.</p></form>'
                     f'<form method="post" action="/m/{n}/uyelik"><input type="hidden" name="csrf" value="{cs}">'
                     f'<input type="hidden" name="islem" value="{uyelik_dugme[0]}">'
                     + (f'<label for="u">Üyeliği bitirmek için müşteri numarasını yazın ({n})</label>'
@@ -250,6 +278,55 @@ class Yonetim(web.Taban):
                                    for x in self.veri.cihaz_gecmisi(n)], "Henüz cihaz yok.")
         return yanit_html(self.sayfa(f"Müşteri {n}", kart(f"<h1>Müşteri {n}</h1>{bilgi}") + kart(f"<h2>Cihaz</h2>{cihaz}")
                                      + kart(f"<h2>İşlemler</h2>{islemler}") + kart(f"<h2>Cihaz geçmişi</h2>{gecmis}"), ot, genis=True))
+
+    def sms(self, ot, yontem, form, ip):
+        """Bütün cihazların NetGSM ayarı. Şifre yalnızca yazılır; boş bırakılırsa eskisi kalır."""
+        eski = self.veri.sms_ayari() or {"mock": True, "usercode": "", "password": "", "msgheader": "", "appkey": ""}
+        hata = ""
+        if yontem == "POST":
+            yeni = {"mock": form.get("mock") == "1", "usercode": form.get("usercode", ""), "msgheader": form.get("msgheader", ""),
+                    "appkey": form.get("appkey", ""), "password": form.get("password", "") or eski["password"]}
+            try:
+                self.veri.sms_ayari_koy(yeni)
+            except ValueError as h:
+                hata = str(h)
+            else:
+                degisen = [k for k in ("mock", "usercode", "msgheader", "appkey", "password") if yeni[k] != eski[k]]
+                self.veri.hareket("admin", ip, "SMS_AYARI", None, "değişen=" + ",".join(degisen))  # değer yazılmaz
+                return yonlendir("/sms")
+            eski = dict(yeni, password=eski["password"])
+        cs = e(ot["csrf"])
+        sifre = "tanımlı" if eski["password"] else "tanımsız"
+        h = f'<p class="hata">{e(hata)}</p>' if hata else ""  # iç içe aynı tırnak 3.12 öncesinde sözdizimi hatası
+        icerik = (f'<h1>SMS ayarları</h1>{h}'
+                  f'<form method="post" action="/sms"><input type="hidden" name="csrf" value="{cs}">'
+                  f'<label><input type="checkbox" name="mock" value="1"{" checked" if eski["mock"] else ""}> Deneme modu (SMS gönderilmez)</label>'
+                  f'<label for="u">NetGSM kullanıcı kodu</label><input id="u" name="usercode" value="{e(eski["usercode"])}" autocomplete="off">'
+                  f'<label for="p">API şifresi ({sifre})</label><input id="p" name="password" type="password" autocomplete="new-password" '
+                  'placeholder="değiştirmek için yazın (boş = aynı kalır)">'
+                  f'<label for="b">Mesaj başlığı</label><input id="b" name="msgheader" value="{e(eski["msgheader"])}" maxlength="11">'
+                  f'<label for="a">Uygulama anahtarı (opsiyonel)</label><input id="a" name="appkey" value="{e(eski["appkey"])}">'
+                  '<button>Kaydet</button></form>'
+                  '<p class="alt">Bütün bağlı cihazlara bir sonraki eşitlemede (her gün 06:00) gider.</p>')
+        return yanit_html(self.sayfa("SMS ayarları", kart(icerik), ot), 400 if hata else 200)
+
+    def admin_parolasi(self, ot, yontem, form, ip):
+        """Bütün cihazlarda tek admin parolası (2026-10-08): yönetici belirler, kendiliğinden değişmez; yalnızca özet saklanır."""
+        if yontem == "POST":
+            pw, hata = parola_formdan(form)
+            if hata:
+                return yanit_html(self.mesaj(ot, "Admin parolası kaydedilmedi", hata), 400)
+            self.veri.admin_parolasi_koy(pw)
+            self.veri.hareket("admin", ip, "ADMIN_PAROLASI")  # parola yazılmaz
+            return yonlendir("/admin-parolasi")
+        durum = "tanımlı" if self.veri.admin_parolasi() else "tanımsız (cihazlar kendi admin parolasını korur)"
+        icerik = (f'<h1>Admin parolası</h1><p>Durum: <b>{durum}</b></p>'
+                  f'<form method="post" action="/admin-parolasi"><input type="hidden" name="csrf" value="{e(ot["csrf"])}">'
+                  + parola_alanlari("Yeni admin parolası") + '<button>Kaydet</button></form>'
+                  '<p class="alt">Bütün cihazlarda <b>admin</b> kullanıcısı bu parolayla girer. Cihazlar bir sonraki eşitlemede '
+                  '(her gün 06:00) alır; siz değiştirmedikçe değişmez. Parola burada saklanmaz, yalnızca özeti tutulur — '
+                  'unutursanız yenisini belirleyin.</p>')
+        return yanit_html(self.sayfa("Admin parolası", kart(icerik), ot))
 
     def lisans(self, ot, n, form, ip):
         islem = form.get("islem")

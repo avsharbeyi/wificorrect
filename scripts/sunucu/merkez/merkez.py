@@ -8,6 +8,8 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 sys.path.insert(0, os.path.dirname(os.path.realpath(__file__)))
 import api  # noqa: E402
+import cihaz  # noqa: E402
+import guvenlik  # noqa: E402
 import kayitlar  # noqa: E402
 import musteri  # noqa: E402
 import veri  # noqa: E402
@@ -15,7 +17,8 @@ import web  # noqa: E402
 import yonetim  # noqa: E402
 
 DB = "/var/lib/wificorrect/merkez/merkez.db"
-ALANLAR = {"yonetim.wificorrect.com": "yonetim", "panel.wificorrect.com": "musteri", "api.wificorrect.com": "api"}
+ALANLAR = {"yonetim.wificorrect.com": "yonetim", "panel.wificorrect.com": "musteri", "api.wificorrect.com": "api",
+           "cihaz.wificorrect.com": "cihaz"}
 GOVDE_SINIRI = 10_000
 GUVENLIK_BASLIKLARI = (("X-Content-Type-Options", "nosniff"), ("Referrer-Policy", "no-referrer"), ("X-Frame-Options", "DENY"),
                        ("Content-Security-Policy", "default-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:"))
@@ -80,7 +83,10 @@ class Isleyici(BaseHTTPRequestHandler):
 def main():
     os.umask(0o077)
     v, k = veri.Veri(DB), kayitlar.Kayitlar()
-    Isleyici.app = Merkez({"yonetim": yonetim.Yonetim(v, k), "musteri": musteri.Musteri(v, k), "api": api.Api(v)})
+    gecis = guvenlik.GecisBelirtecleri()
+    m = musteri.Musteri(v, k, gecis=gecis)
+    Isleyici.app = Merkez({"yonetim": yonetim.Yonetim(v, k), "musteri": m, "api": api.Api(v),
+                           "cihaz": cihaz.Cihaz(v, gecis, m)})
     srv = ThreadingHTTPServer(("127.0.0.1", 8081), Isleyici)
     srv.daemon_threads = True
     srv.serve_forever()

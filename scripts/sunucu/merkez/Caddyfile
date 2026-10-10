@@ -5,3 +5,41 @@ yonetim.wificorrect.com, panel.wificorrect.com, api.wificorrect.com {
 		-Server
 	}
 }
+
+# Uzak panel (spec 2026-10-09): müşteri cihaz panelini tünel (wfc) üstünden buradan açar.
+# Caddy 2.6.2: üst akış adresinde yer tutucu varsa şema (https://) yazılamaz → "tls" taşıma ayarıyla.
+cihaz.wificorrect.com {
+	# istemcinin kendi gönderdiği kimlik başlıkları asla geçmez
+	request_header -X-WFC-Kullanici
+	request_header -X-WFC-Cihaz
+	@merkez path /_giris /_cikis
+	handle @merkez {
+		reverse_proxy 127.0.0.1:8081
+	}
+	handle {
+		forward_auth 127.0.0.1:8081 {
+			uri /cihaz-yetki
+			copy_headers X-WFC-Kullanici X-WFC-Cihaz
+		}
+		reverse_proxy {http.request.header.X-WFC-Cihaz}:8443 {
+			transport http {
+				tls
+				tls_insecure_skip_verify
+			}
+			header_up -X-WFC-Cihaz
+			# merkez oturum çerezi (wcc) cihaza gitmesin
+			header_up Cookie "(^|;\s*)wcc=[^;]*" ""
+			# ortak kökende cihazın CSP'si yerine sabit, sıkı CSP (panelde JavaScript yok); Set-Cookie (wfc) geçer
+			header_down Content-Security-Policy "default-src 'none'; style-src 'unsafe-inline'; img-src data:; form-action 'self'; frame-ancestors 'none'"
+		}
+	}
+	# cihaz kapalı/ulaşılamaz: 502 yerine "ulaşılamıyor" sayfası (panel /cihaz?yok=1 döngüsüz gösterir)
+	handle_errors {
+		@cihazyok expression {http.error.status_code} in [502, 503, 504]
+		redir @cihazyok https://panel.wificorrect.com/cihaz?yok=1 302
+	}
+	header {
+		Strict-Transport-Security "max-age=31536000"
+		-Server
+	}
+}

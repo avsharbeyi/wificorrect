@@ -1,0 +1,54 @@
+# Etiketsiz deneme: ISO'ya dokunan her push'ta (ya da elle) .deb + kurulum ISO'su + QEMU duman testi. Sürüm oluşturmaz;
+# ISO 7 gün iş akışı eki olarak kalır.
+name: iso
+on:
+  push:
+    paths:
+      - "iso/**"
+      - "scripts/iso.sh"
+      - "scripts/iso-test.sh"
+      - "scripts/paket.sh"
+      - "scripts/paket-test.sh"
+      - "paket/**"
+      - "deploy/**"
+      - "src/**"
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - ".github/workflows/iso.yml"
+  workflow_dispatch:
+
+jobs:
+  iso:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - run: sudo apt-get update -q && sudo apt-get install -y -q xorriso debian-keyring qemu-system-x86 qemu-utils ovmf
+      - uses: dtolnay/rust-toolchain@1.85
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo build --release --locked
+      - name: ISO
+        env:
+          WFC_SSH_PUB: ${{ vars.WFC_SSH_PUB }}
+        run: |
+          s="0.0.0-${GITHUB_SHA%"${GITHUB_SHA#???????}"}"
+          # Deneme anahtarı: duman testi root SSH girişini bununla dener (özel anahtar işle birlikte yok olur).
+          # Depo değişkeni varsa o da eklenir; deneme ISO'su ekte o anahtarla kullanılabilir kalır.
+          ssh-keygen -q -t ed25519 -N '' -C wfc-iso-deneme -f "$RUNNER_TEMP/deneme"
+          WFC_SSH_PUB=$(printf '%s\n' "$WFC_SSH_PUB" "$(cat "$RUNNER_TEMP/deneme.pub")" | sed '/^$/d')
+          export WFC_SSH_PUB WFC_TEST_SSH_KEY="$RUNNER_TEMP/deneme"
+          sh scripts/paket.sh target/release/wificorrect "$s" dist
+          sh scripts/paket-test.sh "dist/wificorrect_${s}_amd64.deb"
+          sh scripts/iso.sh "dist/wificorrect_${s}_amd64.deb" "$s" dist
+          sudo chmod 666 /dev/kvm || true
+          sh scripts/iso-test.sh "dist/wificorrect-kurulum-${s}.iso"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: wificorrect-kurulum-iso
+          path: dist/*.iso
+          retention-days: 7
+      - if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: iso-test-gunluk
+          path: iso-test-gunluk/
+          retention-days: 7

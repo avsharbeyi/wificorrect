@@ -226,12 +226,31 @@ pub fn run(cfg: Config, args: &[String]) -> ExitCode {
             let _ = crate::merkez::kaydet(p, &m);
             let denetim = |olay: &str, ek: String| ortak::audit(&cfg.main.log_root, Row::new(olay, &ortak::now_iso(now)).set("ek", ek));
             match crate::merkez::eslesme(&mut m, &cfg.main.site_name, &cfg.main.unvan, false, &crate::merkez::curl, now) {
-                Ok(crate::merkez::Eslesme::Bagli { uyelik }) => {
+                Ok(crate::merkez::Eslesme::Bagli { uyelik, ek }) => {
                     if let Err(e) = crate::merkez::kaydet(p, &m) {
                         eprintln!("{e}");
                         return ExitCode::from(1);
                     }
                     denetim("MERKEZ_ESLESME", format!("uyelik={uyelik}"));
+                    let cfg_path = std::env::var("WFC_AYAR").unwrap_or_else(|_| crate::ayar::PATH.to_string());
+                    let mut yeni = cfg.clone();
+                    let (admin, sms) = crate::merkez::ek_uygula(&mut yeni, &crate::hesap::Hesaplar::new(crate::hesap::PATH), &ek);
+                    match admin {
+                        Ok(true) => denetim("ADMIN_PAROLA_MERKEZ", String::new()),
+                        Ok(false) => {}
+                        Err(e) => denetim("MERKEZ_EK_HATA", e),
+                    }
+                    match sms {
+                        Ok(true) => match yeni.save(&cfg_path) {
+                            Ok(()) => {
+                                denetim("SMS_AYARI_MERKEZ", String::new()); // şifre yazılmaz
+                                runner(&["systemctl".into(), "restart".into(), "wificorrect-portal".into()]);
+                            }
+                            Err(e) => denetim("MERKEZ_EK_HATA", e),
+                        },
+                        Ok(false) => {}
+                        Err(e) => denetim("MERKEZ_EK_HATA", e),
+                    }
                     ExitCode::SUCCESS
                 }
                 Ok(crate::merkez::Eslesme::Serbest) => {
@@ -272,6 +291,21 @@ pub fn run(cfg: Config, args: &[String]) -> ExitCode {
                 ExitCode::from(1)
             }
         },
+        // Kurulum paketi (postinst): ilk açılıştan önce ağ rolleri ve dosyaları; ag.toml varsa dokunmaz
+        Some("ag-ilk") => {
+            let rota = std::process::Command::new("ip").args(["-o", "route", "show", "default"]).output()
+                .ok().map(|o| String::from_utf8_lossy(&o.stdout).to_string()).and_then(|s| crate::ag::rota_arayuzu(&s));
+            match crate::ag::ilk(&cfg, &crate::ag::Yollar::sistem(), std::path::Path::new("/sys/class/net"), rota.as_deref()) {
+                Ok(yazildi) => {
+                    println!("{}", if yazildi { "ağ rolleri yazıldı" } else { "ag.toml var, dokunulmadı" });
+                    ExitCode::SUCCESS
+                }
+                Err(e) => {
+                    eprintln!("{e}");
+                    ExitCode::from(1)
+                }
+            }
+        }
         Some(c @ ("ag-uygula" | "ag-gecis" | "ag-onayla" | "ag-geri-al" | "ag-acilis")) => {
             use crate::ag;
             let y = ag::Yollar::sistem();
@@ -354,7 +388,7 @@ pub fn run(cfg: Config, args: &[String]) -> ExitCode {
         _ => {
             eprintln!(
                 "Kullanım: wificorrect ctl <komut>\n  dhcp-olay <add|old|del> <mac> <ip> [ad]\n  yukle\n  oturumlar\n  \
-                 gun-kapat [YYYY-AA-GG] [--zorla]\n  dogrula [--son N]\n  temizle [--kuru]\n  yedekle\n  ara ...  (ayrıntı: ctl ara)\n  disa-aktar --baslangic G --bitis G --cikti DOSYA\n  ag-uygula | ag-gecis DOSYA | ag-onayla | ag-geri-al\n  filtre-uygula\n  admin-parola\n  merkez-eslesme"
+                 gun-kapat [YYYY-AA-GG] [--zorla]\n  dogrula [--son N]\n  temizle [--kuru]\n  yedekle\n  ara ...  (ayrıntı: ctl ara)\n  disa-aktar --baslangic G --bitis G --cikti DOSYA\n  ag-uygula | ag-gecis DOSYA | ag-onayla | ag-geri-al | ag-ilk\n  filtre-uygula\n  admin-parola\n  merkez-eslesme"
             );
             ExitCode::from(2)
         }

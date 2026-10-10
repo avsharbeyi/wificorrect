@@ -1,9 +1,12 @@
+import json
 import os
+import sqlite3
 import sys
 import tempfile
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.join(HERE, ".."))
+import guvenlik as G  # noqa: E402
 import veri as V  # noqa: E402
 
 WG1, WG2 = "A" * 43 + "=", "B" * 43 + "="
@@ -148,6 +151,78 @@ def test_silinen_veri_sayfalarda_kalmaz():
     with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
         v = yeni(tmp)
         assert v.db.execute("PRAGMA secure_delete").fetchone()[0] == 1  # eski açık parolalar dosyada kalmasın
+
+
+def test_tek_admin_parolasi_ve_belirlenen_musteri_parolasi():
+    with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
+        v = yeni(tmp)
+        assert v.admin_parolasi() is None
+        for kotu in ("kisa", "", None):
+            try:
+                v.admin_parolasi_koy(kotu)
+                assert False, kotu
+            except ValueError:
+                pass
+        v.admin_parolasi_koy("benim-admin-parolam")
+        a = v.admin_parolasi()
+        assert a["yineleme"] == 120000 and G.dogru("benim-admin-parolam", a["tuz"], a["ozet"], a["yineleme"])
+        assert "benim-admin-parolam" not in json.dumps(a)  # yalnızca özet saklanır
+        n, _ = v.musteri_ekle()
+        v.cihaz_bagla(n, WG1, SSH)
+        assert v.admin_parolasi() == a and v.bagli_cihaz(n)["admin_ozet"] == ""  # bağlanınca rastgele parola üretilmez
+        n2, pw = v.musteri_ekle("not", parola="musteri-parola-1")
+        assert pw == "musteri-parola-1" and v.parola_dogrula(n2, "musteri-parola-1") and v.musteri(n2)["parola_acik"] == pw
+        try:
+            v.musteri_ekle(parola="kisa")
+            assert False
+        except ValueError:
+            pass
+
+
+def test_sms_ayari():
+    with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
+        v = yeni(tmp)
+        assert v.sms_ayari() is None
+        try:
+            v.sms_ayari_koy({"mock": False, "usercode": "850", "password": "", "msgheader": "BASLIK", "appkey": ""})
+            assert False
+        except ValueError as h:
+            assert "password" in str(h)
+        v.sms_ayari_koy({"mock": True, "usercode": "", "password": "", "msgheader": "", "appkey": ""})
+        assert v.sms_ayari()["mock"] is True
+        v.sms_ayari_koy({"mock": False, "usercode": "8503027084", "password": "gizli-1", "msgheader": "gztp.blgsyr", "appkey": ""})
+        assert v.sms_ayari() == {"mock": False, "usercode": "8503027084", "password": "gizli-1", "msgheader": "gztp.blgsyr", "appkey": ""}
+
+
+def test_eski_cihaz_tablosuna_admin_sutunlari_eklenir():
+    with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
+        yol = os.path.join(tmp, "m.db")
+        db = sqlite3.connect(yol)
+        # Eski SEMA: admin sütunları YOK
+        db.executescript(V.SEMA.replace("  admin_parola TEXT NOT NULL DEFAULT '', admin_tuz TEXT NOT NULL DEFAULT '',\n"
+                                        "  admin_ozet TEXT NOT NULL DEFAULT '', admin_yineleme INTEGER NOT NULL DEFAULT 0,\n", ""))
+        # Eski şemada müşteri ve bağlı cihaz oluştur
+        db.execute("INSERT INTO musteri (numara, tuz, ozet, yineleme, olusturma) VALUES (1111111, 't', 'o', 120000, '2026-01-01T00:00:00+03:00')")
+        db.execute("INSERT INTO cihaz (musteri, durum, wg_pub, ssh_pub, anahtar_ozet, baglanma) VALUES (1111111, 'bagli', 'pub1', 'ssh1', 'hash1', '2026-01-01T00:00:00+03:00')")
+        # Serbest bırakılmış cihaz (admin parolası almamalı)
+        db.execute("INSERT INTO cihaz (musteri, durum, wg_pub, ssh_pub, anahtar_ozet, baglanma) VALUES (1111111, 'serbest', 'pub2', 'ssh2', 'hash2', '2026-01-01T00:00:00+03:00')")
+        db.commit()
+
+        # Admin sütunları YOKSA doğrula (replace maçı kanıtla)
+        var_oncesi = {r[1] for r in db.execute("PRAGMA table_info(cihaz)")}
+        assert "admin_parola" not in var_oncesi
+        db.close()
+
+        # Veri açarken migration tetiklenir
+        v = V.Veri(yol, saat=lambda: 1_790_000_000.0)
+
+        # Admin sütunları artık var
+        var_sonrasi = {r[1] for r in v.db.execute("PRAGMA table_info(cihaz)")}
+        assert {"admin_parola", "admin_ozet"} <= var_sonrasi
+
+        # 2026-10-08: cihaz başına rastgele admin parolası yok (tek admin parolası, yönetici belirler)
+        for r in v.db.execute("SELECT * FROM cihaz WHERE musteri = 1111111").fetchall():
+            assert r["admin_parola"] == "" and r["admin_ozet"] == ""
 
 
 if __name__ == "__main__":

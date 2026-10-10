@@ -3,6 +3,7 @@ SQLite; tek bağlantı + kilit (ThreadingHTTPServer iş parçacıkları için). 
 import contextlib
 import datetime
 import hashlib
+import json
 import secrets
 import sqlite3
 import threading
@@ -23,6 +24,8 @@ CREATE TABLE IF NOT EXISTS cihaz (
   durum TEXT NOT NULL, tunel_ip TEXT NOT NULL DEFAULT '', wg_pub TEXT NOT NULL, ssh_pub TEXT NOT NULL,
   anahtar_ozet TEXT NOT NULL, isletme_adi TEXT NOT NULL DEFAULT '', unvan TEXT NOT NULL DEFAULT '',
   surum TEXT NOT NULL DEFAULT '', son_eslesme TEXT NOT NULL DEFAULT '', baglanma TEXT NOT NULL,
+  admin_parola TEXT NOT NULL DEFAULT '', admin_tuz TEXT NOT NULL DEFAULT '',
+  admin_ozet TEXT NOT NULL DEFAULT '', admin_yineleme INTEGER NOT NULL DEFAULT 0,
   ayrilma TEXT NOT NULL DEFAULT '');
 CREATE UNIQUE INDEX IF NOT EXISTS cihaz_tek ON cihaz(musteri) WHERE durum != 'serbest';
 CREATE TABLE IF NOT EXISTS hareket (
@@ -30,11 +33,15 @@ CREATE TABLE IF NOT EXISTS hareket (
   olay TEXT NOT NULL, musteri INTEGER, ayrinti TEXT NOT NULL DEFAULT '');
 CREATE INDEX IF NOT EXISTS hareket_musteri ON hareket(musteri, id);
 CREATE TABLE IF NOT EXISTS eski_arsiv (ad TEXT PRIMARY KEY, musteri INTEGER REFERENCES musteri(numara));
+CREATE TABLE IF NOT EXISTS ayar (anahtar TEXT PRIMARY KEY, deger TEXT NOT NULL);
 """
 CIHAZ_ALANLARI = {"tunel_ip", "isletme_adi", "unvan", "surum", "son_eslesme"}
 # Sonradan eklenen müşteri sütunları (eski veritabanına ALTER ile eklenir)
 YENI_SUTUNLAR = (("parola_acik", "TEXT NOT NULL DEFAULT ''"), ("lisans_bitis", "TEXT NOT NULL DEFAULT ''"),
                  ("askida", "INTEGER NOT NULL DEFAULT 0"))
+YENI_CIHAZ_SUTUNLARI = (("admin_parola", "TEXT NOT NULL DEFAULT ''"), ("admin_tuz", "TEXT NOT NULL DEFAULT ''"),
+                        ("admin_ozet", "TEXT NOT NULL DEFAULT ''"), ("admin_yineleme", "INTEGER NOT NULL DEFAULT 0"))
+SMS_ALANLARI = ("usercode", "password", "msgheader", "appkey")
 LISANS_GUN = 365
 
 
@@ -70,6 +77,10 @@ class Veri:
         for r in self.db.execute("SELECT numara, olusturma FROM musteri WHERE lisans_bitis = ''").fetchall():
             self.db.execute("UPDATE musteri SET lisans_bitis = ? WHERE numara = ?",
                             (_yil_sonra(datetime.date.fromisoformat(r["olusturma"][:10])), r["numara"]))
+        var_c = {r[1] for r in self.db.execute("PRAGMA table_info(cihaz)")}
+        for ad, tip in YENI_CIHAZ_SUTUNLARI:
+            if ad not in var_c:
+                self.db.execute(f"ALTER TABLE cihaz ADD COLUMN {ad} {tip}")
 
     def bugun(self):
         return datetime.datetime.fromtimestamp(self.saat(), common.TZ).date()
@@ -98,8 +109,11 @@ class Veri:
             return self.db.execute(sql, a).fetchall()
 
     # --- müşteriler ---
-    def musteri_ekle(self, not_=""):
-        pw = guvenlik.parola_uret()
+    def musteri_ekle(self, not_="", parola=None):
+        """Parolayı yönetici yazar (2026-10-08, kullanıcı kararı); verilmezse (testler) rastgele."""
+        if parola is not None and (not isinstance(parola, str) or len(parola) < guvenlik.EN_AZ):
+            raise ValueError(f"Parola en az {guvenlik.EN_AZ} karakter olmalı.")
+        pw = parola if parola is not None else guvenlik.parola_uret()
         tuz, oz, y = guvenlik.yeni_kayit(pw)
         with self._islem() as db:
             while True:
@@ -240,6 +254,36 @@ class Veri:
     def temizlendi(self, cid):
         with self._islem() as db:
             db.execute("UPDATE cihaz SET durum = 'serbest', ayrilma = ? WHERE id = ?", (self._simdi(), cid))
+
+    # --- bütün cihazlarda tek admin parolası (2026-10-08, kullanıcı kararı): yalnızca özet saklanır ---
+    # ponytail: cihaz başına admin_* sütunları (2026-10-05) artık kullanılmıyor; eski veritabanında boş durur.
+    def admin_parolasi(self):
+        r = self._bir("SELECT deger FROM ayar WHERE anahtar = 'admin'")
+        return json.loads(r["deger"]) if r else None
+
+    def admin_parolasi_koy(self, pw):
+        if not isinstance(pw, str) or len(pw) < guvenlik.EN_AZ:
+            raise ValueError(f"Parola en az {guvenlik.EN_AZ} karakter olmalı.")
+        tuz, oz, y = guvenlik.yeni_kayit(pw)
+        with self._islem() as db:
+            db.execute("INSERT OR REPLACE INTO ayar (anahtar, deger) VALUES ('admin', ?)",
+                       (json.dumps({"tuz": tuz, "ozet": oz, "yineleme": y}),))
+
+    # --- bütün cihazlara giden SMS (NetGSM) ayarı ---
+    def sms_ayari(self):
+        r = self._bir("SELECT deger FROM ayar WHERE anahtar = 'sms'")
+        return json.loads(r["deger"]) if r else None
+
+    def sms_ayari_koy(self, d):
+        a = {"mock": bool(d.get("mock"))}
+        for k in SMS_ALANLARI:
+            a[k] = str(d.get(k) or "").strip()
+        eksik = [k for k in ("usercode", "password", "msgheader") if not a[k]]
+        if not a["mock"] and eksik:
+            raise ValueError(f"Deneme modu kapalıyken şu alanlar gerekli: {', '.join(eksik)}")
+        with self._islem() as db:
+            # ponytail: NetGSM şifresi açık saklanır (cihaza gönderilmesi gerekir); veritabanı yalnızca wcpanel'in (600)
+            db.execute("INSERT OR REPLACE INTO ayar (anahtar, deger) VALUES ('sms', ?)", (json.dumps(a, ensure_ascii=False),))
 
     def cihazlar(self):
         return {c["musteri"]: c for c in self._hepsi("SELECT * FROM cihaz WHERE durum != 'serbest'")}

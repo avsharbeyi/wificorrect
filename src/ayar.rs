@@ -46,16 +46,19 @@ impl Default for Main {
 
 /// SMS genel ayarı. `mock`: deneme modu (gerçek SMS gitmez, kod sistem günlüğüne yazılır) — yalnızca hizmet sağlayıcı değiştirir.
 /// `provider`: Türk numaraları için "netgsm" ya da "twilio". Yabancı numaralar Twilio açıksa Twilio'dan gider.
-#[derive(Serialize, Deserialize, Clone, Debug)]
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
 #[serde(default)]
 pub struct Sms {
     pub mock: bool,
     pub provider: String,
+    /// Bağlı cihazda NetGSM bilgileri ve deneme modu yönetim merkezinden gelir; panelde salt okunur.
+    #[serde(default)]
+    pub merkez: bool,
 }
 
 impl Default for Sms {
     fn default() -> Self {
-        Sms { mock: true, provider: "netgsm".into() }
+        Sms { mock: true, provider: "netgsm".into(), merkez: false }
     }
 }
 
@@ -86,7 +89,7 @@ impl Default for Twilio {
     }
 }
 
-#[derive(Serialize, Deserialize, Clone, Debug)]
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
 #[serde(default)]
 pub struct Netgsm {
     pub url: String,

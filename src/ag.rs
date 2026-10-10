@@ -188,7 +188,7 @@ pub fn nft_text(ag: &Ag) -> String {
 
 pub fn issue_text(ag: &Ag) -> String {
     let b = '\\';
-    format!("WifiCorrect yonetim adresi: https://{b}4{{{0}}}:8443   SSH: {b}4{{{0}}}\n\n", ag.wan)
+    format!("WifiCorrect panel: https://panel.wificorrect.com (eslestirme: https://{b}4{{{0}}}:8443)   SSH: {b}4{{{0}}}\n\n", ag.wan)
 }
 
 pub fn hostapd_text(ag: &Ag) -> Option<String> {
@@ -225,6 +225,40 @@ pub fn write_files(cfg: &Config, ag: &Ag, y: &Yollar) -> Result<(), String> {
             _ => Ok(()),
         },
     }
+}
+
+/// `ip -o route show default` çıktısından arayüz adı.
+pub fn rota_arayuzu(ip_route: &str) -> Option<String> {
+    let mut it = ip_route.split_whitespace();
+    while let Some(w) = it.next() {
+        if w == "dev" {
+            return it.next().map(String::from);
+        }
+    }
+    None
+}
+
+/// Kurulum (paket postinst): ag.toml yoksa rolleri belirler ve dosyaları yazar; ağı geçirmez (kurucunun içinde çalışır).
+/// İnternet alan: kurulumun internete çıktığı arayüz (varsayılan rota) → yoksa bu kutunun varsayılanı → yoksa Ethernet 1.
+pub fn ilk(cfg: &Config, y: &Yollar, sys: &Path, rota: Option<&str>) -> Result<bool, String> {
+    if y.ag.exists() {
+        return Ok(false);
+    }
+    let eths = ethernets(sys);
+    let v = Ag::default();
+    let wan = match rota {
+        Some(r) if eths.iter().any(|e| e == r) => r.to_string(),
+        _ if eths.contains(&v.wan) && v.lan.iter().all(|l| eths.contains(l)) => v.wan.clone(),
+        _ => eths.first().cloned().ok_or("Ethernet bulunamadı")?,
+    };
+    let ag = Ag { lan: eths.iter().filter(|e| **e != wan).cloned().collect(), wan, ..Ag::default() };
+    if ag.lan.is_empty() {
+        return Err("En az iki Ethernet gerekli (biri internet alır, biri misafirlere verir).".into());
+    }
+    // ag.toml en son: "kurulum tamam" işareti; yazım yarıda kalırsa yeniden deneme (dpkg --configure -a) boşa gitmez
+    write_files(cfg, &ag, y)?;
+    save(&y.ag, &ag)?;
+    Ok(true)
 }
 
 /// `ip link show` değiştirilmiş MAC'te kalıcı adresi `permaddr` olarak yazar.
@@ -412,7 +446,7 @@ mod tests {
         assert!(t.contains("allow-hotplug enp1s0\niface enp1s0 inet dhcp\n\thwaddress ether 00:0e:c4:ce:a0:9b"));
         assert!(t.contains("address 10.50.0.1/24\n\tbridge_ports enp3s0\n") && t.contains("net.ipv6.conf.enp3s0.disable_ipv6=1"));
         assert_eq!(nft_text(&ag), "# WifiCorrect üretir (ag.toml). guvenlik.nft bunu okur.\ndefine WAN = \"enp1s0\"\n");
-        assert!(issue_text(&ag).starts_with("WifiCorrect yonetim adresi: https://\\4{enp1s0}:8443"));
+        assert!(issue_text(&ag).starts_with("WifiCorrect panel: https://panel.wificorrect.com (eslestirme: https://\\4{enp1s0}:8443)"));
         assert!(hostapd_text(&ag).is_none());
         ag.lan.clear();
         ag.wifi = Wifi { acik: true, ssid: "Bocafe".into(), sifre: "guclu-sifre".into(), kanal: 11, ..Wifi::default() };
@@ -484,5 +518,68 @@ mod tests {
         assert!(calls.lock().unwrap().iter().all(|x| !x.starts_with("if")));
         let audit = fs::read_to_string(ortak::day_file(&cfg.main.log_root, ortak::day_of(&ortak::now_iso(ortak::wall())), "denetim.csv")).unwrap();
         assert!(audit.contains("AG_UYGULANDI") && audit.contains("AG_GERI_ALINDI") && audit.contains("AG_ONAYLANDI") && audit.contains("neden=acilis"));
+    }
+
+    impl Yollar {
+        fn test(d: &Path) -> Yollar {
+            Yollar { ag: d.join("ag.toml"), interfaces: d.join("interfaces"), nft: d.join("arayuzler.nft"), hostapd: d.join("hostapd.conf"), issue: d.join("issue"), durum: d.join("durum") }
+        }
+    }
+
+    #[test]
+    fn ilk_rota_ve_varsayilan() {
+        fn sys_kur(ad: &str, adlar: &[&str]) -> std::path::PathBuf {
+            let d = std::env::temp_dir().join(format!("wfc-ag-ilk-{}-{ad}", std::process::id()));
+            let _ = std::fs::remove_dir_all(&d);
+            for n in adlar {
+                std::fs::create_dir_all(d.join("net").join(n).join("device")).unwrap();
+            }
+            d
+        }
+        assert_eq!(rota_arayuzu("default via 192.168.1.1 dev eno1 proto dhcp src 192.168.1.50 metric 100
+").as_deref(), Some("eno1"));
+        assert_eq!(rota_arayuzu(""), None);
+        let cfg = Config::default();
+        // farklı donanım: kurulumun internete çıktığı arayüz internet alır
+        let d = sys_kur("farkli", &["eno1", "enp2s0"]);
+        let y = Yollar::test(&d);
+        assert!(ilk(&cfg, &y, &d.join("net"), Some("eno1")).unwrap());
+        let ag = load(&y.ag);
+        assert_eq!((ag.wan.as_str(), ag.lan.clone()), ("eno1", vec!["enp2s0".to_string()]));
+        assert!(std::fs::read_to_string(&y.interfaces).unwrap().contains("bridge_ports enp2s0"));
+        assert!(!ilk(&cfg, &y, &d.join("net"), Some("enp2s0")).unwrap()); // ag.toml var: dokunulmaz
+        // rota yok, J1900 adları var: varsayılan
+        let d = sys_kur("j1900", &["enp1s0", "enp3s0"]);
+        let y = Yollar::test(&d);
+        assert!(ilk(&cfg, &y, &d.join("net"), None).unwrap());
+        assert_eq!(load(&y.ag).wan, "enp3s0");
+        // tek Ethernet: hata
+        let d = sys_kur("tek", &["eno1"]);
+        assert!(ilk(&cfg, &Yollar::test(&d), &d.join("net"), Some("eno1")).is_err());
+    }
+
+    #[test]
+    fn ilk_yazim_hatasinda_ag_toml_kalmaz() {
+        let d = std::env::temp_dir().join(format!("wfc-ag-ilk-{}-hata", std::process::id()));
+        let _ = fs::remove_dir_all(&d);
+        for n in ["eno1", "enp2s0", "br-hotspot"] {
+            fs::create_dir_all(d.join("net").join(n).join("device")).unwrap();
+        }
+        let cfg = Config::default();
+        // interfaces yolunun üstü sıradan dosya: üst dizin oluşturulamaz, write_files başarısız
+        fs::write(d.join("engel"), "x").unwrap();
+        let mut y = Yollar::test(&d);
+        let iyi = y.interfaces.clone();
+        y.interfaces = d.join("engel").join("interfaces");
+        assert!(ilk(&cfg, &y, &d.join("net"), Some("eno1")).is_err());
+        assert!(!y.ag.exists()); // ag.toml "tamamlandı" işareti: yazım başarısızsa kalmaz, yeniden deneme çalışır
+        y.interfaces = iyi;
+        assert!(ilk(&cfg, &y, &d.join("net"), Some("eno1")).unwrap());
+        assert!(y.ag.exists() && y.interfaces.exists());
+        // rota Ethernet değil (köprü): varsayılan koldan geçer, ilk Ethernet internet alır
+        let d2 = d.join("kopru");
+        let y2 = Yollar::test(&d2);
+        assert!(ilk(&cfg, &y2, &d.join("net"), Some("br-hotspot")).unwrap());
+        assert_eq!(load(&y2.ag).wan, "enp2s0");
     }
 }

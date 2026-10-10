@@ -1,9 +1,12 @@
 """Müşteri paneli (spec §6): panel.wificorrect.com — müşteri numarası + parola; kayıtlar (gün/kişi/arama) ve parola.
 Üyeliği bitmiş müşteri de girer (yalnızca okuma)."""
 
+import time
+import urllib.parse
+
 import guvenlik
 import web
-from web import e, kart, yanit_html
+from web import e, kart, yanit_html, yonlendir
 
 
 def parola_html(ot, hata="", tamam=""):
@@ -23,6 +26,22 @@ class Musteri(web.Taban):
     kullanici_etiketi = "Müşteri numarası"
     giris_basligi = "Müşteri girişi"
     giris_aciklama = "Size verilen müşteri numarası ve parolayla girin."
+
+    def __init__(self, veri, kayitlar, saat=time.time, gecis=None):
+        super().__init__(veri, kayitlar, saat)
+        self.gecis = gecis or guvenlik.GecisBelirtecleri()
+
+    def cihaz_adresi(self, numara):
+        """Bağlı, tünel adresi olan, üyeliği ve lisansı açık cihazın tünel IP'si; değilse None."""
+        c, m = self.veri.bagli_cihaz(numara), self.veri.musteri(numara)
+        if c is None or m is None or c["durum"] != "bagli" or not c["tunel_ip"]:
+            return None
+        if m["uyelik"] != "aktif" or self.veri.lisans_durumu(m)[0] != "aktif":
+            return None
+        return c["tunel_ip"]
+
+    def giris_sonrasi(self, kimlik):
+        return "/cihaz" if self.cihaz_adresi(int(kimlik)) else "/"
 
     def dogrula(self, kul, pw):
         if not guvenlik.NUMARA_RE.fullmatch(kul):
@@ -46,7 +65,7 @@ class Musteri(web.Taban):
         return int(ot["user"])
 
     def menu(self, ot):
-        return '<a href="/">Özet</a><a href="/parola">Parola</a>'
+        return '<a href="/cihaz">Cihaz paneli</a><a href="/">Yedek arşiv</a><a href="/parola">Parola</a>'
 
     def sayfalar(self, ot, token, yontem, yol, sorgu, form, ip):
         n = int(ot["user"])
@@ -54,6 +73,13 @@ class Musteri(web.Taban):
             c = self.veri.bagli_cihaz(n)
             baslik = c["isletme_adi"] if c is not None and c["isletme_adi"] else f"Müşteri {n}"
             return self.kayit_sayfasi(ot, n, yol, sorgu, "", ip, baslik)
+        if yol == "/cihaz" and yontem == "GET":
+            if self.cihaz_adresi(n) and "yok" not in urllib.parse.parse_qs(sorgu):  # yok=1: Caddy cihaza ulaşamadı → döngü olmasın
+                ozet = self.veri.musteri(n)["ozet"]
+                return yonlendir("https://cihaz.wificorrect.com/_giris?t=" + self.gecis.uret(ot["user"], self.saat(), ozet))
+            return yanit_html(self.sayfa("Cihaz paneli", kart(
+                '<h1>Cihazınıza şu an ulaşılamıyor</h1><p>Cihaz kapalı, internetsiz ya da lisansı kapalı olabilir. '
+                'Yedek arşiviniz aşağıdadır.</p><p><a href="/">Yedek arşiv</a></p>'), ot))
         if yol == "/parola" and yontem == "GET":
             return yanit_html(self.sayfa("Parola", parola_html(ot), ot))
         if yol == "/parola" and yontem == "POST":

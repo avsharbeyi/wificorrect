@@ -64,6 +64,17 @@ pub fn norm_mac(raw: &str) -> Option<String> {
     ok.then_some(s)
 }
 
+/// Köprünün iletim tablosundaki (`/sys/class/net/<köprü>/brforward`) misafir MAC'leri: son trafikten sonra
+/// köprünün yaşlanma süresi (varsayılan 5 dk) boyunca kalır, yani "o an bağlı". Kayıt 16 bayt: MAC (6), port (1),
+/// yerel mi (1), yaş (4), (4); köprünün kendi portları (yerel) sayılmaz.
+pub fn kopruye_bagli(brforward: &[u8]) -> std::collections::BTreeSet<String> {
+    brforward
+        .chunks_exact(16)
+        .filter(|k| k[7] == 0)
+        .map(|k| k[..6].iter().map(|b| format!("{b:02x}")).collect::<Vec<_>>().join(":"))
+        .collect()
+}
+
 pub fn in_subnet(ip: &str, subnet: &str) -> bool {
     let (Ok(ip), Some((net, bits))) = (ip.parse::<std::net::Ipv4Addr>(), subnet.split_once('/')) else {
         return false;
