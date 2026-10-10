@@ -1,6 +1,9 @@
 #!/usr/bin/env bash
 # Kabul denemesi (spec §5): sahte istemciyle hız ölçümünün doğruluğu ve 5 Mb/sn yavaşlatma.
-# Cihazda root olarak çalışır:  scp scripts/hiz-deneme.sh wificorrect:/root/ && ssh wificorrect bash /root/hiz-deneme.sh
+# Cihazda root olarak, MUTLAKA terminalle (pty) çalıştırın ki SSH koparsa SIGHUP gelsin ve temizlik çalışsın:
+#   scp scripts/hiz-deneme.sh wificorrect:/root/ && ssh -t wificorrect bash /root/hiz-deneme.sh
+#   ya da cihazda: systemd-run --pty --unit hiz-deneme bash /root/hiz-deneme.sh
+# Temizlik çıktısı /root/hiz-deneme.log'a yazılır.
 # Sahte oturum açılmaz (5651'e uydurma kişi girmez): test MAC'i geçici izinli cihaz olur ("Hız denemesi"),
 # trafiği gerçek olduğu için kayıtlarda MAC'iyle görünür. Çıkışta (trap) ad alanı, izin ve sınır geri alınır;
 # yarıda kalmış bir önceki denemenin artıkları da başta temizlenir.
@@ -25,6 +28,7 @@ SINIR_MB=5
 # trafik.json hızı ≈ son 10 sn'nin ortalaması (5 sn'lik örnekler, 9 sn budama; bkz. src/trafik.rs PENCERE_SN)
 PENCERE=10
 GECICI=$(mktemp -d /tmp/hiz-deneme.XXXXXX)
+GUNLUK=/root/hiz-deneme.log
 
 hata() { echo "HATA: $*" >&2; exit 2; }
 
@@ -49,36 +53,47 @@ ana_ayar() {
 STATE=$(ana_ayar state_root /srv/hotspot/state)
 SINIR=$STATE/hiz_sinir.json
 KIRA=$(ana_ayar leases_file /var/lib/misc/dnsmasq.leases)
+# yükleme yönünün HTB'si WAN'da (ag.toml üst düzey `wan`)
+WAN=$(awk -v q="'" '
+    /^[ \t]*\[/ { exit }
+    $0 ~ "^[ \t]*wan[ \t]*=" { sub(/^[^=]*=[ \t]*/, ""); gsub("^[\"" q "]|[\"" q "][ \t]*$", ""); print; exit }' \
+    /etc/wificorrect/ag.toml 2>/dev/null) || true
+[ -n "$WAN" ] || hata "/etc/wificorrect/ag.toml içinde wan yok"
 SINIR_VARDI=0
 [ -e "$SINIR" ] && SINIR_VARDI=1
 
-# stdin → $1: atomik, var olan dosyanın izin/sahibi korunur
+# $1 hedef, sonrası üretici komut: çıktısı atomik olarak $1'in yerine geçer (izin/sahip korunur).
+# Komut başarısızsa ya da çıktı boşsa hedefe dokunulmaz (boş ayarlar.toml varsayılanlarla açılır, boş sınır dosyası herkesi serbest bırakır).
 yaz() {
-    local t="$1.hiz-deneme.tmp"
-    if [ -e "$1" ]; then cp -p "$1" "$t"; else (umask 077 && : >"$t"); fi
-    cat >"$t"
-    mv -f "$t" "$1"
+    local h=$1 t="$1.hiz-deneme.tmp"
+    shift
+    if [ -e "$h" ]; then cp -p "$h" "$t" || return 1; else (umask 077 && : >"$t") || return 1; fi
+    if "$@" >"$t" && [ -s "$t" ] && mv -f "$t" "$h"; then return 0; fi
+    rm -f "$t"
+    echo "HATA: $h yazılamadı, dokunulmadı" >&2
+    return 1
 }
 
 ek_metni() { printf "\n[[allow]]\nmac = '%s'\nname = '%s'\n" "$MAC" "$AD"; }
+ayar_ekli() { cat "$AYAR" && ek_metni; }
 
-# ayarlar.toml'dan test MAC'inin [[allow]] tablosunu çıkarır (panel dosyayı yeniden yazmış olsa da)
-ayar_temizle() {
+# ayarlar.toml'dan test MAC'inin [[allow]] tablosu çıkmış hâli (panel dosyayı yeniden yazmış olsa da)
+ayar_temiz_hali() {
     awk -v mac="$MAC" -v q="'" '
         BEGIN { re = "^[ \t]*mac[ \t]*=[ \t]*[\"" q "]" mac "[\"" q "]" }
         function bosalt() { if (!(baslik ~ /^[ \t]*\[\[allow\]\]/ && sil)) printf "%s", tampon; tampon = ""; sil = 0 }
         /^[ \t]*\[/ { bosalt(); baslik = $0 }
         { tampon = tampon $0 "\n"; if (tolower($0) ~ re) sil = 1 }
-        END { bosalt() }' "$AYAR" | yaz "$AYAR"
+        END { bosalt() }' "$AYAR"
 }
 
 # Yedek + eklediğimiz blok dışında değişiklik yoksa yedeği aynen geri koyar; varsa yalnızca bloğu çıkarır
 ayar_geri() {
     if [ -f "$YEDEK" ] && cmp -s <(cat "$YEDEK"; ek_metni) "$AYAR"; then
-        yaz "$AYAR" <"$YEDEK"
+        yaz "$AYAR" cat "$YEDEK"
     else
         echo "UYARI: $AYAR deneme sırasında değişmiş; yalnızca test bloğu çıkarılıyor (yedek: $YEDEK)" >&2
-        ayar_temizle
+        yaz "$AYAR" ayar_temiz_hali
     fi
 }
 
@@ -90,18 +105,19 @@ ayar_gecerli() {
 }
 
 # hiz_sinir.json (serde pretty) içine / içinden test MAC'inin kaydı
-sinir_ekle() {
+sinir_ekli_hali() {
     local z blok
     z=$(TZ=Etc/GMT-3 date +%Y-%m-%dT%H:%M:%S+03:00)
     blok=$(printf '  "%s": {\n    "hiz": %s,\n    "ad": "%s",\n    "zaman": "%s",\n    "kim": "hiz-deneme"\n  }' "$MAC" "$SINIR_MB" "$AD" "$z")
     if [ -s "$SINIR" ] && grep -q '"' "$SINIR"; then
-        BLOK=$blok awk 'NR == 1 && sub(/^[ \t]*\{/, "") { print "{"; print ENVIRON["BLOK"] ","; if ($0 ~ /[^ \t]/) print; next } { print }' "$SINIR" | yaz "$SINIR"
+        BLOK=$blok awk 'NR == 1 && sub(/^[ \t]*\{/, "") { print "{"; print ENVIRON["BLOK"] ","; if ($0 ~ /[^ \t]/) print; next } { print }' "$SINIR"
     else
-        printf '{\n%s\n}\n' "$blok" | yaz "$SINIR"
+        printf '{\n%s\n}\n' "$blok"
     fi
 }
+sinir_ekle() { yaz "$SINIR" sinir_ekli_hali; }
 
-sinir_kaldir() {
+sinir_temiz_hali() {
     awk -v mac="$MAC" '
         { l[NR] = $0 }
         END {
@@ -114,9 +130,13 @@ sinir_kaldir() {
                 o[++n] = l[i]
             }
             for (i = 1; i <= n; i++) print o[i]
-        }' "$SINIR" | yaz "$SINIR"
+        }' "$SINIR"
+}
+sinir_kaldir() {
+    yaz "$SINIR" sinir_temiz_hali || return 1
     if grep -qi "\"$MAC\"" "$SINIR"; then
         echo "UYARI: $SINIR içinden test sınırı çıkarılamadı, elle silin" >&2
+        return 1
     elif [ "$SINIR_VARDI" = 0 ] && ! grep -q '"' "$SINIR"; then
         rm -f "$SINIR"
     fi
@@ -147,13 +167,27 @@ temizle() {
         yeniden=1
     fi
     if [ "$yeniden" = 1 ]; then
-        ayar_gecerli || echo "UYARI: $AYAR okunamıyor! Yedek: $YEDEK" >&2
-        systemctl restart wificorrect-kaydedici
+        # Bozuk ayarla kaydedici (5651) açılmaz: önce yedek denenir, okunamıyorsa kaydediciye dokunulmaz
+        if ! ayar_gecerli && [ -f "$YEDEK" ]; then
+            echo "UYARI: geri alınan $AYAR okunamıyor; yedek ($YEDEK) geri konuyor" >&2
+            yaz "$AYAR" cat "$YEDEK"
+        fi
+        if ayar_gecerli; then
+            systemctl restart wificorrect-kaydedici
+        else
+            echo "!!! HATA: $AYAR okunamıyor; wificorrect-kaydedici YENİDEN BAŞLATILMADI (eski ayarla çalışıyor). Yedek: $YEDEK" >&2
+        fi
+        grep -qi "$MAC" "$AYAR" && echo "!!! HATA: test MAC'i hâlâ $AYAR içinde; elle çıkarıp kaydediciyi yeniden başlatın" >&2
     fi
     rm -rf "$GECICI"
     set -e
 }
 cikis() {
+    # Temizlik ikinci bir Ctrl-C ya da kopan SSH (SIGPIPE/SIGHUP) ile yarıda kalmasın; çıktı günlüğe
+    trap '' INT TERM HUP PIPE
+    echo "Temizleniyor (günlük: $GUNLUK)" 2>/dev/null || true
+    exec >>"$GUNLUK" 2>&1
+    echo "--- $(date '+%F %T') temizlik ---"
     temizle
     TEMIZLENDI=1
     echo "Temizlendi: ad alanı, izin, test sınırı."
@@ -234,13 +268,32 @@ ortalama() {
         }' "$ORNEK"
 }
 
+# Yavaşlatma sınıflandırması: "yön ip hız" satırları, sıralı (lan = indirme, wan = yükleme).
+# nft `inet wfc_hiz sinif` zincirindeki IP → sınıf, sınıfın hızı ilgili arayüzün `tc class show` çıktısından.
+siniflar() {
+    nft list chain inet wfc_hiz sinif >"$GECICI/nft" 2>/dev/null || : >"$GECICI/nft"
+    tc class show dev "$KOPRU" >"$GECICI/tc.lan" 2>/dev/null || : >"$GECICI/tc.lan"
+    tc class show dev "$WAN" >"$GECICI/tc.wan" 2>/dev/null || : >"$GECICI/tc.wan"
+    awk '
+        FILENAME ~ /tc\.(lan|wan)$/ { y = substr(FILENAME, length(FILENAME) - 2); for (i = 1; i < NF; i++) if ($i == "rate") r[y " " $3] = $(i + 1); next }
+        /meta priority set/ {
+            ip = ""
+            for (i = 1; i < NF; i++) {
+                if ($i == "daddr") { y = "lan"; ip = $(i + 1) }
+                if ($i == "saddr") { y = "wan"; ip = $(i + 1) }
+                if ($i == "set") c = $(i + 1)
+            }
+            if (ip != "") print y, ip, ((y " " c) in r ? r[y " " c] : "?")
+        }' "$GECICI/tc.lan" "$GECICI/tc.wan" "$GECICI/nft" | sort
+}
+
 # --- Başlangıç: önceki denemenin artıkları ---
 temizle
 GECICI=$(mktemp -d /tmp/hiz-deneme.XXXXXX)
 systemctl is-active -q wificorrect-kaydedici || hata "wificorrect-kaydedici çalışmıyor"
 [ -f "$TRAFIK" ] || hata "$TRAFIK yok (hız ölçümü kurulu mu?)"
 trap cikis EXIT
-trap 'exit 130' INT TERM HUP
+trap 'exit 130' INT TERM HUP PIPE
 
 # --- Sahte istemci: netns + veth, köprüye bağlı, DHCP ---
 echo "== Sahte istemci kuruluyor ($MAC) =="
@@ -248,7 +301,12 @@ ip netns add "$NS"
 ip link add "$VH" type veth peer name "$VN"
 ip link set "$VN" netns "$NS"
 ip -n "$NS" link set "$VN" address "$MAC"
+# Köprünün MAC'i sabitlenmemişse en küçük port MAC'ini alır: büyük bir MAC verilir ve değişmediği doğrulanır
+# (ağ geçidi MAC'i değişirse misafirlerin trafiği kara deliğe düşer)
+ip link set "$VH" address fe:57:fc:00:00:00
+KOPRU_MAC=$(cat "/sys/class/net/$KOPRU/address")
 ip link set "$VH" master "$KOPRU" up
+[ "$(cat "/sys/class/net/$KOPRU/address")" = "$KOPRU_MAC" ] || hata "$KOPRU MAC'i değişti ($KOPRU_MAC → $(cat "/sys/class/net/$KOPRU/address")); veth çıkarılıyor"
 ip -n "$NS" link set lo up
 ip -n "$NS" link set "$VN" up
 mkdir -p "/etc/netns/$NS"
@@ -262,7 +320,7 @@ echo "  IP: $IP"
 
 # --- Geçici izin: ayarlar.toml (tabloda görünsün) + allow_mac ---
 cp -p "$AYAR" "$YEDEK"
-{ cat "$AYAR"; ek_metni; } | yaz "$AYAR"
+yaz "$AYAR" ayar_ekli
 ayar_gecerli || hata "test bloğu eklenince $AYAR okunamadı"
 nft add element inet hotspot allow_mac "{ $MAC }"
 systemctl restart wificorrect-kaydedici
@@ -294,8 +352,12 @@ echo "  bugün (sonra): $(mb "$SONRA_BAYT") MB"
 
 # --- 2. 5 Mb/sn sınır ---
 echo "== $SINIR_MB Mb/sn sınır yazılıyor =="
+siniflar >"$GECICI/s0"
+printf 'lan %s %sMbit\nwan %s %sMbit\n' "$IP" "$SINIR_MB" "$IP" "$SINIR_MB" | cat - "$GECICI/s0" | sort >"$GECICI/beklenen"
+echo "  önceden sınırlı: $(awk '$1 == "lan"' "$GECICI/s0" | wc -l) IP"
 sinir_ekle
 "$WFC" ctl hiz-uygula
+siniflar >"$GECICI/s2a"
 if tc class show dev "$KOPRU" | grep -q "rate ${SINIR_MB}Mbit"; then
     echo "  tc: $KOPRU üzerinde ${SINIR_MB}Mbit sınıfı var"
 else
@@ -304,6 +366,7 @@ fi
 sleep 2
 indir "2-sinirli" 25000000 60
 read -r T2_ORT T2_N _ < <(ortalama)
+siniflar >"$GECICI/s2b"
 C2_MB=$CURL_MB
 D2=$DIGER_EN
 
@@ -311,6 +374,7 @@ D2=$DIGER_EN
 echo "== Sınır kaldırılıyor =="
 sinir_kaldir
 "$WFC" ctl hiz-uygula
+siniflar >"$GECICI/s3"
 sleep 2
 indir "3-kaldirildi" 50000000 20
 C3_MB=$CURL_MB
@@ -337,5 +401,21 @@ ARTIS=$((SONRA_BAYT - ONCE_BAYT))
 ORAN=$(awk -v a="$ARTIS" -v b="$C1_BAYT" 'BEGIN { printf "%.3f", b > 0 ? a / b : 0 }')
 # sayaç IP başlıklarını ve yükleme yönündeki ACK'leri de içerir → biraz fazla
 sonuc "4. Bugün MB: +$(mb "$ARTIS") MB, indirilen $(mb "$C1_BAYT") MB, oran $ORAN (0,97–1,15)" "$ORAN >= 0.97 && $ORAN <= 1.15"
+# 5. Diğer müşteriler: sınırlı küme yalnızca test IP'si kadar büyür, önceden sınırlıların hızı aynı kalır, kaldırınca eskiye döner
+K5=1
+grep -q " $IP " "$GECICI/s0" && K5=0
+for s in s2a s2b; do
+    if ! cmp -s "$GECICI/$s" "$GECICI/beklenen"; then
+        K5=0
+        echo "  $s beklenenden farklı:"
+        diff "$GECICI/beklenen" "$GECICI/$s" | sed 's/^/    /' || true
+    fi
+done
+if ! cmp -s "$GECICI/s3" "$GECICI/s0"; then
+    K5=0
+    echo "  kaldırınca sınıflar eskiye dönmedi:"
+    diff "$GECICI/s0" "$GECICI/s3" | sed 's/^/    /' || true
+fi
+sonuc "5. Diğerleri etkilenmedi: önceden $(awk '$1 == "lan"' "$GECICI/s0" | wc -l) sınırlı IP aynı hızda, yalnızca test IP'si ($IP) eklendi ve kaldırıldı" "$K5"
 echo "Bilgi: 2. aşamada diğer cihazların en yüksek indirmesi: ${D2% *} Mb/sn (${D2#* })"
 exit "$SONUC"
