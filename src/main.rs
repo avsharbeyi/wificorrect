@@ -5,6 +5,7 @@ mod ayar;
 mod ctl;
 mod fabrika;
 mod filtre;
+mod hiz;
 mod hesap;
 mod kayit;
 mod kaydedici;
